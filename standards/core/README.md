@@ -6,7 +6,7 @@ Universal standards that apply to all code, regardless of language, framework, o
 
 | Standard | Description | Issue | Status |
 |----------|-------------|-------|--------|
-| Security | Security-first checklist derived from OWASP Top 10 and CWE | [#1](https://github.com/Z-M-Huang/vcp/issues/1) | Planned |
+| [Security](security.md) | Security-first checklist derived from OWASP Top 10 and CWE | [#1](https://github.com/Z-M-Huang/vcp/issues/1) | Draft |
 | Architecture | Clean architecture, SRP, separation of concerns | [#2](https://github.com/Z-M-Huang/vcp/issues/2) | Planned |
 | Root Cause Analysis | Decision framework for fixing bugs at the right level | [#3](https://github.com/Z-M-Huang/vcp/issues/3) | Planned |
 | Code Quality | Consistency, duplication elimination, dead code removal | [#5](https://github.com/Z-M-Huang/vcp/issues/5) | Planned |
