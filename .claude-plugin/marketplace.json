@@ -1,0 +1,11 @@
+{
+  "name": "vcp",
+  "owner": {
+    "name": "Z-M-Huang"
+  },
+  "metadata": {
+    "description": "Vibe Coding Protocol — Standards and enforcement for AI-generated code quality",
+    "version": "0.1.0"
+  },
+  "plugins": []
+}

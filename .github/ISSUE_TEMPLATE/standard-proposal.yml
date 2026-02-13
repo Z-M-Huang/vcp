@@ -1,0 +1,84 @@
+name: Propose a New Standard
+description: Propose a new VCP standard to prevent a class of AI coding problems
+title: "[Standard Proposal] "
+labels: ["standard-proposal", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Propose a new standard for VCP. Please review the [standards format spec](../../standards/README.md) before submitting.
+
+  - type: input
+    id: title
+    attributes:
+      label: Standard title
+      placeholder: "e.g., API versioning — prevent breaking changes in public APIs"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Core (applies to all code)
+        - Web Frontend
+        - Web Backend
+        - Mobile (future)
+        - Desktop (future)
+        - CLI (future)
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this standard prevent?
+      description: Describe the real-world problem with evidence if possible.
+      placeholder: "e.g., AI generates APIs without versioning, causing breaking changes when..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: principle
+    attributes:
+      label: Proposed principle (the WHY)
+      description: The core reasoning behind this standard.
+      placeholder: "e.g., APIs are contracts. Breaking a contract breaks every consumer..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: rules
+    attributes:
+      label: Proposed rules
+      description: Actionable rules that implement the principle.
+      placeholder: |
+        - Always version public APIs from day one
+        - Never remove a field without a deprecation period
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: anti-patterns
+    attributes:
+      label: Example anti-patterns
+      description: What does violating this standard look like?
+      placeholder: |
+        - Changing response shape without versioning
+        - Removing fields that existing clients depend on
+        - ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Links to industry standards, research, or prior art.
+      placeholder: |
+        - https://semver.org
+        - ...
+    validations:
+      required: false

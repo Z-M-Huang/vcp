@@ -1,0 +1,84 @@
+name: Report a Vibe Coding Problem
+description: Report a real problem caused by AI-generated code
+title: "[Problem] "
+labels: ["vibe-coding-problem", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a vibe coding problem. Your experience helps us build better standards.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the problem caused by AI-generated code.
+      placeholder: "e.g., AI generated a login endpoint that stored passwords in plaintext..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ai-tool
+    attributes:
+      label: What AI tool were you using?
+      options:
+        - Claude Code
+        - Cursor
+        - GitHub Copilot
+        - Windsurf
+        - Aider
+        - ChatGPT
+        - Gemini
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: What category does this fall into?
+      options:
+        - Security vulnerability
+        - Architecture / structural issue
+        - Code quality / duplication
+        - Error handling / edge cases
+        - Testing / false confidence
+        - Dependency / supply chain
+        - Performance
+        - Maintainability / tech debt
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: manifestation
+    attributes:
+      label: How did it manifest?
+      options:
+        - Bug in production
+        - Code review finding
+        - Test failure
+        - Security audit finding
+        - Accumulated tech debt
+        - Cascading failures from a fix
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: What was the root cause?
+      description: Why did the AI produce this problematic code?
+      placeholder: "e.g., AI didn't have context about the auth system, defaulted to insecure pattern..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: existing-standard
+    attributes:
+      label: Is this covered by an existing VCP standard?
+      description: If yes, link the standard. If no, this may inspire a new one.
+      placeholder: "e.g., Partially covered by standards/core/security.md, but missing guidance on..."
+    validations:
+      required: false
