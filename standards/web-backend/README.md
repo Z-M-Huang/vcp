@@ -8,7 +8,7 @@ These build on the [core standards](../core/README.md) with backend-specific gui
 
 | Standard | Description | Issue | Status |
 |----------|-------------|-------|--------|
-| Structure | HTTP/business logic separation, service layers, middleware | [#10](https://github.com/Z-M-Huang/vcp/issues/10) | Planned |
+| [Structure](structure.md) | HTTP/business logic separation, service layers, middleware | [#10](https://github.com/Z-M-Huang/vcp/issues/10) | Draft |
 | Security | Injection prevention, auth, secrets management, rate limiting | [#13](https://github.com/Z-M-Huang/vcp/issues/13) | Planned |
 | Data Access | Query safety, migration patterns, connection management | [#15](https://github.com/Z-M-Huang/vcp/issues/15) | Planned |
 
