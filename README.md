@@ -55,7 +55,7 @@ VCP is a protocol — a set of **principled standards** and **Claude Code plugin
 
 Markdown files that state **WHY** (the principle), **WHAT** (actionable rules), and **HOW** (code examples). AI-parseable structure with YAML frontmatter, consistent headings, and cross-references.
 
-Not prescriptive — principled. VCP explains the reasoning so AI agents can apply judgment, not just follow checklists.
+Principled, but concrete. VCP explains the reasoning **and** provides measurable, unambiguous rules. Standards are written so that **Claude Sonnet 4.5** (the baseline target model) can follow them without relying on implicit knowledge or model judgment to fill gaps. If a more capable model is needed to interpret a rule correctly, the rule isn't specific enough.
 
 ### Plugins
 
