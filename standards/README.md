@@ -24,8 +24,8 @@ scope: core                     # One of: core, web-frontend, web-backend
 severity: critical              # One of: critical, high, medium, low
 tags: [security, owasp, cwe]    # Searchable tags
 references:                     # External references
-  - title: OWASP Top 10 2021
-    url: https://owasp.org/Top10/
+  - title: OWASP Top 10:2025
+    url: https://owasp.org/Top10/2025/
   - title: CWE-79
     url: https://cwe.mitre.org/data/definitions/79.html
 ---

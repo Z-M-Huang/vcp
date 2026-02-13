@@ -75,6 +75,18 @@ Claude Code plugins that bundle skills, hooks, and agents into installable packa
 5. **Principled, not prescriptive.** Explain WHY, not just WHAT. Allow alternatives that satisfy the principle.
 6. **AI-parseable.** Standards are structured for machine consumption — consistent format, clear headings, unambiguous rules.
 
+### Non-Goals
+
+VCP standards govern **code that AI agents write**, not the infrastructure, processes, or policies surrounding that code. The following are explicitly out of scope:
+
+- **Repository security controls** — branch protection rules, CODEOWNERS, MFA requirements for maintainers. These are infrastructure policies, not coding standards.
+- **CI/CD pipeline configuration** — required checks, deployment gates, approval workflows. VCP plugins may enforce standards in CI, but pipeline configuration is not a standard.
+- **SBOM generation and signed builds** — supply chain provenance at the build/release level. VCP covers dependency verification at coding time (see [dependency management](standards/core/dependency-management.md)), not build attestation.
+- **Incident response and SLAs** — patch timelines, escalation procedures, on-call rotations. These are operational policies.
+- **Organizational security policies** — security training requirements, access reviews, compliance audits.
+
+If a control doesn't affect what code gets written, it's not a VCP standard.
+
 ---
 
 ## Repo Structure
