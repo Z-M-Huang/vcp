@@ -1,18 +1,18 @@
 # Core Standards
 
-Universal standards that apply to all code, regardless of language, framework, or target platform.
+Universal standards that apply to all code, regardless of language, framework, or target platform. These are always loaded — every project must follow core standards.
 
-## Planned Standards
+## Standards
 
-| Standard | Description | Issue | Status |
-|----------|-------------|-------|--------|
-| [Security](security.md) | Security-first checklist derived from OWASP Top 10 and CWE | [#1](https://github.com/Z-M-Huang/vcp/issues/1) | Draft |
-| [Architecture](architecture.md) | Clean architecture, SRP, separation of concerns | [#2](https://github.com/Z-M-Huang/vcp/issues/2) | Draft |
-| [Root Cause Analysis](root-cause-analysis.md) | Decision framework for fixing bugs at the right level | [#3](https://github.com/Z-M-Huang/vcp/issues/3) | Draft |
-| [Code Quality](code-quality.md) | Consistency, duplication elimination, dead code removal | [#5](https://github.com/Z-M-Huang/vcp/issues/5) | Draft |
-| [Error Handling](error-handling.md) | Edge cases, boundary validation, structured errors | [#7](https://github.com/Z-M-Huang/vcp/issues/7) | Draft |
-| [Testing](testing.md) | Test real behavior, not AI assumptions | [#9](https://github.com/Z-M-Huang/vcp/issues/9) | Draft |
-| [Dependency Management](dependency-management.md) | Prevent slopsquatting and supply chain attacks | [#11](https://github.com/Z-M-Huang/vcp/issues/11) | Draft |
+| Standard | What It Covers |
+|----------|---------------|
+| [Security](security.md) | Input validation, parameterized queries, secrets management, encryption at rest/in transit, authentication, authorization, dependency verification. OWASP Top 10:2025 coverage map. |
+| [Architecture](architecture.md) | Single responsibility, separation of concerns, dependency direction, layer boundaries, service extraction criteria. |
+| [Root Cause Analysis](root-cause-analysis.md) | Decision framework for tracing bugs to origin, breaking the fix-creates-new-bug death spiral. |
+| [Code Quality](code-quality.md) | Consistency, duplication elimination, dead code removal, naming conventions, code churn reduction. |
+| [Error Handling](error-handling.md) | Boundary validation, structured errors, crash-loudly philosophy, edge case coverage. |
+| [Testing](testing.md) | Test real behavior not mocked assumptions, boundary testing, mutation-resistant tests. |
+| [Dependency Management](dependency-management.md) | Slopsquatting prevention, lockfile hygiene, supply chain verification, behavioral analysis. |
 
 ## File Naming Convention
 

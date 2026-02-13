@@ -9,6 +9,8 @@ AI-optimized principled standards for code quality enforcement. Each standard ta
 | [`core/`](core/README.md) | Universal standards for all code (security, architecture, testing, etc.) |
 | [`web-frontend/`](web-frontend/README.md) | Client-side web development standards |
 | [`web-backend/`](web-backend/README.md) | Server-side web development standards |
+| [`database/`](database/README.md) | Database-layer security standards (encryption, schema security) |
+| [`compliance/`](compliance/README.md) | Regulatory compliance standards (GDPR, PCI DSS, HIPAA) |
 
 ## Standard File Format Specification
 
@@ -20,7 +22,7 @@ Every standard file MUST follow this format exactly. Consistent structure enable
 ---
 id: core-security              # Unique ID: {scope}-{topic} in kebab-case
 title: Security                 # Human-readable title
-scope: core                     # One of: core, web-frontend, web-backend
+scope: core                     # See manifest.json for valid scopes
 severity: critical              # One of: critical, high, medium, low
 tags: [security, owasp, cwe]    # Searchable tags
 references:                     # External references
@@ -37,7 +39,7 @@ references:                     # External references
 |-------|----------|-------------|
 | `id` | Yes | Unique identifier. Format: `{scope}-{topic}`. Used for cross-references. |
 | `title` | Yes | Human-readable name. |
-| `scope` | Yes | `core`, `web-frontend`, or `web-backend`. Determines which targets this applies to. |
+| `scope` | Yes | One of the values in `manifest.json` scopes array: `core`, `web-frontend`, `web-backend`, `database`, `compliance`. See [manifest.json](manifest.json) for the canonical scope list. |
 | `severity` | Yes | `critical` = security/data-loss risk. `high` = major quality impact. `medium` = maintainability. `low` = style/preference. |
 | `tags` | Yes | Array of searchable tags for discovery. Include relevant CWE IDs, OWASP references. |
 | `references` | No | Array of `{title, url}` objects linking to external standards and research. |

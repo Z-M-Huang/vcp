@@ -94,9 +94,12 @@ If a control doesn't affect what code gets written, it's not a VCP standard.
 ```
 vcp/
 ├── standards/           # AI-optimized principled standards (canonical source)
+│   ├── manifest.json    # Machine-readable index for AI skill routing
 │   ├── core/            # Universal: security, architecture, testing, etc.
 │   ├── web-frontend/    # Browser-side: components, XSS, performance
-│   └── web-backend/     # Server-side: APIs, injection, data access
+│   ├── web-backend/     # Server-side: APIs, injection, data access
+│   ├── database/        # Database-layer: encryption, schema security
+│   └── compliance/      # Regulatory: GDPR, PCI DSS, HIPAA
 ├── plugins/             # Claude Code plugins (created as developed)
 │   ├── vcp-guard/       # Enforcement: hooks + skills for preventing bad code
 │   ├── vcp-audit/       # Assessment: codebase scanning + migration planning
@@ -133,8 +136,18 @@ See each folder's `README.md` for detailed contents and planned work.
 
 - [ ] [Issue Triage Pipeline](https://github.com/Z-M-Huang/vcp/issues/18) — Auto-label and deduplicate community issues
 
+### Phase 4: Compliance & Database Standards
+
+- [ ] [GDPR & CCPA/CPRA](https://github.com/Z-M-Huang/vcp/issues/27) — Data deletion, retention, consent, PII handling
+- [ ] [PCI DSS v4.0](https://github.com/Z-M-Huang/vcp/issues/28) — Tokenization, card masking, CDE isolation
+- [ ] [HIPAA](https://github.com/Z-M-Huang/vcp/issues/29) — PHI encryption, audit logging, retention, minimum necessary
+- [ ] [Database Encryption](https://github.com/Z-M-Huang/vcp/issues/30) — TDE, column-level, key management
+- [ ] [Database Schema Security](https://github.com/Z-M-Huang/vcp/issues/31) — RLS, data classification, audit triggers, masking
+
 ### Future
 
+- [ ] [Standards Manifest](https://github.com/Z-M-Huang/vcp/issues/32) — manifest.json for AI skill discovery and routing
+- [ ] [Skill Routing Design](https://github.com/Z-M-Huang/vcp/issues/33) — Context detection, .vcp.json config, standard loading
 - [ ] [Conformance Model](https://github.com/Z-M-Huang/vcp/issues/25) — MUST/SHOULD/MAY with objective pass/fail criteria
 - [ ] [Agentic AI Security](https://github.com/Z-M-Huang/vcp/issues/26) — Prompt injection, tool boundaries, and human approval gates
 - [ ] [vcp-guard Plugin](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills for preventing bad code

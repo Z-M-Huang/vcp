@@ -1,16 +1,16 @@
 # Web Frontend Standards
 
-Standards specific to client-side web development (browser-based applications).
+Standards for client-side web development — browser-based applications, SPAs, and component-driven UIs. These build on [core standards](../core/README.md) with frontend-specific guidance.
 
-These build on the [core standards](../core/README.md) with frontend-specific guidance.
+Load these when the project contains frontend code (React, Vue, Svelte, Angular, or plain HTML/CSS/JS).
 
-## Planned Standards
+## Standards
 
-| Standard | Description | Issue | Status |
-|----------|-------------|-------|--------|
-| [Structure](structure.md) | Component organization, state management, folder conventions | [#4](https://github.com/Z-M-Huang/vcp/issues/4) | Draft |
-| [Security](security.md) | XSS prevention, auth token handling, CSP, CORS | [#6](https://github.com/Z-M-Huang/vcp/issues/6) | Draft |
-| [Performance](performance.md) | Bundle discipline, lazy loading, rendering optimization | [#8](https://github.com/Z-M-Huang/vcp/issues/8) | Draft |
+| Standard | What It Covers |
+|----------|---------------|
+| [Structure](structure.md) | Component organization, state management patterns, folder conventions, component size thresholds. |
+| [Security](security.md) | XSS prevention, CSRF defense (SameSite + tokens), auth token handling, CSP, CORS, URL validation, safe redirects. |
+| [Performance](performance.md) | Bundle discipline, lazy loading, code splitting, rendering optimization, asset management. |
 
 ## File Naming Convention
 

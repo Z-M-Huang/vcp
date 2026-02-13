@@ -1,0 +1,110 @@
+{
+  "version": "1.0",
+  "scopes": ["core", "web-frontend", "web-backend", "database", "compliance"],
+  "standards": [
+    {
+      "id": "core-security",
+      "path": "core/security.md",
+      "scope": "core",
+      "severity": "critical",
+      "tags": ["security", "owasp", "cwe", "input-validation", "authentication", "cryptography"],
+      "applies": "always"
+    },
+    {
+      "id": "core-architecture",
+      "path": "core/architecture.md",
+      "scope": "core",
+      "severity": "high",
+      "tags": ["architecture", "srp", "separation-of-concerns", "dependency-direction", "duplication"],
+      "applies": "always"
+    },
+    {
+      "id": "core-root-cause-analysis",
+      "path": "core/root-cause-analysis.md",
+      "scope": "core",
+      "severity": "high",
+      "tags": ["root-cause", "debugging", "death-spiral", "bug-fixing", "tracing"],
+      "applies": "always"
+    },
+    {
+      "id": "core-code-quality",
+      "path": "core/code-quality.md",
+      "scope": "core",
+      "severity": "high",
+      "tags": ["quality", "duplication", "dead-code", "consistency", "naming", "churn"],
+      "applies": "always"
+    },
+    {
+      "id": "core-error-handling",
+      "path": "core/error-handling.md",
+      "scope": "core",
+      "severity": "high",
+      "tags": ["error-handling", "validation", "edge-cases", "boundaries", "exceptions"],
+      "applies": "always"
+    },
+    {
+      "id": "core-testing",
+      "path": "core/testing.md",
+      "scope": "core",
+      "severity": "high",
+      "tags": ["testing", "mocking", "behavior", "edge-cases", "tdd", "boundaries"],
+      "applies": "always"
+    },
+    {
+      "id": "core-dependency-management",
+      "path": "core/dependency-management.md",
+      "scope": "core",
+      "severity": "critical",
+      "tags": ["dependencies", "supply-chain", "slopsquatting", "lockfile", "security", "owasp"],
+      "applies": "always"
+    },
+    {
+      "id": "web-frontend-security",
+      "path": "web-frontend/security.md",
+      "scope": "web-frontend",
+      "severity": "critical",
+      "tags": ["security", "xss", "csp", "cors", "auth-tokens", "frontend", "owasp", "cwe"],
+      "applies": "web-frontend"
+    },
+    {
+      "id": "web-frontend-structure",
+      "path": "web-frontend/structure.md",
+      "scope": "web-frontend",
+      "severity": "high",
+      "tags": ["frontend", "components", "state-management", "folder-structure", "react", "vue", "svelte"],
+      "applies": "web-frontend"
+    },
+    {
+      "id": "web-frontend-performance",
+      "path": "web-frontend/performance.md",
+      "scope": "web-frontend",
+      "severity": "medium",
+      "tags": ["performance", "bundle-size", "lazy-loading", "code-splitting", "rendering", "assets"],
+      "applies": "web-frontend"
+    },
+    {
+      "id": "web-backend-security",
+      "path": "web-backend/security.md",
+      "scope": "web-backend",
+      "severity": "critical",
+      "tags": ["security", "injection", "authentication", "authorization", "secrets", "rate-limiting", "ssrf", "owasp", "cwe"],
+      "applies": "web-backend"
+    },
+    {
+      "id": "web-backend-structure",
+      "path": "web-backend/structure.md",
+      "scope": "web-backend",
+      "severity": "high",
+      "tags": ["backend", "api", "service-layer", "middleware", "separation-of-concerns", "routes"],
+      "applies": "web-backend"
+    },
+    {
+      "id": "web-backend-data-access",
+      "path": "web-backend/data-access.md",
+      "scope": "web-backend",
+      "severity": "high",
+      "tags": ["database", "queries", "migrations", "connection-pooling", "orm", "sql", "data-access"],
+      "applies": "web-backend"
+    }
+  ]
+}
