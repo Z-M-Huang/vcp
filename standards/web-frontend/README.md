@@ -8,7 +8,7 @@ These build on the [core standards](../core/README.md) with frontend-specific gu
 
 | Standard | Description | Issue | Status |
 |----------|-------------|-------|--------|
-| Structure | Component organization, state management, folder conventions | [#4](https://github.com/Z-M-Huang/vcp/issues/4) | Planned |
+| [Structure](structure.md) | Component organization, state management, folder conventions | [#4](https://github.com/Z-M-Huang/vcp/issues/4) | Draft |
 | Security | XSS prevention, auth token handling, CSP, CORS | [#6](https://github.com/Z-M-Huang/vcp/issues/6) | Planned |
 | Performance | Bundle discipline, lazy loading, rendering optimization | [#8](https://github.com/Z-M-Huang/vcp/issues/8) | Planned |
 
