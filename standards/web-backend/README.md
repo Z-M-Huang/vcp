@@ -10,7 +10,7 @@ These build on the [core standards](../core/README.md) with backend-specific gui
 |----------|-------------|-------|--------|
 | [Structure](structure.md) | HTTP/business logic separation, service layers, middleware | [#10](https://github.com/Z-M-Huang/vcp/issues/10) | Draft |
 | [Security](security.md) | Injection prevention, auth, secrets management, rate limiting | [#13](https://github.com/Z-M-Huang/vcp/issues/13) | Draft |
-| Data Access | Query safety, migration patterns, connection management | [#15](https://github.com/Z-M-Huang/vcp/issues/15) | Planned |
+| [Data Access](data-access.md) | Query safety, migration patterns, connection management | [#15](https://github.com/Z-M-Huang/vcp/issues/15) | Draft |
 
 ## File Naming Convention
 
