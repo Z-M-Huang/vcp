@@ -11,7 +11,7 @@ Universal standards that apply to all code, regardless of language, framework, o
 | [Root Cause Analysis](root-cause-analysis.md) | Decision framework for fixing bugs at the right level | [#3](https://github.com/Z-M-Huang/vcp/issues/3) | Draft |
 | [Code Quality](code-quality.md) | Consistency, duplication elimination, dead code removal | [#5](https://github.com/Z-M-Huang/vcp/issues/5) | Draft |
 | [Error Handling](error-handling.md) | Edge cases, boundary validation, structured errors | [#7](https://github.com/Z-M-Huang/vcp/issues/7) | Draft |
-| Testing | Test real behavior, not AI assumptions | [#9](https://github.com/Z-M-Huang/vcp/issues/9) | Planned |
+| [Testing](testing.md) | Test real behavior, not AI assumptions | [#9](https://github.com/Z-M-Huang/vcp/issues/9) | Draft |
 | Dependency Management | Prevent slopsquatting and supply chain attacks | [#11](https://github.com/Z-M-Huang/vcp/issues/11) | Planned |
 
 ## File Naming Convention
