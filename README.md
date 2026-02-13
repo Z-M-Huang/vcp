@@ -123,6 +123,8 @@ See each folder's `README.md` for detailed contents and planned work.
 
 ### Future
 
+- [ ] [Conformance Model](https://github.com/Z-M-Huang/vcp/issues/25) — MUST/SHOULD/MAY with objective pass/fail criteria
+- [ ] [Agentic AI Security](https://github.com/Z-M-Huang/vcp/issues/26) — Prompt injection, tool boundaries, and human approval gates
 - [ ] [vcp-guard Plugin](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills for preventing bad code
 - [ ] [vcp-audit Plugin](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment and migration planning
 - [ ] [vcp-testing Plugin](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement
@@ -165,17 +167,18 @@ Pick an open issue from the [roadmap](#roadmap), read the requirements, and subm
 
 ### Research & Data
 
-- [CodeRabbit 2025 State of Code Quality](https://www.coderabbit.ai/) — 2.74x vulnerability rate, 1.7x more bugs
-- [GitClear 2024 AI Coding Analysis](https://www.gitclear.com/) — 211M lines, 8x duplication, refactoring collapse
-- [Veracode 2025 State of Software Security](https://www.veracode.com/) — 45% AI code has security vulnerabilities
-- [CMU AI-Assisted Coding Study](https://www.cmu.edu/) — 40% complexity increase
-- [Lasso Security Slopsquatting Research](https://www.lasso.security/) — 200,000+ hallucinated packages
+- [CodeRabbit — State of AI vs Human Code Generation Report (Dec 2025)](https://www.coderabbit.ai/whitepapers/state-of-AI-vs-human-code-generation-report) — 2.74x vulnerability rate, 1.7x more bugs across 470 PRs
+- [GitClear — AI Copilot Code Quality 2025 Research](https://www.gitclear.com/ai_assistant_code_quality_2025_research) — 211M lines, 4x growth in code clones, refactoring collapse
+- [Veracode — 2025 GenAI Code Security Report](https://www.veracode.com/resources/analyst-reports/2025-genai-code-security-report/) — 45% AI code has security vulnerabilities; XSS failure rate 86%
+- [CMU — Speed at the Cost of Quality (arXiv 2511.04427)](https://arxiv.org/abs/2511.04427) — 40.7% complexity increase, 29.7% more static analysis warnings
+- [Spracklen et al. — Package Hallucinations by Code Generating LLMs (USENIX Security 2025)](https://arxiv.org/abs/2406.10279) — 205,474 unique hallucinated package names across 16 LLMs
 
 ### Standards & Frameworks
 
-- [OWASP Top 10 2021](https://owasp.org/Top10/) — Web application security risks
+- [OWASP Top 10:2025](https://owasp.org/Top10/2025/) — Web application security risks (current version)
 - [OWASP ASVS v5.0](https://owasp.org/www-project-application-security-verification-standard/) — Application security verification
 - [OWASP Secure Coding Practices](https://owasp.org/www-project-secure-coding-practices-quick-reference-guide/) — Quick reference checklist
+- [OWASP Agentic AI Top 10 (Dec 2025)](https://genai.owasp.org/2025/12/09/owasp-genai-security-project-releases-top-10-risks-and-mitigations-for-agentic-ai-security/) — AI agent-specific security risks
 - [OpenSSF Security-Focused Guide for AI Code Assistants](https://openssf.org/) — AI-specific security guidance
 - [CWE (Common Weakness Enumeration)](https://cwe.mitre.org/) — Vulnerability taxonomy
 
