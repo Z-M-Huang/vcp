@@ -9,7 +9,7 @@ Universal standards that apply to all code, regardless of language, framework, o
 | [Security](security.md) | Security-first checklist derived from OWASP Top 10 and CWE | [#1](https://github.com/Z-M-Huang/vcp/issues/1) | Draft |
 | [Architecture](architecture.md) | Clean architecture, SRP, separation of concerns | [#2](https://github.com/Z-M-Huang/vcp/issues/2) | Draft |
 | [Root Cause Analysis](root-cause-analysis.md) | Decision framework for fixing bugs at the right level | [#3](https://github.com/Z-M-Huang/vcp/issues/3) | Draft |
-| Code Quality | Consistency, duplication elimination, dead code removal | [#5](https://github.com/Z-M-Huang/vcp/issues/5) | Planned |
+| [Code Quality](code-quality.md) | Consistency, duplication elimination, dead code removal | [#5](https://github.com/Z-M-Huang/vcp/issues/5) | Draft |
 | Error Handling | Edge cases, boundary validation, structured errors | [#7](https://github.com/Z-M-Huang/vcp/issues/7) | Planned |
 | Testing | Test real behavior, not AI assumptions | [#9](https://github.com/Z-M-Huang/vcp/issues/9) | Planned |
 | Dependency Management | Prevent slopsquatting and supply chain attacks | [#11](https://github.com/Z-M-Huang/vcp/issues/11) | Planned |
