@@ -112,22 +112,22 @@ See each folder's `README.md` for detailed contents and planned work.
 
 ### Phase 1: Core Standards
 
-- [ ] [Security](https://github.com/Z-M-Huang/vcp/issues/1) — Security-first checklist derived from OWASP Top 10 and CWE
-- [ ] [Architecture](https://github.com/Z-M-Huang/vcp/issues/2) — Clean architecture, SRP, separation of concerns
-- [ ] [Root Cause Analysis](https://github.com/Z-M-Huang/vcp/issues/3) — Decision framework for fixing bugs at the right level
-- [ ] [Code Quality](https://github.com/Z-M-Huang/vcp/issues/5) — Consistency, duplication elimination, dead code removal
-- [ ] [Error Handling](https://github.com/Z-M-Huang/vcp/issues/7) — Edge cases, boundary validation, structured errors
-- [ ] [Testing](https://github.com/Z-M-Huang/vcp/issues/9) — Test real behavior, not AI assumptions
-- [ ] [Dependency Management](https://github.com/Z-M-Huang/vcp/issues/11) — Prevent slopsquatting and supply chain attacks
+- [x] [Security](https://github.com/Z-M-Huang/vcp/issues/1) — Security-first checklist derived from OWASP Top 10 and CWE
+- [x] [Architecture](https://github.com/Z-M-Huang/vcp/issues/2) — Clean architecture, SRP, separation of concerns
+- [x] [Root Cause Analysis](https://github.com/Z-M-Huang/vcp/issues/3) — Decision framework for fixing bugs at the right level
+- [x] [Code Quality](https://github.com/Z-M-Huang/vcp/issues/5) — Consistency, duplication elimination, dead code removal
+- [x] [Error Handling](https://github.com/Z-M-Huang/vcp/issues/7) — Edge cases, boundary validation, structured errors
+- [x] [Testing](https://github.com/Z-M-Huang/vcp/issues/9) — Test real behavior, not AI assumptions
+- [x] [Dependency Management](https://github.com/Z-M-Huang/vcp/issues/11) — Prevent slopsquatting and supply chain attacks
 
 ### Phase 2: Web Target Standards
 
-- [ ] [Frontend Structure](https://github.com/Z-M-Huang/vcp/issues/4) — Component organization, state management, folder conventions
-- [ ] [Frontend Security](https://github.com/Z-M-Huang/vcp/issues/6) — XSS prevention, auth token handling, CSP, CORS
-- [ ] [Frontend Performance](https://github.com/Z-M-Huang/vcp/issues/8) — Bundle discipline, lazy loading, rendering optimization
-- [ ] [Backend Structure](https://github.com/Z-M-Huang/vcp/issues/10) — HTTP/business logic separation, service layers
-- [ ] [Backend Security](https://github.com/Z-M-Huang/vcp/issues/13) — Injection prevention, auth, secrets management
-- [ ] [Backend Data Access](https://github.com/Z-M-Huang/vcp/issues/15) — Query safety, migration patterns, connection management
+- [x] [Frontend Structure](https://github.com/Z-M-Huang/vcp/issues/4) — Component organization, state management, folder conventions
+- [x] [Frontend Security](https://github.com/Z-M-Huang/vcp/issues/6) — XSS prevention, auth token handling, CSP, CORS
+- [x] [Frontend Performance](https://github.com/Z-M-Huang/vcp/issues/8) — Bundle discipline, lazy loading, rendering optimization
+- [x] [Backend Structure](https://github.com/Z-M-Huang/vcp/issues/10) — HTTP/business logic separation, service layers
+- [x] [Backend Security](https://github.com/Z-M-Huang/vcp/issues/13) — Injection prevention, auth, secrets management
+- [x] [Backend Data Access](https://github.com/Z-M-Huang/vcp/issues/15) — Query safety, migration patterns, connection management
 
 ### Phase 3: GitHub Actions
 
