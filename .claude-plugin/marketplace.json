@@ -7,5 +7,22 @@
     "description": "Vibe Coding Protocol — Standards and enforcement for AI-generated code quality",
     "version": "0.1.0"
   },
-  "plugins": []
+  "plugins": [
+    {
+      "name": "vcp-init",
+      "description": "VCP project initialization — creates .vcp.json configuration for all VCP plugins",
+      "version": "0.1.0",
+      "author": { "name": "Z-M-Huang" },
+      "source": "./plugins/vcp-init",
+      "category": "configuration"
+    },
+    {
+      "name": "vcp-guard",
+      "description": "VCP enforcement — security, quality, and dependency checks for AI-generated code",
+      "version": "0.1.0",
+      "author": { "name": "Z-M-Huang" },
+      "source": "./plugins/vcp-guard",
+      "category": "security"
+    }
+  ]
 }

@@ -146,15 +146,18 @@ See each folder's `README.md` for detailed contents and planned work.
 
 ### Phase 5: Manifest & Routing Infrastructure
 
-- [ ] [Standards Manifest](https://github.com/Z-M-Huang/vcp/issues/32) — manifest.json for AI skill discovery and routing
-- [ ] [Skill Routing Design](https://github.com/Z-M-Huang/vcp/issues/33) — Context detection, .vcp.json config, standard loading
+- [x] [Standards Manifest](https://github.com/Z-M-Huang/vcp/issues/32) — manifest.json for AI skill discovery and routing
+- [x] [Skill Routing Design](https://github.com/Z-M-Huang/vcp/issues/33) — Context detection, .vcp.json config, standard loading
+
+### Phase 6: Plugins
+
+- [x] [vcp-guard](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills (4 skills, 2 hooks)
+- [ ] [vcp-audit](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment (6 skills, 1 agent)
+- [ ] [vcp-testing](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement (3 skills, 1 hook)
 
 ### Future
 - [ ] [Conformance Model](https://github.com/Z-M-Huang/vcp/issues/25) — MUST/SHOULD/MAY with objective pass/fail criteria
 - [ ] [Agentic AI Security](https://github.com/Z-M-Huang/vcp/issues/26) — Prompt injection, tool boundaries, and human approval gates
-- [ ] [vcp-guard Plugin](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills for preventing bad code
-- [ ] [vcp-audit Plugin](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment and migration planning
-- [ ] [vcp-testing Plugin](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement
 - [ ] [Codex CLI Support](https://github.com/Z-M-Huang/vcp/issues/19) — Adapt standards for OpenAI Codex CLI
 - [ ] [Gemini CLI Support](https://github.com/Z-M-Huang/vcp/issues/20) — Adapt standards for Google Gemini CLI
 - [ ] [Migration Plan Tooling](https://github.com/Z-M-Huang/vcp/issues/21) — Analyze existing codebases against VCP (separate repo)

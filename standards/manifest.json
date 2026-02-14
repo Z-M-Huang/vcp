@@ -1,5 +1,7 @@
 {
   "version": "1.0",
+  "repository": "https://github.com/Z-M-Huang/vcp",
+  "standards_base_url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/",
   "scopes": ["core", "web-frontend", "web-backend", "database", "compliance"],
   "standards": [
     {

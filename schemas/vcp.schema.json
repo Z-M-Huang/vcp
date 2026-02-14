@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/schemas/vcp.schema.json",
+  "title": "VCP Project Configuration",
+  "description": "Configuration file for Vibe Coding Protocol. Declares which standards, scopes, and compliance frameworks apply to this project. Created by /init, read by all VCP skills.",
+  "type": "object",
+  "required": ["version", "scopes", "compliance"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema URL for editor validation."
+    },
+    "version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Config schema version."
+    },
+    "scopes": {
+      "type": "object",
+      "description": "Which VCP scopes apply to this project. Core is always active (implicit).",
+      "properties": {
+        "web-frontend": {
+          "type": "boolean",
+          "description": "Client-side web development (React, Vue, Svelte, Angular, HTML/CSS/JS)."
+        },
+        "web-backend": {
+          "type": "boolean",
+          "description": "Server-side web development (Express, FastAPI, Django, Spring Boot, Rails)."
+        },
+        "database": {
+          "type": "boolean",
+          "description": "Database-layer patterns (encryption, schema security, RLS)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "compliance": {
+      "type": "array",
+      "description": "Active compliance frameworks. Empty array if none.",
+      "items": {
+        "type": "string",
+        "enum": ["gdpr", "pci-dss", "hipaa"]
+      },
+      "uniqueItems": true
+    },
+    "frameworks": {
+      "type": "array",
+      "description": "Specific frameworks and tools in use. Helps skills give framework-specific advice.",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "exclude": {
+      "type": "array",
+      "description": "Glob patterns for paths to skip during scanning. node_modules/** and .git/** are always excluded.",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"],
+      "default": "medium",
+      "description": "Minimum severity to report. Default: medium (report medium and above)."
+    }
+  },
+  "additionalProperties": false
+}
