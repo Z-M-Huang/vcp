@@ -105,6 +105,46 @@
       "severity": "high",
       "tags": ["database", "queries", "migrations", "connection-pooling", "orm", "sql", "data-access"],
       "applies": "web-backend"
+    },
+    {
+      "id": "compliance-gdpr",
+      "path": "compliance/gdpr.md",
+      "scope": "compliance",
+      "severity": "critical",
+      "tags": ["compliance", "gdpr", "ccpa", "cpra", "pii", "data-protection", "right-to-be-forgotten", "data-deletion"],
+      "applies": "compliance:gdpr"
+    },
+    {
+      "id": "compliance-pci-dss",
+      "path": "compliance/pci-dss.md",
+      "scope": "compliance",
+      "severity": "critical",
+      "tags": ["compliance", "pci-dss", "cardholder-data", "tokenization", "payment"],
+      "applies": "compliance:pci-dss"
+    },
+    {
+      "id": "compliance-hipaa",
+      "path": "compliance/hipaa.md",
+      "scope": "compliance",
+      "severity": "critical",
+      "tags": ["compliance", "hipaa", "phi", "healthcare", "audit-logging", "encryption"],
+      "applies": "compliance:hipaa"
+    },
+    {
+      "id": "database-encryption",
+      "path": "database/encryption.md",
+      "scope": "database",
+      "severity": "critical",
+      "tags": ["database", "encryption", "tde", "column-encryption", "key-management", "pii"],
+      "applies": "database"
+    },
+    {
+      "id": "database-schema-security",
+      "path": "database/schema-security.md",
+      "scope": "database",
+      "severity": "high",
+      "tags": ["database", "rls", "data-classification", "audit", "masking", "multi-tenant"],
+      "applies": "database"
     }
   ]
 }

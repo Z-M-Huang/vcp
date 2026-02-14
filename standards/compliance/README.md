@@ -8,13 +8,11 @@ Load these when the project handles regulated data. Compliance scopes must be ex
 
 ## Standards
 
-*Standards are in development. This scope will contain:*
-
-| Standard | What It Will Cover |
-|----------|-------------------|
-| GDPR & CCPA/CPRA | Data deletion (right to be forgotten), retention policies, consent tracking, PII identification in schemas, PII exclusion from logs. |
-| PCI DSS v4.0 | Cardholder data tokenization, card number masking, CDE isolation, CVV storage prohibition, payment-specific audit trails. |
-| HIPAA | PHI encryption (AES-256, TLS 1.3+), minimum necessary queries, 6-year audit log retention, break-the-glass access, PHI exclusion from non-audit logs. |
+| Standard | What It Covers |
+|----------|---------------|
+| [GDPR & CCPA/CPRA](gdpr.md) | PII identification and classification, data deletion (right to be forgotten), retention policy enforcement, consent tracking per purpose, PII exclusion from logs, data export/portability, Do Not Sell/Share. |
+| [PCI DSS v4.0](pci-dss.md) | Client-side tokenization (never store PANs), CVV prohibition, card masking, CDE isolation, payment page CSP, PCI-specific encryption (AES-256, TLS 1.2+), audit trails, MFA for CDE access. |
+| [HIPAA](hipaa.md) | PHI field identification (18 HIPAA identifiers), minimum necessary queries, AES-256 encryption with Safe Harbor, tamper-evident audit logging with 6-year retention, break-the-glass emergency access, PHI exclusion from logs and errors. |
 
 ## Out of Scope
 

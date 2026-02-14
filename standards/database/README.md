@@ -8,12 +8,10 @@ Load these when the project has direct database access (ORM configs, migration d
 
 ## Standards
 
-*Standards are in development. This scope will contain:*
-
-| Standard | What It Will Cover |
-|----------|-------------------|
-| Encryption | TDE vs column-level vs application-level encryption trade-offs, key management (envelope encryption, KMS), field-level encryption for searchable encrypted storage, ORM-layer encryption. |
-| Schema Security | Row-level security (RLS) for multi-tenant databases, data classification markers (PII/PHI/PCI columns), audit triggers, data masking for non-production, least privilege database users. |
+| Standard | What It Covers |
+|----------|---------------|
+| [Encryption](encryption.md) | TDE vs column-level vs application-level encryption decision matrix, envelope encryption with KMS, key rotation without re-encrypting all data, blind indexes for searchable encrypted fields, ORM-layer transparent encryption. |
+| [Schema Security](schema-security.md) | Row-level security (RLS) for multi-tenant isolation, data classification markers (PII/PHI/PCI columns), audit triggers with tamper-evident logging, data masking for non-production, least privilege database users (app vs migration separation). |
 
 ## File Naming Convention
 
