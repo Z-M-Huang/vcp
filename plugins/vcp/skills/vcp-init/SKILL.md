@@ -5,7 +5,7 @@ description: >
   creates .vcp.json so all VCP skills know what standards to enforce.
   Run this once when setting up VCP for a new project.
 user-invocable: true
-allowed-tools: Read, Write, Glob, Grep, Bash, WebFetch
+allowed-tools: Read, Write, Glob, Grep, Bash, WebFetch, AskUserQuestion
 argument-hint: ""
 ---
 
