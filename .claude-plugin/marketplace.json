@@ -9,19 +9,11 @@
   },
   "plugins": [
     {
-      "name": "vcp-init",
-      "description": "VCP project initialization — creates .vcp.json configuration for all VCP plugins",
+      "name": "vcp",
+      "description": "Vibe Coding Protocol — project initialization, security enforcement, quality checks, and dependency verification for AI-generated code",
       "version": "0.1.0",
       "author": { "name": "Z-M-Huang" },
-      "source": "./plugins/vcp-init",
-      "category": "configuration"
-    },
-    {
-      "name": "vcp-guard",
-      "description": "VCP enforcement — security, quality, and dependency checks for AI-generated code",
-      "version": "0.1.0",
-      "author": { "name": "Z-M-Huang" },
-      "source": "./plugins/vcp-guard",
+      "source": "./plugins/vcp",
       "category": "security"
     }
   ]

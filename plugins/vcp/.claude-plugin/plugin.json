@@ -1,0 +1,12 @@
+{
+  "name": "vcp",
+  "version": "0.1.0",
+  "description": "Vibe Coding Protocol — project initialization, security enforcement, quality checks, and dependency verification for AI-generated code",
+  "author": {
+    "name": "Z-M-Huang"
+  },
+  "repository": "https://github.com/Z-M-Huang/vcp",
+  "license": "MIT",
+  "keywords": ["security", "quality", "enforcement", "vcp", "standards", "configuration", "init"],
+  "skills": "./skills/"
+}

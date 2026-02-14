@@ -74,7 +74,7 @@ Target: Claude Code marketplace first, other tools later.
 
 - `standards/` — AI-optimized markdown standards (core + web targets + database + compliance)
 - `standards/manifest.json` — Machine-readable index for AI skill routing
-- `plugins/` — Claude Code plugins (vcp-guard, vcp-audit, vcp-testing)
+- `plugins/` — Claude Code plugins (vcp)
 - `.claude-plugin/` — Marketplace manifest
 
 ### Conventions

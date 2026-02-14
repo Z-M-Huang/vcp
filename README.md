@@ -59,10 +59,8 @@ Principled, but concrete. VCP explains the reasoning **and** provides measurable
 
 ### Plugins
 
-Claude Code plugins that bundle skills, hooks, and agents into installable packages:
-- **vcp-guard** — Enforcement: hooks and skills that prevent bad code from entering the codebase
-- **vcp-audit** — Assessment: scan codebases against VCP standards and produce actionable reports
-- **vcp-testing** — Test quality: ensure tests validate real behavior, not AI theater
+A Claude Code plugin that bundles skills, hooks, and agents into a single installable package:
+- **vcp** — Initialization, enforcement, assessment, and test quality for AI-generated code
 
 ---
 
@@ -101,9 +99,7 @@ vcp/
 │   ├── database/        # Database-layer: encryption, schema security
 │   └── compliance/      # Regulatory: GDPR, PCI DSS, HIPAA
 ├── plugins/             # Claude Code plugins (created as developed)
-│   ├── vcp-guard/       # Enforcement: hooks + skills for preventing bad code
-│   ├── vcp-audit/       # Assessment: codebase scanning + migration planning
-│   └── vcp-testing/     # Test quality: ensure real tests, not AI theater
+│   └── vcp/             # All VCP skills, hooks, and agents
 └── .claude-plugin/      # Marketplace manifest
 ```
 
@@ -151,9 +147,9 @@ See each folder's `README.md` for detailed contents and planned work.
 
 ### Phase 6: Plugins
 
-- [x] [vcp-guard](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills (4 skills, 2 hooks)
-- [ ] [vcp-audit](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment (6 skills, 1 agent)
-- [ ] [vcp-testing](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement (3 skills, 1 hook)
+- [x] [Guard skills](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills (4 skills, 2 hooks)
+- [ ] [Audit skills](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment (6 skills, 1 agent)
+- [ ] [Testing skills](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement (3 skills, 1 hook)
 
 ### Future
 - [ ] [Conformance Model](https://github.com/Z-M-Huang/vcp/issues/25) — MUST/SHOULD/MAY with objective pass/fail criteria
@@ -170,7 +166,7 @@ See each folder's `README.md` for detailed contents and planned work.
 
 Once standards and plugins are published:
 
-1. **Install plugins** — `claude plugin add vcp-guard`, `claude plugin add vcp-audit`, `claude plugin add vcp-testing`
+1. **Install plugin** — `claude plugin add vcp`
 2. **Skills auto-activate** — Security checks, architecture review, and quality detection run on relevant tasks
 3. **Hooks enforce standards** — Every edit and commit is checked against VCP rules
 4. **Customize** — Enable/disable specific plugins and standards based on your project's needs

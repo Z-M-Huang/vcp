@@ -1,6 +1,6 @@
-# vcp-guard
+# vcp
 
-VCP enforcement plugin — security, quality, and dependency checks for AI-generated code.
+Vibe Coding Protocol plugin — project initialization, security enforcement, quality checks, and dependency verification for AI-generated code.
 
 ## Prerequisites
 
@@ -12,6 +12,7 @@ VCP enforcement plugin — security, quality, and dependency checks for AI-gener
 
 | Skill | Command | Description |
 |-------|---------|-------------|
+| vcp-init | `/vcp-init` | Initialize VCP configuration — detects frameworks, scopes, and creates `.vcp.json` |
 | vcp-security-check | `/vcp-security-check [path]` | Scan code for security vulnerabilities against VCP security standards |
 | vcp-quality-check | `/vcp-quality-check [path]` | Check code quality, architecture, SRP violations, duplication, dead code |
 | vcp-dependency-check | `/vcp-dependency-check` | Verify lockfile hygiene, version ranges, package existence, typosquatting |
