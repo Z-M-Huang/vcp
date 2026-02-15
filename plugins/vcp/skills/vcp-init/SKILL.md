@@ -15,7 +15,13 @@ Create a `.vcp.json` configuration file for this project. This config is read by
 
 ## Step 1: Check for Existing Config
 
-Read `.vcp.json` from the project root. If it already exists, show its contents and ask the user if they want to reconfigure or keep it. If they want to keep it, stop here.
+Read `.vcp.json` from the project root.
+
+**If it exists and has `pluginRoot`:** Show its contents and ask the user if they want to reconfigure or keep it. If they want to keep it, stop here.
+
+**If it exists but is missing `pluginRoot`:** The config needs patching, not replacing. Skip to Step 4 to discover the plugin path, then add `pluginRoot` to the existing config without changing any other fields. Show the user what was added and stop.
+
+**If it does not exist:** Continue to Step 2 for full initialization.
 
 ## Step 2: Scan the Project
 
@@ -47,14 +53,26 @@ Note: The config also supports an `ignore` array to suppress specific standards,
 
 Wait for the user to confirm or adjust before proceeding to Step 4.
 
-## Step 4: Write `.vcp.json`
+## Step 4: Discover VCP Plugin Path
+
+Before writing the config, locate the VCP plugin installation directory. This path is needed so other VCP skills can call shared TypeScript modules.
+
+Use Glob to search for the VCP plugin's marker file:
+1. Search `~/.claude/` with pattern `**/vcp/lib/vcp-context-core.ts`
+2. If not found there, search the current project root with the same pattern
+
+From the found file path, derive the plugin root: the `vcp/` directory containing the `lib/` directory. For example, if the file is at `/home/user/.claude/plugins/vcp/lib/vcp-context-core.ts`, the plugin root is `/home/user/.claude/plugins/vcp`.
+
+If the file cannot be found at all, warn the user: "Could not locate VCP plugin directory. Some VCP skills may not work correctly." Still proceed with writing the config, but omit the `pluginRoot` field.
+
+## Step 5: Write `.vcp.json`
 
 The config must conform to the JSON schema at:
 ```
 https://raw.githubusercontent.com/Z-M-Huang/vcp/main/schemas/vcp.schema.json
 ```
 
-Generate the config based on the user-confirmed answers and write it to the project root:
+Generate the config based on the user-confirmed answers and include the discovered `pluginRoot`. Write it to the project root:
 
 ```json
 {
@@ -73,21 +91,23 @@ Generate the config based on the user-confirmed answers and write it to the proj
     "build/**"
   ],
   "severity": "medium",
-  "ignore": []
+  "ignore": [],
+  "pluginRoot": "/home/user/.claude/plugins/vcp"
 }
 ```
 
-## Step 5: Confirm
+## Step 6: Confirm
 
 Show a summary:
 ```
 VCP initialized for this project.
 
-Scopes:     web-frontend, web-backend
-Compliance: none
-Frameworks: react, express, postgresql
-Exclude:    node_modules/**, dist/**, build/**
-Severity:   medium+
+Scopes:      web-frontend, web-backend
+Compliance:  none
+Frameworks:  react, express, postgresql
+Exclude:     node_modules/**, dist/**, build/**
+Severity:    medium+
+Plugin root: /home/user/.claude/plugins/vcp
 
 Config written to .vcp.json
 Run /vcp-security-check, /vcp-quality-check, or /vcp-dependency-check to start.

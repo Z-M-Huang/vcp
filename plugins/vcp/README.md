@@ -12,18 +12,20 @@ Vibe Coding Protocol plugin — project initialization, security enforcement, qu
 
 | Skill | Command | Description |
 |-------|---------|-------------|
-| vcp-init | `/vcp-init` | Initialize VCP configuration — detects frameworks, scopes, and creates `.vcp.json` |
+| vcp-init | `/vcp-init` | Initialize VCP configuration — detects frameworks, scopes, creates `.vcp.json`, discovers plugin path |
+| vcp-context | `/vcp-context` | Inject VCP rule summaries into context — run after context compaction or at any time to refresh rules |
 | vcp-security-check | `/vcp-security-check [path]` | Scan code for security vulnerabilities against VCP security standards |
 | vcp-quality-check | `/vcp-quality-check [path]` | Check code quality, architecture, SRP violations, duplication, dead code |
 | vcp-dependency-check | `/vcp-dependency-check` | Verify lockfile hygiene, version ranges, package existence, typosquatting |
 | vcp-pre-commit-review | `/vcp-pre-commit-review` | Review all staged/changed files against applicable standards. Produces PASS/BLOCK verdict |
 
-All skills fetch the latest standards from the VCP manifest at runtime via WebFetch. No local standards copy is needed.
+Scanning skills call `resolve-config.ts` via Bash to resolve project config, and fetch standards via WebFetch at runtime. No local standards copy is needed.
 
 ### Hooks
 
 | Hook | Event | Trigger | Description |
 |------|-------|---------|-------------|
+| security-context | SessionStart | Always | Injects VCP rule summaries into AI context at session start |
 | security-gate | PreToolUse | `Write\|Edit\|Bash` | Blocks tool calls containing dangerous code patterns (CWE-798, CWE-89, CWE-95, CWE-79, CWE-502, CWE-116) |
 | stop-reminder | Stop | Always | Reminds the user to run VCP checks before committing |
 
@@ -31,17 +33,18 @@ All skills fetch the latest standards from the VCP manifest at runtime via WebFe
 
 ### Standards Discovery
 
-Skills fetch `standards/manifest.json` from the VCP repository, then use the `standards_base_url` to retrieve individual standard documents. This means skills always apply the latest published rules.
+Skills call `resolve-config.ts` (via Bash) to resolve project config and applicable standards. The script fetches `standards/manifest.json` from the VCP repository and uses `standards_base_url` to retrieve individual standard documents. Skills always apply the latest published rules.
 
 ### Project Configuration
 
-Skills look for `.vcp.json` in the project root to determine:
+Skills require `.vcp.json` in the project root with a `pluginRoot` field (set by `/vcp-init`). The config determines:
 - Which scopes apply (web-frontend, web-backend, database)
 - Which compliance frameworks are active (GDPR, PCI DSS, HIPAA)
 - What paths to exclude from scanning
 - The minimum severity threshold for reporting
+- Which standards or rules to ignore
 
-If `.vcp.json` is not found, skills fall back to auto-detection and suggest running `/vcp-init` to create the config.
+If `.vcp.json` is not found or `pluginRoot` is missing, skills stop and tell the user to run `/vcp-init`.
 
 ### Security Gate Hook
 

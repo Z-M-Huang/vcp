@@ -74,6 +74,10 @@
       },
       "uniqueItems": true,
       "default": []
+    },
+    "pluginRoot": {
+      "type": "string",
+      "description": "Absolute path to the VCP plugin directory. Set by /vcp-init so skills can locate shared TypeScript modules."
     }
   },
   "additionalProperties": false

@@ -68,9 +68,11 @@ A Claude Code plugin that bundles skills, hooks, and agents into a single instal
 
 VCP enforces standards through three layers, from proactive to reactive:
 
-### Layer 1: Proactive Context *(planned — [#34](https://github.com/Z-M-Huang/vcp/issues/34))*
+### Layer 1: Proactive Context ([#34](https://github.com/Z-M-Huang/vcp/issues/34))
 
-Security and architecture standards injected into the AI's context at session start and after context compaction. The AI internalizes rules *while writing code*, preventing violations before they happen rather than catching them after.
+Security and architecture standards injected into the AI's context at session start (`SessionStart` hook). The AI internalizes rules *while writing code*, preventing violations before they happen rather than catching them after. Run `/vcp-context` manually to re-inject rules at any time (e.g. after context compaction in long sessions).
+
+> **Note:** The `SessionStart` hook is implemented but may be affected by upstream Claude Code bugs. `/vcp-context` serves as a reliable manual fallback.
 
 ### Layer 2: On-Demand Scanning
 
@@ -94,7 +96,7 @@ A security gate hook runs on every `Write`, `Edit`, and `Bash` tool call, blocki
 - Insecure deserialization: pickle, unsafe YAML, node-serialize (CWE-502)
 - Encoded data piped to shell execution (CWE-116)
 
-The layers are complementary: Layer 3 catches the most dangerous patterns instantly, Layer 2 provides deep analysis on demand, and Layer 1 will prevent violations at the source by making the AI aware of rules before it writes.
+The layers are complementary: Layer 3 catches the most dangerous patterns instantly, Layer 2 provides deep analysis on demand, and Layer 1 prevents violations at the source by making the AI aware of rules before it writes.
 
 ---
 
@@ -182,7 +184,7 @@ See each folder's `README.md` for detailed contents and planned work.
 ### Phase 6: Plugins
 
 - [x] [Guard skills](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills (4 skills, 2 hooks)
-- [ ] [Proactive security context](https://github.com/Z-M-Huang/vcp/issues/34) — SessionStart hook to inject VCP standards into AI awareness
+- [x] [Proactive security context](https://github.com/Z-M-Huang/vcp/issues/34) — SessionStart hook and `/vcp-context` skill for standards injection
 - [ ] [Audit skills](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment (6 skills, 1 agent)
 - [ ] [Testing skills](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement (3 skills, 1 hook)
 
@@ -206,13 +208,14 @@ See each folder's `README.md` for detailed contents and planned work.
 
 ### What happens
 
+- **Standards injected into context** — At session start, VCP injects a compact summary of applicable security and architecture rules so the AI writes better code from the start. Run `/vcp-context` to re-inject manually after context compaction.
 - **Security gate activates immediately** — Every `Write`, `Edit`, and `Bash` tool call is checked for hardcoded secrets, SQL injection, eval injection, and other dangerous patterns. Violations are blocked before code is written.
 - **Skills become available** — `/vcp-security-check`, `/vcp-quality-check`, `/vcp-dependency-check`, and `/vcp-pre-commit-review` scan code against VCP standards on demand.
 - **Stop reminder fires** — When Claude finishes a task, it reminds you to run VCP checks before committing.
 
 ### Customize
 
-`.vcp.json` controls which scopes (web-frontend, web-backend, database), compliance frameworks (GDPR, PCI DSS, HIPAA), and severity thresholds apply to your project. Use the `ignore` field to suppress specific CWE checks that don't apply.
+`.vcp.json` controls which scopes (web-frontend, web-backend, database), compliance frameworks (GDPR, PCI DSS, HIPAA), and severity thresholds apply to your project. Use the `ignore` field to suppress specific standards (`"core-architecture"`), individual rules (`"core-security/rule-3"`), or CWE patterns (`"CWE-798"`) that don't apply.
 
 ---
 
