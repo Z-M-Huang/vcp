@@ -34,6 +34,7 @@ Parse the JSON response. Extract the `standards_base_url` and `standards` array.
    - Tell the user: "No .vcp.json found. Run `/vcp-init` to configure VCP for this project."
 4. Build exclude list: always exclude `node_modules/**`, `.git/**`, plus any patterns from `.vcp.json` `exclude` field.
 5. Note the severity threshold (default: `"medium"`).
+6. Extract the `ignore` array (default: `[]`). Entries matching a standard ID (e.g., `"core-architecture"`) suppress all findings from that standard. Entries in `"standard-id/rule-N"` format (e.g., `"core-security/rule-3"`) suppress that specific rule.
 
 ## Step 3: Fetch Applicable Standards
 
@@ -67,6 +68,8 @@ Extract the **Rules** section from each fetched standard.
 ## Step 5: Report Findings
 
 Output findings grouped by severity (critical first, then high, then medium). Only include findings at or above the severity threshold from Step 2.
+
+Before outputting findings, remove any that match an entry in the `ignore` list. If a finding's standard ID is in the list, suppress it entirely. If `"standard-id/rule-N"` is in the list, suppress only that rule from that standard. After filtering, if any findings were suppressed, append a line: `**Suppressed:** X finding(s) by ignore config.` If any suppressed findings came from security-scoped standards (tag `"security"`) or compliance standards, also add: `**WARNING: Critical security findings suppressed by ignore config. Review .vcp.json ignore list.**`
 
 Use this format:
 

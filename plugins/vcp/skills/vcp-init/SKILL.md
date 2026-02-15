@@ -43,6 +43,8 @@ Show the user:
 4. **Exclude patterns** — suggest reasonable defaults for the detected ecosystem. Let the user add or remove patterns.
 5. **Severity threshold** — ask what minimum severity to report (critical, high, medium, low). Explain that the default `"medium"` reports medium, high, and critical findings.
 
+Note: The config also supports an `ignore` array to suppress specific standards, rules, or CWE patterns. Most projects start with nothing ignored, so don't prompt for it during init — the user can add entries later.
+
 Wait for the user to confirm or adjust before proceeding to Step 4.
 
 ## Step 4: Write `.vcp.json`
@@ -70,7 +72,8 @@ Generate the config based on the user-confirmed answers and write it to the proj
     "dist/**",
     "build/**"
   ],
-  "severity": "medium"
+  "severity": "medium",
+  "ignore": []
 }
 ```
 

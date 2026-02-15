@@ -22,9 +22,11 @@ const input = await Bun.stdin.text();
 // Extract the content to check based on tool type
 let content: string;
 let toolName: string = "";
+let cwd: string = "";
 try {
   const json = JSON.parse(input);
   toolName = json.tool_name ?? "";
+  cwd = json.cwd ?? "";
   const toolInput = json.tool_input ?? json;
 
   if (toolName === "Bash") {
@@ -41,6 +43,19 @@ try {
 if (!content) {
   process.exit(0);
 }
+
+// Load .vcp.json ignore list for CWE suppression (only checks project root, never walks above it)
+const projectRoot = process.env.CLAUDE_PROJECT_DIR || cwd;
+let vcpConfig: any = null;
+if (projectRoot) {
+  try {
+    vcpConfig = await Bun.file(`${projectRoot}/.vcp.json`).json();
+  } catch {
+    // No config found — proceed with empty ignore set
+  }
+}
+const ignoreList: string[] = vcpConfig?.ignore ?? [];
+const ignoredCWEs = new Set(ignoreList.filter((id: string) => /^CWE-\d+$/.test(id)));
 
 interface Finding {
   cwe: string;
@@ -167,8 +182,15 @@ if (toolName === "Bash") {
   }
 }
 
-if (findings.length > 0) {
-  const lines = findings.map((f) => `  ${f.cwe}: ${f.message}`).join("\n");
+const filtered = findings.filter((f) => !ignoredCWEs.has(f.cwe));
+const suppressed = findings.length - filtered.length;
+if (suppressed > 0) {
+  const suppressedCWEs = [...new Set(findings.filter((f) => ignoredCWEs.has(f.cwe)).map((f) => f.cwe))].join(", ");
+  console.error(`VCP Security Gate — WARNING: Suppressed ${suppressed} finding(s) via .vcp.json ignore (${suppressedCWEs}).`);
+}
+
+if (filtered.length > 0) {
+  const lines = filtered.map((f) => `  ${f.cwe}: ${f.message}`).join("\n");
   console.error(`VCP Security Gate — BLOCKED:\n${lines}`);
   process.exit(2);
 }

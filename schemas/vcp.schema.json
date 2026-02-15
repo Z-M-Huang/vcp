@@ -64,6 +64,16 @@
       "enum": ["critical", "high", "medium", "low"],
       "default": "medium",
       "description": "Minimum severity to report. Default: medium (report medium and above)."
+    },
+    "ignore": {
+      "type": "array",
+      "description": "Standards, rules, or CWE patterns to suppress. Standard ID (e.g., 'core-architecture') ignores entire standard. 'standard-id/rule-N' ignores a specific rule. 'CWE-XXX' ignores a security gate pattern.",
+      "items": {
+        "type": "string",
+        "pattern": "^(CWE-\\d+|[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*(\/rule-\\d+)?)$"
+      },
+      "uniqueItems": true,
+      "default": []
     }
   },
   "additionalProperties": false

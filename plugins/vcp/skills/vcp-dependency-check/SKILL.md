@@ -27,6 +27,7 @@ Parse the JSON response. Extract the `standards_base_url` and `standards` array.
 2. **If `.vcp.json` exists:** Use its `frameworks` to determine which package ecosystem(s) to check.
 3. **If `.vcp.json` does not exist:** Auto-detect by looking for manifest files (package.json, requirements.txt, pyproject.toml, pom.xml, build.gradle, Gemfile, go.mod, Cargo.toml).
 4. Tell the user if no `.vcp.json` found: "No .vcp.json found. Run `/vcp-init` to configure VCP for this project."
+5. Extract the `ignore` array (default: `[]`). Entries matching a standard ID (e.g., `"core-dependency-management"`) suppress all findings from that standard. Entries in `"standard-id/rule-N"` format suppress that specific rule.
 
 ## Step 3: Fetch Applicable Standard
 
@@ -92,6 +93,8 @@ Per the dependency management standard rule 13, note if the project uses:
 If none are configured, recommend adding at least one.
 
 ## Step 5: Report Findings
+
+Before outputting findings, remove any that match an entry in the `ignore` list. If a finding's standard ID is in the list, suppress it entirely. If `"standard-id/rule-N"` is in the list, suppress only that rule from that standard. After filtering, if any findings were suppressed, append a line: `**Suppressed:** X finding(s) by ignore config.`
 
 Use this format:
 
