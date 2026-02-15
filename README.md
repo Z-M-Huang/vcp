@@ -1,6 +1,6 @@
 # VCP — Vibe Coding Protocol
 
-**Standards and enforcement for AI-generated code quality.**
+**Proactive standards enforcement for AI-generated code — security, architecture, and quality.**
 
 A protocol for AI coding assistants to produce maintainable, secure, and architecturally sound code — instead of the fast-but-fragile output that's becoming the industry default.
 
@@ -61,6 +61,40 @@ Principled, but concrete. VCP explains the reasoning **and** provides measurable
 
 A Claude Code plugin that bundles skills, hooks, and agents into a single installable package:
 - **vcp** — Initialization, enforcement, assessment, and test quality for AI-generated code
+
+---
+
+## How VCP Works
+
+VCP enforces standards through three layers, from proactive to reactive:
+
+### Layer 1: Proactive Context *(planned — [#34](https://github.com/Z-M-Huang/vcp/issues/34))*
+
+Security and architecture standards injected into the AI's context at session start and after context compaction. The AI internalizes rules *while writing code*, preventing violations before they happen rather than catching them after.
+
+### Layer 2: On-Demand Scanning
+
+Skills scan code against 18 standards across security, architecture, quality, data access, and compliance:
+
+- `/vcp-security-check` — Security vulnerabilities (OWASP Top 10, CWE patterns)
+- `/vcp-quality-check` — Architecture violations, SRP, duplication, dead code
+- `/vcp-dependency-check` — Lockfile hygiene, version ranges, slopsquatting
+- `/vcp-pre-commit-review` — All applicable standards in a single pre-commit pass
+
+Skills use AI-driven analysis that can trace data flow across variables — deeper than regex can reach.
+
+### Layer 3: Real-Time Blocking
+
+A security gate hook runs on every `Write`, `Edit`, and `Bash` tool call, blocking dangerous patterns *before code is written to disk*:
+
+- Hardcoded secrets, AWS keys, private keys, JWT tokens (CWE-798)
+- SQL string concatenation and template literal injection (CWE-89)
+- `eval()` with user input, shell eval with dynamic input (CWE-95)
+- `innerHTML` with variable assignment (CWE-79)
+- Insecure deserialization: pickle, unsafe YAML, node-serialize (CWE-502)
+- Encoded data piped to shell execution (CWE-116)
+
+The layers are complementary: Layer 3 catches the most dangerous patterns instantly, Layer 2 provides deep analysis on demand, and Layer 1 will prevent violations at the source by making the AI aware of rules before it writes.
 
 ---
 
@@ -148,6 +182,7 @@ See each folder's `README.md` for detailed contents and planned work.
 ### Phase 6: Plugins
 
 - [x] [Guard skills](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills (4 skills, 2 hooks)
+- [ ] [Proactive security context](https://github.com/Z-M-Huang/vcp/issues/34) — SessionStart hook to inject VCP standards into AI awareness
 - [ ] [Audit skills](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment (6 skills, 1 agent)
 - [ ] [Testing skills](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement (3 skills, 1 hook)
 
@@ -162,14 +197,22 @@ See each folder's `README.md` for detailed contents and planned work.
 
 ## How to Adopt
 
-> VCP is in early development. Standards are being written. Check the roadmap above for progress.
+> VCP is in early development. The plugin and standards are functional but not yet published to the Claude Code marketplace. Check the roadmap above for progress.
 
-Once standards and plugins are published:
+### Install
 
-1. **Install plugin** — `claude plugin add vcp`
-2. **Skills auto-activate** — Security checks, architecture review, and quality detection run on relevant tasks
-3. **Hooks enforce standards** — Every edit and commit is checked against VCP rules
-4. **Customize** — Enable/disable specific plugins and standards based on your project's needs
+1. **Add the plugin** — `claude plugin add vcp` (marketplace, when published) or add the plugin source directly
+2. **Initialize your project** — Run `/vcp-init` to detect your frameworks and create `.vcp.json`
+
+### What happens
+
+- **Security gate activates immediately** — Every `Write`, `Edit`, and `Bash` tool call is checked for hardcoded secrets, SQL injection, eval injection, and other dangerous patterns. Violations are blocked before code is written.
+- **Skills become available** — `/vcp-security-check`, `/vcp-quality-check`, `/vcp-dependency-check`, and `/vcp-pre-commit-review` scan code against VCP standards on demand.
+- **Stop reminder fires** — When Claude finishes a task, it reminds you to run VCP checks before committing.
+
+### Customize
+
+`.vcp.json` controls which scopes (web-frontend, web-backend, database), compliance frameworks (GDPR, PCI DSS, HIPAA), and severity thresholds apply to your project. Use the `ignore` field to suppress specific CWE checks that don't apply.
 
 ---
 

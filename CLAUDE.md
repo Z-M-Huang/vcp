@@ -70,6 +70,22 @@ EVERY subagent, under ALL circumstances. No exception. No override.
 Standards, skills, and enforcement tools for AI coding assistants.
 Target: Claude Code marketplace first, other tools later.
 
+### Enforcement Model
+
+VCP enforces standards through three layers:
+
+1. **Proactive context** *(planned)* — Standards injected at session start so the AI internalizes rules while writing code
+2. **On-demand scanning** — Skills (`/vcp-security-check`, `/vcp-quality-check`, `/vcp-dependency-check`, `/vcp-pre-commit-review`) scan code against 18 standards
+3. **Real-time blocking** — `security-gate.ts` hook runs on every Write/Edit/Bash call, blocking hardcoded secrets, SQL injection, eval injection, insecure deserialization, innerHTML XSS, and obfuscated shell execution (14 patterns across 6 CWEs)
+
+### Plugin Structure
+
+- `plugins/vcp/` — Single plugin with 5 skills and 2 hooks
+- Skills fetch standards from `standards/manifest.json` at runtime via WebFetch (always latest from main)
+- `.vcp.json` in project root configures scopes, compliance frameworks, severity threshold, and CWE ignore list
+- `security-gate.ts` exits 2 (block) on pattern match, 0 (allow) otherwise
+- `stop-reminder.ts` reminds user to run VCP checks before committing
+
 ### Repo Structure
 
 - `standards/` — AI-optimized markdown standards (core + web targets + database + compliance)
