@@ -78,10 +78,10 @@ Security and architecture standards injected into the AI's context at session st
 
 Skills scan code against 18 standards across security, architecture, quality, data access, and compliance:
 
-- `/vcp-security-check` — Security vulnerabilities (OWASP Top 10, CWE patterns)
-- `/vcp-quality-check` — Architecture violations, SRP, duplication, dead code
+- `/vcp-audit` — Full audit against all standards (security, architecture, quality, compliance) with modes for targeted scans
 - `/vcp-dependency-check` — Lockfile hygiene, version ranges, slopsquatting
 - `/vcp-pre-commit-review` — All applicable standards in a single pre-commit pass
+- `/vcp-review-tests` — Test quality review for anti-patterns (over-mocking, tautological tests)
 
 Skills use AI-driven analysis that can trace data flow across variables — deeper than regex can reach.
 
@@ -185,8 +185,8 @@ See each folder's `README.md` for detailed contents and planned work.
 
 - [x] [Guard skills](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills (4 skills, 2 hooks)
 - [x] [Proactive security context](https://github.com/Z-M-Huang/vcp/issues/34) — SessionStart hook and `/vcp-context` skill for standards injection
-- [ ] [Audit skills](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment (6 skills, 1 agent)
-- [ ] [Testing skills](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement (3 skills, 1 hook)
+- [x] [Audit skills](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment (2 skills, 1 agent)
+- [x] [Testing skills](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement (3 skills, 1 hook)
 
 ### Future
 - [ ] [Conformance Model](https://github.com/Z-M-Huang/vcp/issues/25) — MUST/SHOULD/MAY with objective pass/fail criteria
@@ -210,7 +210,7 @@ See each folder's `README.md` for detailed contents and planned work.
 
 - **Standards injected into context** — At session start, VCP injects a compact summary of applicable security and architecture rules so the AI writes better code from the start. Run `/vcp-context` to re-inject manually after context compaction.
 - **Security gate activates immediately** — Every `Write`, `Edit`, and `Bash` tool call is checked for hardcoded secrets, SQL injection, eval injection, and other dangerous patterns. Violations are blocked before code is written.
-- **Skills become available** — `/vcp-security-check`, `/vcp-quality-check`, `/vcp-dependency-check`, and `/vcp-pre-commit-review` scan code against VCP standards on demand.
+- **Skills become available** — `/vcp-audit`, `/vcp-dependency-check`, `/vcp-pre-commit-review`, `/vcp-review-tests`, and other skills scan code against VCP standards on demand.
 - **Stop reminder fires** — When Claude finishes a task, it reminds you to run VCP checks before committing.
 
 ### Customize

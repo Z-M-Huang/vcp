@@ -110,5 +110,5 @@ Severity:    medium+
 Plugin root: /home/user/.claude/plugins/vcp
 
 Config written to .vcp.json
-Run /vcp-security-check, /vcp-quality-check, or /vcp-dependency-check to start.
+Run /vcp-audit, /vcp-dependency-check, or /vcp-pre-commit-review to start.
 ```

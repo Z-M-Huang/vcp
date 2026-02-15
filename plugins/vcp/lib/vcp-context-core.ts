@@ -64,7 +64,7 @@ const MANIFEST_URL =
   "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/manifest.json";
 
 export const FALLBACK_MESSAGE =
-  "VCP active. Run /vcp-security-check, /vcp-quality-check before committing.";
+  "VCP active. Run /vcp-audit, /vcp-pre-commit-review before committing.";
 
 const SEVERITY_ORDER: Record<string, number> = {
   critical: 0,
@@ -247,7 +247,7 @@ function buildOutput(rules: ScopedRules): string {
   }
 
   lines.push("");
-  lines.push("> Run /vcp-security-check for deep analysis.");
+  lines.push("> Run /vcp-audit for deep analysis.");
   return lines.join("\n");
 }
 

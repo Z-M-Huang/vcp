@@ -518,12 +518,12 @@ describe("formatContext", () => {
     expect(output).toContain("### Web Backend Rules");
   });
 
-  test("ends with cross-reference to /vcp-security-check", () => {
+  test("ends with cross-reference to /vcp-audit", () => {
     const rules: ScopedRules = {
       core: [{ title: "Security", severity: "critical", rules: ["Rule."] }],
     };
     const output = formatContext(rules);
-    expect(output).toContain("> Run /vcp-security-check for deep analysis.");
+    expect(output).toContain("> Run /vcp-audit for deep analysis.");
   });
 
   test("truncates lowest-severity standards when over budget", () => {

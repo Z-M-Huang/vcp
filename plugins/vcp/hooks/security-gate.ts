@@ -11,7 +11,7 @@
  * Exit 2 = block the tool call (stderr shown to user)
  *
  * Known limitation: Regex cannot perform taint tracking (e.g., SQL query
- * built in a variable then passed to .query()). The /vcp-security-check and
+ * built in a variable then passed to .query()). The /vcp-audit and
  * /vcp-pre-commit-review skills handle this better via AI-driven data flow analysis.
  *
  * Requires: bun (cross-platform TypeScript runtime)

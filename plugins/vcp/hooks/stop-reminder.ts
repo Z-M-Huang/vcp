@@ -8,6 +8,6 @@
  */
 
 console.error(
-  "Reminder: Run /vcp-security-check, /vcp-quality-check, or /vcp-pre-commit-review before committing."
+  "Reminder: Run /vcp-audit, /vcp-review-tests, or /vcp-pre-commit-review before committing."
 );
 process.exit(0);

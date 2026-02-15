@@ -32,6 +32,6 @@ Replace `<pluginRoot>` with the value from Step 1 and `<project-root>` with the 
 
 ## Step 3: Output Result
 
-Output the script's stdout directly. This is the formatted VCP Standards Context — scope-grouped rule summaries with token budget applied, ignores respected, and a cross-reference to `/vcp-security-check`.
+Output the script's stdout directly. This is the formatted VCP Standards Context — scope-grouped rule summaries with token budget applied, ignores respected, and a cross-reference to `/vcp-audit`.
 
 The TypeScript module handles all logic: config loading, manifest fetching, standard resolution, ignore filtering, rule extraction, scope grouping, severity ordering, and token budget truncation.
