@@ -67,7 +67,11 @@ The `security-gate.ts` hook runs on every `Write`, `Edit`, or `Bash` tool call. 
 - **CWE-502** — `pickle.load/loads`, `yaml.load` without Loader, `yaml.unsafe_load`/`full_load`, `node-serialize` `.unserialize()`
 - **CWE-116** — Encoded data (base64/xxd) piped to shell execution or combined with `sh -c` (Bash only)
 
-If any pattern matches, the hook exits with code 2 (block) and prints the finding to stderr. Otherwise it exits 0 (allow).
+If any pattern matches, the hook exits with code 2 (block) and prints the finding to stderr (fed to Claude as error message). If patterns are suppressed via CWE ignore, the hook exits 0 and outputs a JSON warning to stdout (shown to user via `systemMessage`). Otherwise it exits 0 (allow).
+
+### Diagnostic Log
+
+All hooks write diagnostic entries to `.vcp-log` in the project root via the shared `vcp-logger.ts` module. The log records timestamps, hook names, decisions, and details for every invocation. Add `.vcp-log` to your `.gitignore`.
 
 ## Known Limitations
 

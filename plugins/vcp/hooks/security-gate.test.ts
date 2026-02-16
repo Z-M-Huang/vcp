@@ -2,7 +2,8 @@
  * Integration tests for the VCP Security Gate hook.
  *
  * Each test spawns the hook script with controlled stdin JSON,
- * then asserts on exit code (0 = allow, 2 = block) and stderr output.
+ * then asserts on exit code (0 = allow, 2 = block), stderr output,
+ * and stdout JSON output.
  *
  * Test payloads are built at runtime via P() to avoid triggering the
  * security gate when writing this file itself. Test names also avoid
@@ -41,6 +42,7 @@ const SHELL_EVAL = P('ev', 'al "$user_input"');
 interface RunResult {
   exitCode: number;
   stderr: string;
+  stdout: string;
 }
 
 async function runHook(
@@ -54,8 +56,20 @@ async function runHook(
     env: { ...process.env, ...env },
   });
   const exitCode = await proc.exited;
-  const stderr = await new Response(proc.stderr).text();
-  return { exitCode, stderr };
+  const [stderr, stdout] = await Promise.all([
+    new Response(proc.stderr).text(),
+    new Response(proc.stdout).text(),
+  ]);
+  return { exitCode, stderr, stdout };
+}
+
+function parseOutput(stdout: string): any {
+  if (!stdout.trim()) return null;
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return null;
+  }
 }
 
 function writeInput(content: string, cwd?: string) {
@@ -207,16 +221,18 @@ describe("Bash tool checks", () => {
 // CWE ignore via .vcp.json
 // ---------------------------------------------------------------------------
 describe("CWE ignore", () => {
-  test("suppresses ignored CWE and emits warning", async () => {
+  test("suppresses ignored CWE and emits warning via stdout JSON", async () => {
     await withTmpDir(async (dir) => {
       await writeConfig(dir, ["CWE-798"]);
       const r = await runHook(writeInput(HARDCODED_SECRET), {
         CLAUDE_PROJECT_DIR: dir,
       });
       expect(r.exitCode).toBe(0);
-      expect(r.stderr).toContain("WARNING");
-      expect(r.stderr).toContain("Suppressed");
-      expect(r.stderr).toContain("CWE-798");
+      const output = parseOutput(r.stdout);
+      expect(output).not.toBeNull();
+      expect(output.systemMessage).toContain("WARNING");
+      expect(output.systemMessage).toContain("Suppressed");
+      expect(output.systemMessage).toContain("CWE-798");
     });
   });
 
@@ -229,8 +245,11 @@ describe("CWE ignore", () => {
       });
       expect(r.exitCode).toBe(2);
       expect(r.stderr).toContain("CWE-89");
-      expect(r.stderr).toContain("WARNING");
-      expect(r.stderr).toContain("CWE-798");
+      // Suppression notice on stdout
+      const output = parseOutput(r.stdout);
+      expect(output).not.toBeNull();
+      expect(output.systemMessage).toContain("WARNING");
+      expect(output.systemMessage).toContain("CWE-798");
     });
   });
 
@@ -242,8 +261,9 @@ describe("CWE ignore", () => {
         CLAUDE_PROJECT_DIR: dir,
       });
       expect(r.exitCode).toBe(0);
-      expect(r.stderr).toContain("WARNING");
-      expect(r.stderr).toContain("Suppressed 2");
+      const output = parseOutput(r.stdout);
+      expect(output).not.toBeNull();
+      expect(output.systemMessage).toContain("Suppressed 2");
     });
   });
 
@@ -311,7 +331,9 @@ describe("config edge cases", () => {
         CLAUDE_PROJECT_DIR: "",
       });
       expect(r.exitCode).toBe(0);
-      expect(r.stderr).toContain("WARNING");
+      const output = parseOutput(r.stdout);
+      expect(output).not.toBeNull();
+      expect(output.systemMessage).toContain("WARNING");
     });
   });
 

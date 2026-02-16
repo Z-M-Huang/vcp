@@ -5,11 +5,13 @@
  * Reads JSON from stdin, checks if the written/edited file is a test file,
  * then scans content for 3 common anti-patterns.
  *
- * Always exits 0 (PostToolUse hooks cannot block tool calls).
- * Warnings are written to stderr.
+ * Always exits 0. PostToolUse hooks can signal issues via JSON stdout with systemMessage.
+ * Warnings output as JSON to stdout for user visibility.
  *
  * Requires: bun (cross-platform TypeScript runtime)
  */
+
+import { vcpLog } from "../lib/vcp-logger";
 
 const input = await Bun.stdin.text();
 
@@ -166,10 +168,28 @@ if (hasTautology) {
   );
 }
 
+const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
 if (warnings.length > 0) {
   const header = `VCP Test Quality Warning — ${warnings.length} issue(s) in ${filePath}:`;
   const body = warnings.map((w) => `  - ${w}`).join("\n");
-  console.error(`${header}\n${body}`);
+  const output = {
+    systemMessage: `${header}\n${body}`,
+  };
+  console.log(JSON.stringify(output));
+  await vcpLog(projectRoot, {
+    source: "test-quality-warning",
+    event: "PostToolUse",
+    decision: "warn",
+    details: `${warnings.length} issue(s) in ${filePath}`,
+  });
+} else {
+  await vcpLog(projectRoot, {
+    source: "test-quality-warning",
+    event: "PostToolUse",
+    decision: "allow",
+    details: "No issues",
+  });
 }
 
 process.exit(0);

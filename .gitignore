@@ -30,6 +30,9 @@ build/
 .venv/
 venv/
 
+# VCP runtime
+.vcp-log
+
 # Environment
 .env
 .env.local

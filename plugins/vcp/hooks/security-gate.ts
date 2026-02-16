@@ -8,7 +8,7 @@
  * For Bash: checks the command field + Bash-specific obfuscation patterns.
  *
  * Exit 0 = allow the tool call
- * Exit 2 = block the tool call (stderr shown to user)
+ * Exit 2 = block the tool call (stderr fed to Claude as error message)
  *
  * Known limitation: Regex cannot perform taint tracking (e.g., SQL query
  * built in a variable then passed to .query()). The /vcp-audit and
@@ -16,6 +16,8 @@
  *
  * Requires: bun (cross-platform TypeScript runtime)
  */
+
+import { vcpLog } from "../lib/vcp-logger";
 
 const input = await Bun.stdin.text();
 
@@ -37,15 +39,29 @@ try {
   }
 } catch {
   console.error("VCP Security Gate — BLOCKED: Could not parse hook input. Refusing to allow unverified tool call.");
+  const fallbackRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  await vcpLog(fallbackRoot, {
+    source: "security-gate",
+    event: "PreToolUse",
+    decision: "block",
+    details: "Could not parse input",
+  });
   process.exit(2);
 }
 
+const projectRoot = process.env.CLAUDE_PROJECT_DIR || cwd;
+
 if (!content) {
+  await vcpLog(projectRoot, {
+    source: "security-gate",
+    event: "PreToolUse",
+    decision: "allow",
+    details: "Empty content",
+  });
   process.exit(0);
 }
 
 // Load .vcp.json ignore list for CWE suppression (only checks project root, never walks above it)
-const projectRoot = process.env.CLAUDE_PROJECT_DIR || cwd;
 let vcpConfig: any = null;
 if (projectRoot) {
   try {
@@ -186,13 +202,35 @@ const filtered = findings.filter((f) => !ignoredCWEs.has(f.cwe));
 const suppressed = findings.length - filtered.length;
 if (suppressed > 0) {
   const suppressedCWEs = [...new Set(findings.filter((f) => ignoredCWEs.has(f.cwe)).map((f) => f.cwe))].join(", ");
-  console.error(`VCP Security Gate — WARNING: Suppressed ${suppressed} finding(s) via .vcp.json ignore (${suppressedCWEs}).`);
+  const output = {
+    systemMessage: `VCP Security Gate — WARNING: Suppressed ${suppressed} finding(s) via .vcp.json ignore (${suppressedCWEs}).`,
+  };
+  console.log(JSON.stringify(output));
+  await vcpLog(projectRoot, {
+    source: "security-gate",
+    event: "PreToolUse",
+    decision: "warn",
+    details: `Suppressed ${suppressed} finding(s) (${suppressedCWEs})`,
+  });
 }
 
 if (filtered.length > 0) {
   const lines = filtered.map((f) => `  ${f.cwe}: ${f.message}`).join("\n");
   console.error(`VCP Security Gate — BLOCKED:\n${lines}`);
+  const blockedCWEs = [...new Set(filtered.map((f) => f.cwe))].join(", ");
+  await vcpLog(projectRoot, {
+    source: "security-gate",
+    event: "PreToolUse",
+    decision: "block",
+    details: blockedCWEs,
+  });
   process.exit(2);
 }
 
+await vcpLog(projectRoot, {
+  source: "security-gate",
+  event: "PreToolUse",
+  decision: "allow",
+  details: "No findings",
+});
 process.exit(0);

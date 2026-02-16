@@ -2,7 +2,7 @@
  * Integration tests for the VCP Test Quality Warning hook.
  *
  * Each test spawns the hook script with controlled stdin JSON,
- * then asserts on exit code (always 0) and stderr output.
+ * then asserts on exit code (always 0) and stdout JSON output.
  */
 
 import { describe, test, expect } from "bun:test";
@@ -15,6 +15,7 @@ const HOOK_PATH = join(import.meta.dir, "test-quality-warning.ts");
 interface RunResult {
   exitCode: number;
   stderr: string;
+  stdout: string;
 }
 
 async function runHook(stdinJson: object): Promise<RunResult> {
@@ -24,8 +25,20 @@ async function runHook(stdinJson: object): Promise<RunResult> {
     stdout: "pipe",
   });
   const exitCode = await proc.exited;
-  const stderr = await new Response(proc.stderr).text();
-  return { exitCode, stderr };
+  const [stderr, stdout] = await Promise.all([
+    new Response(proc.stderr).text(),
+    new Response(proc.stdout).text(),
+  ]);
+  return { exitCode, stderr, stdout };
+}
+
+function parseOutput(stdout: string): any {
+  if (!stdout.trim()) return null;
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return null;
+  }
 }
 
 function writePayload(filePath: string, content: string) {
@@ -47,31 +60,31 @@ describe("test file detection", () => {
   test("detects .test.ts files", async () => {
     const result = await runHook(writePayload("/src/foo.test.ts", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects .spec.js files", async () => {
     const result = await runHook(writePayload("/src/foo.spec.js", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects Python test_*.py files at root", async () => {
     const result = await runHook(writePayload("test_user.py", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects Python test_*.py files in subdirectory", async () => {
     const result = await runHook(writePayload("/tests/test_user.py", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects __tests__ directory (Unix paths)", async () => {
     const result = await runHook(writePayload("/src/__tests__/foo.ts", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects __tests__ directory (Windows paths)", async () => {
@@ -79,37 +92,37 @@ describe("test file detection", () => {
       writePayload("C:\\repo\\__tests__\\foo.ts", cleanContent),
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects Go *_test.go files", async () => {
     const result = await runHook(writePayload("/src/handler_test.go", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects Java *Test.java files", async () => {
     const result = await runHook(writePayload("/src/UserTest.java", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects Ruby *_spec.rb files", async () => {
     const result = await runHook(writePayload("/spec/user_spec.rb", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects Rust *_test.rs files", async () => {
     const result = await runHook(writePayload("/src/handler_test.rs", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("ignores non-test files", async () => {
     const result = await runHook(writePayload("/src/app.ts", cleanContent));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("ignores non-test files even with mock content", async () => {
@@ -117,7 +130,7 @@ describe("test file detection", () => {
       'jest.fn(); jest.fn(); jest.fn(); jest.fn(); mock.assert_called_once();';
     const result = await runHook(writePayload("/src/service.ts", content));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 });
 
@@ -130,13 +143,17 @@ describe("tool type handling", () => {
   test("processes Write tool calls", async () => {
     const result = await runHook(writePayload("/src/foo.test.ts", mockHeavy));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain("VCP Test Quality Warning");
+    const output = parseOutput(result.stdout);
+    expect(output).not.toBeNull();
+    expect(output.systemMessage).toContain("VCP Test Quality Warning");
   });
 
   test("processes Edit tool calls", async () => {
     const result = await runHook(editPayload("/src/foo.test.ts", mockHeavy));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain("VCP Test Quality Warning");
+    const output = parseOutput(result.stdout);
+    expect(output).not.toBeNull();
+    expect(output.systemMessage).toContain("VCP Test Quality Warning");
   });
 
   test("ignores Bash tool calls", async () => {
@@ -145,7 +162,7 @@ describe("tool type handling", () => {
       tool_input: { command: "echo test" },
     });
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("ignores Read tool calls", async () => {
@@ -154,7 +171,7 @@ describe("tool type handling", () => {
       tool_input: { file_path: "/src/foo.test.ts" },
     });
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 });
 
@@ -193,7 +210,7 @@ describe("exit code", () => {
   test("exits 0 for empty content", async () => {
     const result = await runHook(writePayload("/src/foo.test.ts", ""));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 });
 
@@ -209,8 +226,10 @@ describe("excessive mocking detection", () => {
       'expect(mockA).toHaveBeenCalled();',
     ].join("\n");
     const result = await runHook(writePayload("/src/foo.test.ts", content));
-    expect(result.stderr).toContain("Excessive mocking");
-    expect(result.stderr).toContain("Rule 4");
+    const output = parseOutput(result.stdout);
+    expect(output).not.toBeNull();
+    expect(output.systemMessage).toContain("Excessive mocking");
+    expect(output.systemMessage).toContain("Rule 4");
   });
 
   test("does not warn with 3 or fewer mock setup calls", async () => {
@@ -221,7 +240,10 @@ describe("excessive mocking detection", () => {
       'expect(result).toBe(42);',
     ].join("\n");
     const result = await runHook(writePayload("/src/foo.test.ts", content));
-    expect(result.stderr).not.toContain("Excessive mocking");
+    const output = parseOutput(result.stdout);
+    if (output) {
+      expect(output.systemMessage).not.toContain("Excessive mocking");
+    }
   });
 
   test("counts various mock setup patterns", async () => {
@@ -233,7 +255,9 @@ describe("excessive mocking detection", () => {
       'expect(result).toBe(1);',
     ].join("\n");
     const result = await runHook(writePayload("/src/foo.test.ts", content));
-    expect(result.stderr).toContain("Excessive mocking");
+    const output = parseOutput(result.stdout);
+    expect(output).not.toBeNull();
+    expect(output.systemMessage).toContain("Excessive mocking");
   });
 
   test("counts Python mock patterns", async () => {
@@ -246,7 +270,9 @@ describe("excessive mocking detection", () => {
       '        assert result == 42',
     ].join("\n");
     const result = await runHook(writePayload("/tests/test_service.py", content));
-    expect(result.stderr).toContain("Excessive mocking");
+    const output = parseOutput(result.stdout);
+    expect(output).not.toBeNull();
+    expect(output.systemMessage).toContain("Excessive mocking");
   });
 });
 
@@ -261,8 +287,10 @@ describe("mock-only assertions detection", () => {
       'expect(mockFn).toHaveBeenCalledWith("arg");',
     ].join("\n");
     const result = await runHook(writePayload("/src/foo.test.ts", content));
-    expect(result.stderr).toContain("Mock-only assertions");
-    expect(result.stderr).toContain("Rule 5");
+    const output = parseOutput(result.stdout);
+    expect(output).not.toBeNull();
+    expect(output.systemMessage).toContain("Mock-only assertions");
+    expect(output.systemMessage).toContain("Rule 5");
   });
 
   test("does not warn when value assertions exist alongside mock assertions", async () => {
@@ -273,7 +301,10 @@ describe("mock-only assertions detection", () => {
       'expect(result).toBe(42);',
     ].join("\n");
     const result = await runHook(writePayload("/src/foo.test.ts", content));
-    expect(result.stderr).not.toContain("Mock-only assertions");
+    const output = parseOutput(result.stdout);
+    if (output) {
+      expect(output.systemMessage).not.toContain("Mock-only assertions");
+    }
   });
 
   test("does not warn when only value assertions exist", async () => {
@@ -283,7 +314,7 @@ describe("mock-only assertions detection", () => {
       'expect(result).toEqual(3);',
     ].join("\n");
     const result = await runHook(writePayload("/src/foo.test.ts", content));
-    expect(result.stderr).not.toContain("Mock-only assertions");
+    expect(parseOutput(result.stdout)).toBeNull();
   });
 
   test("detects Python mock-only assertions", async () => {
@@ -293,7 +324,9 @@ describe("mock-only assertions detection", () => {
       'mock_service.do_work.assert_called_with("arg")',
     ].join("\n");
     const result = await runHook(writePayload("/tests/test_service.py", content));
-    expect(result.stderr).toContain("Mock-only assertions");
+    const output = parseOutput(result.stdout);
+    expect(output).not.toBeNull();
+    expect(output.systemMessage).toContain("Mock-only assertions");
   });
 });
 
@@ -308,8 +341,10 @@ describe("tautological assertion detection", () => {
       'expect(result).toEqual(42);',
     ].join("\n");
     const result = await runHook(writePayload("/src/foo.test.ts", content));
-    expect(result.stderr).toContain("Tautological assertion");
-    expect(result.stderr).toContain("Rule 3");
+    const output = parseOutput(result.stdout);
+    expect(output).not.toBeNull();
+    expect(output.systemMessage).toContain("Tautological assertion");
+    expect(output.systemMessage).toContain("Rule 3");
   });
 
   test("does not flag when asserting a different value", async () => {
@@ -320,7 +355,10 @@ describe("tautological assertion detection", () => {
       'expect(result).toEqual(84);',
     ].join("\n");
     const result = await runHook(writePayload("/src/foo.test.ts", content));
-    expect(result.stderr).not.toContain("Tautological assertion");
+    const output = parseOutput(result.stdout);
+    if (output) {
+      expect(output.systemMessage).not.toContain("Tautological assertion");
+    }
   });
 });
 
@@ -339,8 +377,10 @@ describe("multiple warnings", () => {
       'expect(mockB).toHaveBeenCalledWith("x");',
     ].join("\n");
     const result = await runHook(writePayload("/src/foo.test.ts", content));
-    expect(result.stderr).toContain("Excessive mocking");
-    expect(result.stderr).toContain("Mock-only assertions");
-    expect(result.stderr).toContain("2 issue(s)");
+    const output = parseOutput(result.stdout);
+    expect(output).not.toBeNull();
+    expect(output.systemMessage).toContain("Excessive mocking");
+    expect(output.systemMessage).toContain("Mock-only assertions");
+    expect(output.systemMessage).toContain("2 issue(s)");
   });
 });
