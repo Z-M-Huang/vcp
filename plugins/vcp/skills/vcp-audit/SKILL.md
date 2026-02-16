@@ -4,19 +4,19 @@ description: >
   Run a comprehensive audit against all applicable VCP standards.
   Supports full audit, compliance-specific audit, and quick release readiness check.
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Bash, WebFetch
+allowed-tools: Read, Glob, Grep, Bash, WebFetch, Task, TeamCreate, TaskCreate, TaskUpdate, TaskList, SendMessage, TeamDelete
 argument-hint: "[path] | compliance [gdpr|pci-dss|hipaa] | quick"
 ---
 
 # VCP Audit
 
-Comprehensive codebase audit against VCP standards. Supports three modes based on arguments.
+Comprehensive codebase audit against VCP standards. Uses team mode to parallelize scanning, then validates findings to eliminate false positives before reporting.
 
 ## Modes
 
 - `/vcp-audit` or `/vcp-audit [path]` — **Full audit** against all applicable standards
 - `/vcp-audit compliance [gdpr|pci-dss|hipaa]` — **Compliance audit** with regulation citations
-- `/vcp-audit quick` — **Release readiness** check (critical rules only, READY/NOT READY verdict)
+- `/vcp-audit quick` — **Release readiness** check (critical rules only, no team mode, READY/NOT READY verdict)
 
 ## Step 1: Resolve Config
 
@@ -67,36 +67,148 @@ For each selected standard, use WebFetch to fetch its content from:
 
 Extract the **Rules** section from each fetched standard.
 
-## Step 4: Scan Target Code
+## Step 3: Scan Target Code
 
-### Full Mode
+### Quick Mode (No Team)
 
-**Target path:** `$ARGUMENTS` if provided and not a mode keyword. Default: project root.
-
-1. Use Glob to find code files in the target path (exclude patterns from `exclude` in the resolved config).
-2. Work scope-by-scope: core standards first, then scope-specific standards, then compliance standards.
-3. For each standard:
-   a. Identify files relevant to that standard's domain.
-   b. Read representative files (prioritize entry points, route handlers, data access, configuration).
-   c. Check each rule from the standard against the code.
-4. For each violation found, note: standard id, rule number, file:line, issue description, and fix suggestion.
-
-### Compliance Mode
-
-1. Use Glob to find all code files (exclude patterns from `exclude`).
-2. For each rule in the compliance standard:
-   a. Identify files relevant to the regulation requirement.
-   b. Check compliance. Cross-reference with security standards for technical requirements (e.g., GDPR encryption requirement → check against core-security encryption rules).
-3. For each finding, note: standard id, rule number, regulation reference (e.g., "GDPR Art. 32"), file:line, and status.
-
-### Quick Mode
+Quick mode scans directly without team mode for speed.
 
 1. Use Glob to find code files in the project (exclude patterns from `exclude`).
-2. For each standard, check ONLY rules with **critical** severity implications. Skip medium-severity rules for speed. Focus on:
+2. For each standard, check rules with **critical and high** severity implications. Skip medium-severity rules for speed. Focus on:
    - Security vulnerabilities (injection, hardcoded secrets, missing auth)
    - Critical architecture violations (missing input validation at boundaries)
    - Critical compliance gaps (unencrypted PII, missing audit logging)
 3. For each violation found, note: standard id, rule number, file:line, and brief description.
+4. **Skip to Step 5 (Report)** — no validation pass in quick mode.
+
+### Full Mode & Compliance Mode (Team Mode)
+
+**Target path:** `$ARGUMENTS` if provided and not a mode keyword. Default: project root.
+
+#### Create Team
+
+Create a team named `vcp-audit` using TeamCreate.
+
+#### Partition Standards into Scanning Domains
+
+Group applicable standards into domains. Only create domains where standards exist:
+
+| Domain | Standards |
+|--------|-----------|
+| `backend` | core-security, web-backend-security, web-backend-structure, web-backend-data-access |
+| `frontend` | web-frontend-security, web-frontend-structure, web-frontend-performance |
+| `architecture` | core-architecture, core-code-quality, core-error-handling, core-testing, core-root-cause-analysis |
+| `database` | database-encryption, database-schema-security, core-dependency-management |
+| `compliance` | compliance-gdpr, compliance-pci-dss, compliance-hipaa (whichever are in applicableStandards) |
+
+**Every standard in `applicableStandards` must be assigned to exactly one domain.** If a future standard does not fit any domain above, add it to the most relevant domain or create a new one. Never silently drop a standard.
+
+#### Create Tasks and Spawn Scanner Agents
+
+For each domain:
+
+1. Create a task via TaskCreate describing the scanning scope.
+2. Spawn a scanner agent via Task with `subagent_type="Explore"` and `team_name="vcp-audit"`.
+
+**Each scanner agent prompt must include:**
+- The extracted rules for its domain (rule number, title, and description for each)
+- The project root path and target path
+- Exclude patterns from config
+- Instruction to return findings in this **exact format** (one per finding):
+
+```
+FINDING: {standard-id}/rule-{N} ({severity})
+FILE: {path}:{line}
+EVIDENCE: {exact code snippet read from the file, 3-5 relevant lines}
+ISSUE: {specific problem description}
+FIX: {suggested fix}
+```
+
+**Critical:** Instruct agents to include the literal code they read as EVIDENCE. Findings without evidence cannot be validated.
+
+#### Collect Results
+
+Wait for all scanner agents to report back. Messages are delivered automatically.
+
+**Failure handling:** If an agent fails, stalls, or returns no findings after a reasonable wait:
+- Do NOT block the entire audit. Proceed with findings from agents that completed.
+- Note the failed domain in the report: `**WARNING: [domain] scan did not complete. Results may be incomplete.**`
+- The orchestrator may scan the failed domain's standards directly as a fallback.
+
+Once all available results are collected, aggregate all findings.
+
+## Step 4: Validate Findings
+
+**This step applies to Full and Compliance modes only. Skip for Quick mode.**
+
+After collecting findings from all scanner agents, validate each one. This eliminates false positives before the user sees the report.
+
+For EACH finding, perform these checks **in order**. Stop at the first check that produces a verdict.
+
+### Check 1: Verify Evidence
+
+Re-read the flagged file at the reported line (±30 lines context). Does the code match the reported evidence?
+- If the file/line doesn't exist or the code doesn't match → **FALSE-POSITIVE**
+
+### Check 2: Trace Data Flow (for injection, redirect, and XSS findings)
+
+Where does the flagged input actually come from? Trace backwards through assignments and function calls:
+- **User-controlled** (query params, form data, URL path, URL hash, `window.location.*`, headers, external API responses, database values from user input) → proceed to next check
+- **Internally constructed** (hardcoded constants, derived from server-only state like process uptime or config files, from a function that returns a fixed value) → **FALSE-POSITIVE**
+
+**Caution:** Browser URL properties (`window.location.pathname`, `window.location.hash`, `document.referrer`) are attacker-controlled — an attacker chooses which URL the victim visits. Do NOT treat these as trusted.
+
+### Check 3: Verify Rule Scope
+
+Re-read the specific rule that was violated. Does the flagged code match what the rule actually targets?
+
+Examples of scope mismatches:
+- Rule targets auth tokens in localStorage → code stores user-generated content → **FALSE-POSITIVE**
+- Rule targets logging sensitive data → code logs a public identifier (OAuth client_id, request IDs) → **FALSE-POSITIVE**
+- Rule targets user input concatenation → code concatenates a constant string → **FALSE-POSITIVE**
+
+### Check 4: Check Mitigating Factors
+
+Search the codebase for factors that reduce or eliminate the risk:
+- **Lockfile committed** → loose version ranges downgraded to medium (not a supply chain risk)
+- **Security headers set at proxy/CDN layer** → missing application-level headers may be covered
+- **Framework defaults** handle the concern (e.g., React auto-escapes JSX, Next.js escapes output)
+- **Rate limiting / CAPTCHA** in front of the endpoint → timing attacks downgraded
+- **Single-tenant deployment** → multi-tenant controls (RLS) are defense-in-depth, not critical
+
+If a mitigating factor fully addresses the concern → **FALSE-POSITIVE**
+If a mitigating factor partially addresses the concern → **downgrade severity one level**
+
+### Check 5: Check Technology Context
+
+Consider the specific technology stack's behavior:
+- PostgreSQL 11+: adding nullable columns is a non-locking operation (not a zero-downtime concern)
+- Go `bcrypt.DefaultCost`: verify the actual value for the specific library version
+- ORM-specific: check if the ORM handles parameterization automatically
+- Framework migration tools: check if they handle rollback automatically
+
+If the technology already handles the concern → **FALSE-POSITIVE**
+
+### Assign Verdict
+
+After all checks, assign one of:
+- **CONFIRMED** — Finding verified. Evidence matches, rule applies, no mitigating factors.
+- **LIKELY** — Finding plausible but partial mitigation exists or context is ambiguous. Include in report, flag for manual review.
+- **FALSE-POSITIVE** — Remove from report entirely.
+
+### Severity Adjustment
+
+For CONFIRMED and LIKELY findings, adjust severity if warranted:
+- Mitigating factor partially addresses the concern → downgrade one level
+- Concern is defense-in-depth (recommended but not a direct vulnerability) → cap at medium
+
+## Step 4.5: Cleanup Team
+
+**Always run this step**, whether validation succeeded, partially completed, or failed:
+1. Send shutdown requests to all scanner agents via SendMessage.
+2. Delete the team via TeamDelete.
+
+If cleanup itself fails, warn the user: `**Note: Team cleanup incomplete. Run TeamDelete manually if needed.**`
 
 ## Step 5: Report Findings
 
@@ -110,6 +222,7 @@ Before outputting findings, remove any that match an entry in the `ignoredRules`
 **Scopes:** core, web-backend, ...
 **Standards loaded:** N standards, M rules checked
 **Target:** [path or "project root"]
+**Validation:** X findings scanned → Y confirmed, Z likely, W false positives removed
 
 #### Standards Summary
 
@@ -131,10 +244,18 @@ Before outputting findings, remove any that match an entry in the `ignoredRules`
   - **Issue:** User input concatenated into SQL query
   - **Fix:** Use parameterized queries
 
+- **Rule 5** ⚠ LIKELY (high) — JWT secret length
+  - **File:** src/auth/config.py:12
+  - **Issue:** No minimum length check for HMAC-SHA256 key
+  - **Fix:** Enforce minimum 32-byte secret length
+  - **Note:** Verify actual secret length in deployment config
+
 ...
 ```
 
 Status per standard: **FAIL** = has critical findings, **WARN** = has high findings but no critical, **PASS** = no findings at or above the severity threshold.
+
+LIKELY findings are marked with ⚠ and include a **Note** explaining what the user should verify.
 
 ### Compliance Mode Output
 
@@ -143,6 +264,7 @@ Status per standard: **FAIL** = has critical findings, **WARN** = has high findi
 
 **Standards loaded:** compliance-gdpr + N security standards
 **Rules checked:** M rules
+**Validation:** X findings scanned → Y confirmed, Z likely, W false positives removed
 
 | Rule | Status | Regulation Ref | Finding |
 |------|--------|----------------|---------|
@@ -160,7 +282,8 @@ Status per standard: **FAIL** = has critical findings, **WARN** = has high findi
 ### VCP Release Readiness
 
 **Standards loaded:** N standards
-**Rules checked:** M critical rules (non-critical skipped)
+**Rules checked:** M critical/high rules (medium skipped)
+**Note:** Quick mode does not validate findings. Run `/vcp-audit` for validated results.
 
 | Standard | Verdict | Blocking Issues |
 |----------|---------|-----------------|
