@@ -1,152 +1,18 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "repository": "https://github.com/Z-M-Huang/vcp",
   "standards_base_url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/",
-  "scopes": ["core", "web-frontend", "web-backend", "database", "compliance"],
-  "standards": [
-    {
-      "id": "core-security",
-      "path": "core/security.md",
-      "scope": "core",
-      "severity": "critical",
-      "tags": ["security", "owasp", "cwe", "input-validation", "authentication", "cryptography"],
-      "applies": "always"
-    },
-    {
-      "id": "core-architecture",
-      "path": "core/architecture.md",
-      "scope": "core",
-      "severity": "high",
-      "tags": ["architecture", "srp", "separation-of-concerns", "dependency-direction", "duplication"],
-      "applies": "always"
-    },
-    {
-      "id": "core-root-cause-analysis",
-      "path": "core/root-cause-analysis.md",
-      "scope": "core",
-      "severity": "high",
-      "tags": ["root-cause", "debugging", "death-spiral", "bug-fixing", "tracing"],
-      "applies": "always"
-    },
-    {
-      "id": "core-code-quality",
-      "path": "core/code-quality.md",
-      "scope": "core",
-      "severity": "high",
-      "tags": ["quality", "duplication", "dead-code", "consistency", "naming", "churn"],
-      "applies": "always"
-    },
-    {
-      "id": "core-error-handling",
-      "path": "core/error-handling.md",
-      "scope": "core",
-      "severity": "high",
-      "tags": ["error-handling", "validation", "edge-cases", "boundaries", "exceptions"],
-      "applies": "always"
-    },
-    {
-      "id": "core-testing",
-      "path": "core/testing.md",
-      "scope": "core",
-      "severity": "high",
-      "tags": ["testing", "mocking", "behavior", "edge-cases", "tdd", "boundaries"],
-      "applies": "always"
-    },
-    {
-      "id": "core-dependency-management",
-      "path": "core/dependency-management.md",
-      "scope": "core",
-      "severity": "critical",
-      "tags": ["dependencies", "supply-chain", "slopsquatting", "lockfile", "security", "owasp"],
-      "applies": "always"
-    },
-    {
-      "id": "web-frontend-security",
-      "path": "web-frontend/security.md",
-      "scope": "web-frontend",
-      "severity": "critical",
-      "tags": ["security", "xss", "csp", "cors", "auth-tokens", "frontend", "owasp", "cwe"],
-      "applies": "web-frontend"
-    },
-    {
-      "id": "web-frontend-structure",
-      "path": "web-frontend/structure.md",
-      "scope": "web-frontend",
-      "severity": "high",
-      "tags": ["frontend", "components", "state-management", "folder-structure", "react", "vue", "svelte"],
-      "applies": "web-frontend"
-    },
-    {
-      "id": "web-frontend-performance",
-      "path": "web-frontend/performance.md",
-      "scope": "web-frontend",
-      "severity": "medium",
-      "tags": ["performance", "bundle-size", "lazy-loading", "code-splitting", "rendering", "assets"],
-      "applies": "web-frontend"
-    },
-    {
-      "id": "web-backend-security",
-      "path": "web-backend/security.md",
-      "scope": "web-backend",
-      "severity": "critical",
-      "tags": ["security", "injection", "authentication", "authorization", "secrets", "rate-limiting", "ssrf", "owasp", "cwe"],
-      "applies": "web-backend"
-    },
-    {
-      "id": "web-backend-structure",
-      "path": "web-backend/structure.md",
-      "scope": "web-backend",
-      "severity": "high",
-      "tags": ["backend", "api", "service-layer", "middleware", "separation-of-concerns", "routes"],
-      "applies": "web-backend"
-    },
-    {
-      "id": "web-backend-data-access",
-      "path": "web-backend/data-access.md",
-      "scope": "web-backend",
-      "severity": "high",
-      "tags": ["database", "queries", "migrations", "connection-pooling", "orm", "sql", "data-access"],
-      "applies": "web-backend"
-    },
-    {
-      "id": "compliance-gdpr",
-      "path": "compliance/gdpr.md",
-      "scope": "compliance",
-      "severity": "critical",
-      "tags": ["compliance", "gdpr", "ccpa", "cpra", "pii", "data-protection", "right-to-be-forgotten", "data-deletion"],
-      "applies": "compliance:gdpr"
-    },
-    {
-      "id": "compliance-pci-dss",
-      "path": "compliance/pci-dss.md",
-      "scope": "compliance",
-      "severity": "critical",
-      "tags": ["compliance", "pci-dss", "cardholder-data", "tokenization", "payment"],
-      "applies": "compliance:pci-dss"
-    },
-    {
-      "id": "compliance-hipaa",
-      "path": "compliance/hipaa.md",
-      "scope": "compliance",
-      "severity": "critical",
-      "tags": ["compliance", "hipaa", "phi", "healthcare", "audit-logging", "encryption"],
-      "applies": "compliance:hipaa"
-    },
-    {
-      "id": "database-encryption",
-      "path": "database/encryption.md",
-      "scope": "database",
-      "severity": "critical",
-      "tags": ["database", "encryption", "tde", "column-encryption", "key-management", "pii"],
-      "applies": "database"
-    },
-    {
-      "id": "database-schema-security",
-      "path": "database/schema-security.md",
-      "scope": "database",
-      "severity": "high",
-      "tags": ["database", "rls", "data-classification", "audit", "masking", "multi-tenant"],
-      "applies": "database"
-    }
-  ]
+  "scopes": {
+    "core": { "manifest": "scopes/core.json", "applies": "always" },
+    "web-frontend": { "manifest": "scopes/web-frontend.json", "applies": "web-frontend" },
+    "web-backend": { "manifest": "scopes/web-backend.json", "applies": "web-backend" },
+    "database": { "manifest": "scopes/database.json", "applies": "database" },
+    "mobile": { "manifest": "scopes/mobile.json", "applies": "mobile" },
+    "desktop": { "manifest": "scopes/desktop.json", "applies": "desktop" },
+    "cli": { "manifest": "scopes/cli.json", "applies": "cli" },
+    "devops": { "manifest": "scopes/devops.json", "applies": "devops" },
+    "compliance-gdpr": { "manifest": "scopes/compliance-gdpr.json", "applies": "compliance:gdpr" },
+    "compliance-pci-dss": { "manifest": "scopes/compliance-pci-dss.json", "applies": "compliance:pci-dss" },
+    "compliance-hipaa": { "manifest": "scopes/compliance-hipaa.json", "applies": "compliance:hipaa" }
+  }
 }

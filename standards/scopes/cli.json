@@ -1,0 +1,6 @@
+{
+  "scope": "cli",
+  "standards": [
+    { "id": "cli-security-and-quality", "path": "cli-security-and-quality.md", "severity": "high", "tags": ["cli", "security", "shell-injection", "argument-injection", "exit-codes", "signals", "cwe"] }
+  ]
+}

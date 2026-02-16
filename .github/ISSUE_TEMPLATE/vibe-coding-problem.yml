@@ -79,6 +79,6 @@ body:
     attributes:
       label: Is this covered by an existing VCP standard?
       description: If yes, link the standard. If no, this may inspire a new one.
-      placeholder: "e.g., Partially covered by standards/core/security.md, but missing guidance on..."
+      placeholder: "e.g., Partially covered by standards/core-security.md, but missing guidance on..."
     validations:
       required: false

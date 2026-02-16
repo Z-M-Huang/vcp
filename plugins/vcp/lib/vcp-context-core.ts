@@ -48,6 +48,25 @@ export interface Manifest {
   standards: StandardEntry[];
 }
 
+// --- V2 manifest types ---
+
+export interface ManifestV2Root {
+  version: string;
+  repository: string;
+  standards_base_url: string;
+  scopes: Record<string, { manifest: string; applies: string }>;
+}
+
+export interface ScopeManifestFile {
+  scope: string;
+  standards: {
+    id: string;
+    path: string;
+    severity: string;
+    tags: string[];
+  }[];
+}
+
 interface StandardRules {
   title: string;
   severity: string;
@@ -115,12 +134,73 @@ export function parseIgnoreList(ignore: string[]): ParsedIgnores {
   return { standards, rules, cwes };
 }
 
+/**
+ * Flatten a v2 root manifest and its resolved scope manifests into the
+ * unified Manifest shape consumed by all downstream functions.
+ *
+ * Pure function — no I/O. Exported for testing.
+ */
+export function flattenV2Manifest(
+  v2: ManifestV2Root,
+  scopeManifests: { scopeKey: string; applies: string; sm: ScopeManifestFile }[],
+): Manifest {
+  const standards: StandardEntry[] = [];
+  const scopeNames: string[] = [];
+
+  for (const entry of scopeManifests) {
+    scopeNames.push(entry.scopeKey);
+    for (const std of entry.sm.standards) {
+      standards.push({
+        id: std.id,
+        path: std.path,
+        scope: entry.sm.scope,
+        severity: std.severity,
+        tags: std.tags,
+        applies: entry.applies,
+      });
+    }
+  }
+
+  return {
+    version: v2.version,
+    repository: v2.repository,
+    standards_base_url: v2.standards_base_url,
+    scopes: scopeNames,
+    standards,
+  };
+}
+
 export async function fetchManifest(): Promise<Manifest> {
   const response = await fetch(MANIFEST_URL);
   if (!response.ok) {
     throw new Error(`Failed to fetch manifest: ${response.status}`);
   }
-  return response.json();
+  const raw = await response.json();
+
+  // V1: already in the right shape
+  if (raw.version === "1.0") {
+    return raw as Manifest;
+  }
+
+  // V2: fetch scope manifests and flatten to same Manifest shape
+  const v2 = raw as ManifestV2Root;
+  const baseUrl = v2.standards_base_url;
+  const scopeEntries = Object.entries(v2.scopes);
+
+  const scopeManifests = await Promise.all(
+    scopeEntries.map(async ([scopeKey, { manifest: manifestPath, applies }]) => {
+      const res = await fetch(`${baseUrl}${manifestPath}`);
+      if (!res.ok) {
+        throw new Error(
+          `Failed to fetch scope manifest '${scopeKey}' (${baseUrl}${manifestPath}): ${res.status}`,
+        );
+      }
+      const sm: ScopeManifestFile = await res.json();
+      return { scopeKey, applies, sm };
+    }),
+  );
+
+  return flattenV2Manifest(v2, scopeManifests);
 }
 
 export function resolveApplicableStandards(

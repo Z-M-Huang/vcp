@@ -1,0 +1,7 @@
+{
+  "scope": "database",
+  "standards": [
+    { "id": "database-encryption", "path": "database-encryption.md", "severity": "critical", "tags": ["database", "encryption", "tde", "column-encryption", "key-management", "pii"] },
+    { "id": "database-schema-security", "path": "database-schema-security.md", "severity": "high", "tags": ["database", "rls", "data-classification", "audit", "masking", "multi-tenant"] }
+  ]
+}

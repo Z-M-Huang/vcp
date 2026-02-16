@@ -76,7 +76,7 @@ Security and architecture standards injected into the AI's context at session st
 
 ### Layer 2: On-Demand Scanning
 
-Skills scan code against 18 standards across security, architecture, quality, data access, and compliance:
+Skills scan code against 30 standards across 9 scopes — security, architecture, quality, data access, mobile, desktop, CLI, DevOps, and compliance:
 
 - `/vcp-audit` — Full audit against all standards (security, architecture, quality, compliance) with modes for targeted scans
 - `/vcp-dependency-check` — Lockfile hygiene, version ranges, slopsquatting
@@ -115,8 +115,8 @@ The layers are complementary: Layer 3 catches the most dangerous patterns instan
 VCP standards govern **code that AI agents write**, not the infrastructure, processes, or policies surrounding that code. The following are explicitly out of scope:
 
 - **Repository security controls** — branch protection rules, CODEOWNERS, MFA requirements for maintainers. These are infrastructure policies, not coding standards.
-- **CI/CD pipeline configuration** — required checks, deployment gates, approval workflows. VCP plugins may enforce standards in CI, but pipeline configuration is not a standard.
-- **SBOM generation and signed builds** — supply chain provenance at the build/release level. VCP covers dependency verification at coding time (see [dependency management](standards/core/dependency-management.md)), not build attestation.
+- **CI/CD pipeline operational configuration** — required checks, deployment gates, approval workflows. VCP covers the *security of CI/CD code* (see [devops-cicd-security](standards/devops-cicd-security.md)), but pipeline operational policy is not a standard.
+- **SBOM generation and signed builds** — supply chain provenance at the build/release level. VCP covers dependency verification at coding time (see [dependency management](standards/core-dependency-management.md)), not build attestation.
 - **Incident response and SLAs** — patch timelines, escalation procedures, on-call rotations. These are operational policies.
 - **Organizational security policies** — security training requirements, access reviews, compliance audits.
 
@@ -128,19 +128,24 @@ If a control doesn't affect what code gets written, it's not a VCP standard.
 
 ```
 vcp/
-├── standards/           # AI-optimized principled standards (canonical source)
-│   ├── manifest.json    # Machine-readable index for AI skill routing
-│   ├── core/            # Universal: security, architecture, testing, etc.
-│   ├── web-frontend/    # Browser-side: components, XSS, performance
-│   ├── web-backend/     # Server-side: APIs, injection, data access
-│   ├── database/        # Database-layer: encryption, schema security
-│   └── compliance/      # Regulatory: GDPR, PCI DSS, HIPAA
-├── plugins/             # Claude Code plugins (created as developed)
+├── standards/           # AI-optimized principled standards (30 standards, 9 scopes)
+│   ├── manifest.json    # Root v2 manifest — indexes scope manifests
+│   ├── scopes/          # Per-scope manifest files (core, web-*, mobile, desktop, cli, devops, compliance-*)
+│   ├── core-*.md        # Universal: security, architecture, testing, etc.
+│   ├── web-frontend-*.md # Browser-side: XSS, accessibility, performance
+│   ├── web-backend-*.md # Server-side: APIs, injection, realtime, caching
+│   ├── database-*.md    # Database-layer: encryption, schema security
+│   ├── mobile-*.md      # Mobile: credential storage, certificate pinning, platform config
+│   ├── desktop-*.md     # Desktop: Electron/Tauri context isolation, IPC security
+│   ├── cli-*.md         # CLI: shell injection, argument injection, exit codes
+│   ├── devops-*.md      # DevOps: containers, CI/CD, IaC, Kubernetes
+│   └── compliance-*.md  # Regulatory: GDPR, PCI DSS, HIPAA
+├── plugins/             # Claude Code plugins
 │   └── vcp/             # All VCP skills, hooks, and agents
 └── .claude-plugin/      # Marketplace manifest
 ```
 
-See each folder's `README.md` for detailed contents and planned work.
+See [`standards/README.md`](standards/README.md) for the format specification and full file list.
 
 ---
 
@@ -172,6 +177,16 @@ See each folder's `README.md` for detailed contents and planned work.
 - [x] [Standards Manifest](https://github.com/Z-M-Huang/vcp/issues/32) — manifest.json for AI skill discovery and routing
 - [x] [Skill Routing Design](https://github.com/Z-M-Huang/vcp/issues/33) — Context detection, .vcp.json config, standard loading
 - [x] [Proactive security context](https://github.com/Z-M-Huang/vcp/issues/34) — SessionStart hook and `/vcp-context` skill for standards injection
+- [x] [CWE-22 Path Traversal](https://github.com/Z-M-Huang/vcp/issues/35) — Path canonicalization and base directory verification
+- [x] [CWE-434 File Upload](https://github.com/Z-M-Huang/vcp/issues/36) — Magic byte validation, storage isolation, UUID rename
+- [x] [Mobile Security](https://github.com/Z-M-Huang/vcp/issues/37) — Keychain/KeyStore, certificate pinning, deep links, biometrics
+- [x] [DevOps/Infra Security](https://github.com/Z-M-Huang/vcp/issues/38) — Containers, CI/CD, IaC, Kubernetes
+- [x] [Web Accessibility](https://github.com/Z-M-Huang/vcp/issues/39) — WCAG 2.2, semantic HTML, keyboard nav, ARIA
+- [x] [API Design & Security](https://github.com/Z-M-Huang/vcp/issues/40) — REST pagination, GraphQL depth, gRPC auth, RFC 9457
+- [x] [WebSocket/SSE Realtime](https://github.com/Z-M-Huang/vcp/issues/41) — Auth on upgrade, CSWSH, message validation, backpressure
+- [x] [Caching Security](https://github.com/Z-M-Huang/vcp/issues/43) — Cache poisoning, cache deception, sensitive data in caches
+- [x] [Desktop Security](https://github.com/Z-M-Huang/vcp/issues/44) — Electron context isolation, Tauri capabilities, IPC validation
+- [x] [CLI Security & Quality](https://github.com/Z-M-Huang/vcp/issues/45) — Shell injection, argument injection, exit codes, signals
 
 ### Up Next
 
@@ -203,7 +218,7 @@ See each folder's `README.md` for detailed contents and planned work.
 
 ### Customize
 
-`.vcp.json` controls which scopes (web-frontend, web-backend, database), compliance frameworks (GDPR, PCI DSS, HIPAA), and severity thresholds apply to your project. Use `/vcp-config` to manage your configuration via natural language:
+`.vcp.json` controls which scopes (web-frontend, web-backend, database, mobile, desktop, cli, devops), compliance frameworks (GDPR, PCI DSS, HIPAA), and severity thresholds apply to your project. Use `/vcp-config` to manage your configuration via natural language:
 
 ```
 /vcp-config ignore core-architecture

@@ -16,7 +16,7 @@ Comprehensive codebase audit against VCP standards. Uses team mode to paralleliz
 
 - `/vcp-audit` or `/vcp-audit [path]` — **Full audit** against all applicable standards
 - `/vcp-audit compliance [gdpr|pci-dss|hipaa]` — **Compliance audit** with regulation citations
-- `/vcp-audit quick` — **Release readiness** check (critical rules only, no team mode, READY/NOT READY verdict)
+- `/vcp-audit quick` — **Release readiness** check (critical + high rules, no team mode, READY/NOT READY verdict)
 
 ## Step 1: Resolve Config
 
@@ -95,11 +95,15 @@ Group applicable standards into domains. Only create domains where standards exi
 
 | Domain | Standards |
 |--------|-----------|
-| `backend` | core-security, web-backend-security, web-backend-structure, web-backend-data-access |
-| `frontend` | web-frontend-security, web-frontend-structure, web-frontend-performance |
+| `backend` | core-security, web-backend-security, web-backend-structure, web-backend-data-access, web-backend-api-design, web-backend-realtime, web-backend-caching |
+| `frontend` | web-frontend-security, web-frontend-structure, web-frontend-performance, web-frontend-accessibility |
 | `architecture` | core-architecture, core-code-quality, core-error-handling, core-testing, core-root-cause-analysis |
 | `database` | database-encryption, database-schema-security, core-dependency-management |
 | `compliance` | compliance-gdpr, compliance-pci-dss, compliance-hipaa (whichever are in applicableStandards) |
+| `mobile` | mobile-security, mobile-platform-configuration |
+| `desktop` | desktop-security |
+| `cli` | cli-security-and-quality |
+| `devops` | devops-container-security, devops-cicd-security, devops-iac-security, devops-kubernetes-security |
 
 **Every standard in `applicableStandards` must be assigned to exactly one domain.** If a future standard does not fit any domain above, add it to the most relevant domain or create a new one. Never silently drop a standard.
 

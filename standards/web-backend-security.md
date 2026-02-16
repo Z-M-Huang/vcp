@@ -3,7 +3,7 @@ id: web-backend-security
 title: Backend Security
 scope: web-backend
 severity: critical
-tags: [security, injection, authentication, authorization, secrets, rate-limiting, ssrf, owasp, cwe]
+tags: [security, injection, authentication, authorization, secrets, rate-limiting, ssrf, path-traversal, file-upload, owasp, cwe]
 references:
   - title: "OWASP Top 10:2025"
     url: https://owasp.org/Top10/2025/
@@ -19,6 +19,14 @@ references:
     url: https://cwe.mitre.org/data/definitions/918.html
   - title: "OWASP — SSRF Prevention Cheat Sheet"
     url: https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html
+  - title: "CWE-22 — Path Traversal"
+    url: https://cwe.mitre.org/data/definitions/22.html
+  - title: "CWE-434 — Unrestricted Upload of File with Dangerous Type"
+    url: https://cwe.mitre.org/data/definitions/434.html
+  - title: "OWASP — Path Traversal"
+    url: https://owasp.org/www-community/attacks/Path_Traversal
+  - title: "OWASP — File Upload Cheat Sheet"
+    url: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
 ---
 
 ## Principle
@@ -81,6 +89,20 @@ AI-generated backend code has severe gaps: improper password handling (1.88x mor
     - **DNS resolution check:** Resolve the hostname **before** making the request and check the resolved IP against the blocklist. This prevents DNS rebinding attacks where a hostname resolves to a public IP initially but resolves to `127.0.0.1` on subsequent lookups.
     - **Disable redirects or re-validate after each redirect.** An attacker can point to a public URL that 302-redirects to `http://169.254.169.254/latest/meta-data/`. If redirects are followed, re-validate the destination URL and resolved IP at each hop.
     - **Domain allowlist (preferred):** When the set of valid external hosts is known (e.g., webhook targets), use an explicit allowlist of permitted domains rather than relying on blocklists alone. (CWE-918, OWASP A01:2025)
+
+### Path Traversal Prevention
+
+16. **Canonicalize paths and verify they remain within the intended base directory.** When serving files or accessing the filesystem based on user input, always: (1) resolve the full canonical path using `path.resolve()` or `os.path.realpath()`, (2) verify the resolved path starts with the expected base directory, (3) reject the request if the path escapes the base. Never use `path.join()` alone — it does not prevent `../` traversal. Block URL-encoded variants (`%2e%2e%2f`, `%2e%2e/`, `..%2f`, `..%5c`), null bytes (`%00`), and backslash sequences (`..\\`). Where possible, use an allowlist of permitted filenames or map user input to an index rather than using it as a path component. (CWE-22)
+
+### File Upload Security
+
+17. **Validate uploaded files server-side by content, not by name or Content-Type header.** File extensions and MIME types sent by the client are attacker-controlled and must not be trusted for security decisions. Enforce all of the following:
+    - **Magic byte validation:** Check the file's actual content (magic bytes / file signature) against an allowlist of permitted types. Libraries: `file-type` (Node.js), `python-magic` (Python), Apache Tika (Java).
+    - **File size limits:** Enforce maximum file size at both the web server level (e.g., Nginx `client_max_body_size`) and the application level. Set per-file and per-request limits.
+    - **Storage isolation:** Store uploads outside the webroot. Never store uploads in a directory that the web server serves directly. Serve files through an access-controlled handler that checks authorization.
+    - **Rename to UUID:** Generate a random UUID for the stored filename. Store the original filename as metadata in the database. This prevents path traversal via filenames and prevents overwriting existing files.
+    - **Never execute uploaded files.** Do not set execute permissions. Do not store uploads in directories scanned by interpreters (e.g., PHP's include path). Strip or quarantine executable content.
+    - **Scan for malicious content** when feasible. For images, re-encode them (strips embedded scripts). For documents, use sandboxed processing. (CWE-434)
 
 ## Patterns
 
@@ -277,6 +299,101 @@ async def preview_url(request: Request):
 ```
 
 **Why it's wrong:** The server will fetch any URL the attacker provides. `https://169.254.169.254/latest/meta-data/iam/security-credentials/` exposes cloud IAM credentials. `http://localhost:6379/` probes internal Redis. `file:///etc/passwd` reads local files. This is OWASP A01:2025 and the leading cause of cloud infrastructure compromise.
+
+### Path Traversal Prevention
+
+#### Do This
+
+```javascript
+import path from "path";
+
+const UPLOADS_DIR = "/var/app/uploads";
+
+function getSecureFilePath(userFilename) {
+  // Resolve the full canonical path
+  const resolved = path.resolve(UPLOADS_DIR, userFilename);
+
+  // Verify it stays within the base directory
+  if (!resolved.startsWith(UPLOADS_DIR + path.sep) && resolved !== UPLOADS_DIR) {
+    throw new Error("Path traversal detected");
+  }
+
+  return resolved;
+}
+```
+
+```python
+import os
+
+UPLOADS_DIR = "/var/app/uploads"
+
+def get_secure_file_path(user_filename: str) -> str:
+    # Resolve to canonical absolute path (resolves symlinks too)
+    resolved = os.path.realpath(os.path.join(UPLOADS_DIR, user_filename))
+
+    # Verify it stays within the base directory
+    if not resolved.startswith(UPLOADS_DIR + os.sep):
+        raise ValueError("Path traversal detected")
+
+    return resolved
+```
+
+#### Not This
+
+```javascript
+// path.join does NOT prevent traversal — "../../etc/passwd" escapes (CWE-22)
+app.get("/files/:name", (req, res) => {
+  const filePath = path.join(UPLOADS_DIR, req.params.name);
+  res.sendFile(filePath);
+});
+```
+
+**Why it's wrong:** `path.join("/var/app/uploads", "../../etc/passwd")` resolves to `/var/etc/passwd`, escaping the uploads directory. An attacker reads arbitrary files on the server. `path.resolve()` + `startsWith()` check is the minimum safe pattern.
+
+### File Upload Validation
+
+#### Do This
+
+```javascript
+import { fileTypeFromBuffer } from "file-type";
+import { randomUUID } from "crypto";
+
+const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+
+async function handleUpload(fileBuffer, originalName) {
+  if (fileBuffer.length > MAX_FILE_SIZE) {
+    throw new Error("File too large");
+  }
+
+  // Check actual content type via magic bytes — not the extension or Content-Type header
+  const detected = await fileTypeFromBuffer(fileBuffer);
+  if (!detected || !ALLOWED_TYPES.has(detected.mime)) {
+    throw new Error("File type not allowed");
+  }
+
+  // Store with random UUID name, outside webroot
+  const storedName = `${randomUUID()}.${detected.ext}`;
+  await writeFile(`/var/app/storage/uploads/${storedName}`, fileBuffer);
+
+  // Save original name as metadata, not as the filename on disk
+  await db.insert("uploads", { stored_name: storedName, original_name: originalName });
+}
+```
+
+#### Not This
+
+```javascript
+// Trusting the extension and storing in webroot (CWE-434)
+app.post("/upload", (req, res) => {
+  const file = req.files.document;
+  // Attacker uploads "shell.php" or "payload.html" — extension is attacker-controlled
+  file.mv(`./public/uploads/${file.name}`);
+  res.json({ url: `/uploads/${file.name}` });
+});
+```
+
+**Why it's wrong:** The attacker controls the filename and extension. Uploading `shell.php` to a directory served by Apache/Nginx with PHP enabled gives the attacker remote code execution. Uploading `exploit.html` enables stored XSS. Storing in the webroot with the original name is a double vulnerability: path traversal via the filename and arbitrary file execution.
 
 ## Exceptions
 

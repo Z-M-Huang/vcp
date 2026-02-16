@@ -4,13 +4,44 @@ AI-optimized principled standards for code quality enforcement. Each standard ta
 
 ## Contents
 
-| Path | Description |
-|------|-------------|
-| [`core/`](core/README.md) | Universal standards for all code (security, architecture, testing, etc.) |
-| [`web-frontend/`](web-frontend/README.md) | Client-side web development standards |
-| [`web-backend/`](web-backend/README.md) | Server-side web development standards |
-| [`database/`](database/README.md) | Database-layer security standards (encryption, schema security) |
-| [`compliance/`](compliance/README.md) | Regulatory compliance standards (GDPR, PCI DSS, HIPAA) |
+All standard files are in the `standards/` root directory with a `{scope}-{topic}.md` naming convention. Scope manifests are in `standards/scopes/`.
+
+| Scope | Standards | Description |
+|-------|-----------|-------------|
+| `core` | `core-security.md`, `core-architecture.md`, `core-root-cause-analysis.md`, `core-code-quality.md`, `core-error-handling.md`, `core-testing.md`, `core-dependency-management.md` | Universal standards for all code |
+| `web-frontend` | `web-frontend-security.md`, `web-frontend-structure.md`, `web-frontend-performance.md`, `web-frontend-accessibility.md` | Client-side web development standards |
+| `web-backend` | `web-backend-security.md`, `web-backend-structure.md`, `web-backend-data-access.md`, `web-backend-api-design.md`, `web-backend-realtime.md`, `web-backend-caching.md` | Server-side web development standards |
+| `database` | `database-encryption.md`, `database-schema-security.md` | Database-layer security standards |
+| `mobile` | `mobile-security.md`, `mobile-platform-configuration.md` | Mobile development standards |
+| `desktop` | `desktop-security.md` | Desktop application standards |
+| `cli` | `cli-security-and-quality.md` | CLI tool standards |
+| `devops` | `devops-container-security.md`, `devops-cicd-security.md`, `devops-iac-security.md`, `devops-kubernetes-security.md` | DevOps/infrastructure standards |
+| `compliance` | `compliance-gdpr.md`, `compliance-pci-dss.md`, `compliance-hipaa.md` | Regulatory compliance standards |
+
+### Manifest Architecture (v2)
+
+```
+standards/
+├── manifest.json          # Root v2: indexes scope manifests
+├── scopes/
+│   ├── core.json
+│   ├── web-frontend.json
+│   ├── web-backend.json
+│   ├── database.json
+│   ├── mobile.json
+│   ├── desktop.json
+│   ├── cli.json
+│   ├── devops.json
+│   ├── compliance-gdpr.json
+│   ├── compliance-pci-dss.json
+│   └── compliance-hipaa.json
+├── core-security.md       # All .md files are flat in the root
+├── core-architecture.md
+├── ...                    # (30 total standard files)
+└── README.md
+```
+
+The root `manifest.json` (v2) maps scope names to scope manifest files. Each scope manifest lists the standards that belong to that scope. The `vcp-context-core.ts` module fetches scope manifests and flattens them into a unified list for downstream consumers.
 
 ## Standard File Format Specification
 
@@ -22,7 +53,7 @@ Every standard file MUST follow this format exactly. Consistent structure enable
 ---
 id: core-security              # Unique ID: {scope}-{topic} in kebab-case
 title: Security                 # Human-readable title
-scope: core                     # See manifest.json for valid scopes
+scope: core                     # See manifest.json scopes for valid values
 severity: critical              # One of: critical, high, medium, low
 tags: [security, owasp, cwe]    # Searchable tags
 references:                     # External references
@@ -39,7 +70,7 @@ references:                     # External references
 |-------|----------|-------------|
 | `id` | Yes | Unique identifier. Format: `{scope}-{topic}`. Used for cross-references. |
 | `title` | Yes | Human-readable name. |
-| `scope` | Yes | One of the values in `manifest.json` scopes array: `core`, `web-frontend`, `web-backend`, `database`, `compliance`. See [manifest.json](manifest.json) for the canonical scope list. |
+| `scope` | Yes | One of the scope values in `manifest.json`: `core`, `web-frontend`, `web-backend`, `database`, `mobile`, `desktop`, `cli`, `devops`, `compliance`. See [manifest.json](manifest.json) for the canonical scope list. |
 | `severity` | Yes | `critical` = security/data-loss risk. `high` = major quality impact. `medium` = maintainability. `low` = style/preference. |
 | `tags` | Yes | Array of searchable tags for discovery. Include relevant CWE IDs, OWASP references. |
 | `references` | No | Array of `{title, url}` objects linking to external standards and research. |
@@ -80,20 +111,16 @@ Concrete code examples showing the right way and wrong way. Use fenced code bloc
 
 ### Do This
 
-\`\`\`python
 # Parameterized query — user input is never part of the SQL string
 cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-\`\`\`
 
 ### Not This
 
-\`\`\`python
 # String concatenation — user controls the SQL structure (CWE-89)
-cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
-\`\`\`
+query = f"SELECT * FROM users WHERE id = {user_id}"  # VULNERABLE
 
-**Why it's wrong:** The user can inject arbitrary SQL by setting `user_id` to
-`1; DROP TABLE users; --`. Parameterized queries treat the value as data, never as code.
+**Why it's wrong:** The user can inject arbitrary SQL. Parameterized queries treat the
+value as data, never as code.
 ```
 
 #### 4. Exceptions

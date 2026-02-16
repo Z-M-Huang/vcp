@@ -30,6 +30,22 @@
         "database": {
           "type": "boolean",
           "description": "Database-layer patterns (encryption, schema security, RLS)."
+        },
+        "mobile": {
+          "type": "boolean",
+          "description": "Mobile development (React Native, Flutter, Swift, Kotlin, Expo)."
+        },
+        "desktop": {
+          "type": "boolean",
+          "description": "Desktop application development (Electron, Tauri)."
+        },
+        "cli": {
+          "type": "boolean",
+          "description": "Command-line tool development (commander, yargs, argparse, click, cobra)."
+        },
+        "devops": {
+          "type": "boolean",
+          "description": "DevOps and infrastructure (Docker, Kubernetes, Terraform, CI/CD pipelines)."
         }
       },
       "additionalProperties": false

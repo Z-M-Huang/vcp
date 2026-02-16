@@ -1,0 +1,11 @@
+{
+  "scope": "web-backend",
+  "standards": [
+    { "id": "web-backend-security", "path": "web-backend-security.md", "severity": "critical", "tags": ["security", "injection", "authentication", "authorization", "secrets", "rate-limiting", "ssrf", "path-traversal", "file-upload", "owasp", "cwe"] },
+    { "id": "web-backend-structure", "path": "web-backend-structure.md", "severity": "high", "tags": ["backend", "api", "service-layer", "middleware", "separation-of-concerns", "routes"] },
+    { "id": "web-backend-data-access", "path": "web-backend-data-access.md", "severity": "high", "tags": ["database", "queries", "migrations", "connection-pooling", "orm", "sql", "data-access"] },
+    { "id": "web-backend-api-design", "path": "web-backend-api-design.md", "severity": "high", "tags": ["api", "rest", "graphql", "grpc", "pagination", "versioning", "idempotency"] },
+    { "id": "web-backend-realtime", "path": "web-backend-realtime.md", "severity": "high", "tags": ["websocket", "sse", "realtime", "streaming", "connection-management", "cwe"] },
+    { "id": "web-backend-caching", "path": "web-backend-caching.md", "severity": "high", "tags": ["caching", "cache-poisoning", "cache-deception", "cdn", "redis", "http-caching"] }
+  ]
+}

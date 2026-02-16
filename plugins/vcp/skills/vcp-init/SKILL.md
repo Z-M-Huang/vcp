@@ -33,6 +33,10 @@ Based on what you find, determine:
    - `web-frontend`: the project has client-side web code
    - `web-backend`: the project has server-side web code
    - `database`: the project interacts with databases
+   - `mobile`: the project targets mobile platforms. Detection hints: `android/` or `ios/` directories, `react-native` / `expo` / `flutter` / `@capacitor` in dependencies, `.swift` or `.kt`/`.java` source files in mobile-specific paths, `Podfile`, `build.gradle` with Android plugin
+   - `desktop`: the project builds desktop applications. Detection hints: `electron` or `@electron/` or `tauri` or `@tauri-apps/` in dependencies, `electron-builder` config, `tauri.conf.json`
+   - `cli`: the project is a command-line tool. Detection hints: `bin` field in `package.json`, `commander` / `yargs` / `inquirer` / `oclif` in Node.js deps, `argparse` / `click` / `typer` / `fire` in Python deps, `cobra` / `urfave/cli` in Go deps, `clap` in Rust deps
+   - `devops`: the project contains infrastructure/deployment configuration. Detection hints: `Dockerfile`, `.github/workflows/` directory, `*.tf` files (Terraform), `k8s/` or `kubernetes/` or `helm/` directories, `docker-compose.yml`, `Jenkinsfile`, `.gitlab-ci.yml`, `pulumi/` directory
 3. **Exclude patterns** — which paths should be skipped during scanning (build output, vendored code, generated files)
 
 Use your judgment. Do not rely on a fixed lookup table — understand the project and decide what applies.

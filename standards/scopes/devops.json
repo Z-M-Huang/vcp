@@ -1,0 +1,9 @@
+{
+  "scope": "devops",
+  "standards": [
+    { "id": "devops-container-security", "path": "devops-container-security.md", "severity": "critical", "tags": ["security", "docker", "containers", "dockerfile", "image-scanning", "owasp"] },
+    { "id": "devops-cicd-security", "path": "devops-cicd-security.md", "severity": "critical", "tags": ["security", "cicd", "github-actions", "pipeline", "secrets", "supply-chain"] },
+    { "id": "devops-iac-security", "path": "devops-iac-security.md", "severity": "high", "tags": ["security", "terraform", "pulumi", "cloudformation", "iam", "infrastructure"] },
+    { "id": "devops-kubernetes-security", "path": "devops-kubernetes-security.md", "severity": "high", "tags": ["security", "kubernetes", "k8s", "rbac", "pod-security", "network-policy"] }
+  ]
+}

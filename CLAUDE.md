@@ -75,12 +75,12 @@ Target: Claude Code marketplace first, other tools later.
 VCP enforces standards through three layers:
 
 1. **Proactive context** — Standards injected at session start (`security-context.ts`) and available manually (`/vcp-context`) so the AI internalizes rules while writing code
-2. **On-demand scanning** — Skills (`/vcp-audit`, `/vcp-dependency-check`, `/vcp-pre-commit-review`, `/vcp-review-tests`) scan code against 18 standards
+2. **On-demand scanning** — Skills (`/vcp-audit`, `/vcp-dependency-check`, `/vcp-pre-commit-review`, `/vcp-review-tests`) scan code against 30 standards across 9 scopes
 3. **Real-time blocking** — `security-gate.ts` hook runs on every Write/Edit/Bash call, blocking hardcoded secrets, SQL injection, eval injection, insecure deserialization, innerHTML XSS, and obfuscated shell execution (14 patterns across 6 CWEs)
 
 ### Plugin Structure
 
-- `plugins/vcp/` — Single plugin with 9 skills, 1 agent, and 4 hooks
+- `plugins/vcp/` — Single plugin with 10 skills, 1 agent, and 4 hooks
 - Skills fetch standards from `standards/manifest.json` at runtime via WebFetch (always latest from main)
 - `.vcp.json` in project root configures scopes, compliance frameworks, severity threshold, and CWE ignore list
 - `security-gate.ts` exits 2 (block) on pattern match, 0 (allow) otherwise
@@ -88,8 +88,9 @@ VCP enforces standards through three layers:
 
 ### Repo Structure
 
-- `standards/` — AI-optimized markdown standards (core + web targets + database + compliance)
-- `standards/manifest.json` — Machine-readable index for AI skill routing
+- `standards/` — AI-optimized markdown standards (30 files, flat layout with `{scope}-{topic}.md` naming)
+- `standards/manifest.json` — Root v2 manifest indexing per-scope manifests in `standards/scopes/`
+- `standards/scopes/` — Per-scope manifest files (core, web-frontend, web-backend, database, mobile, desktop, cli, devops, compliance-*)
 - `plugins/` — Claude Code plugins (vcp)
 - `.claude-plugin/` — Marketplace manifest
 

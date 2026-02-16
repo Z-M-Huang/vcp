@@ -16,8 +16,11 @@ import {
   extractRuleSummaries,
   parseIgnoreList,
   formatContext,
+  flattenV2Manifest,
   FALLBACK_MESSAGE,
   type Manifest,
+  type ManifestV2Root,
+  type ScopeManifestFile,
   type StandardEntry,
   type VcpConfig,
   type ScopedRules,
@@ -34,7 +37,7 @@ const BASE_MANIFEST: Manifest = {
   standards: [
     {
       id: "core-security",
-      path: "core/security.md",
+      path: "core-security.md",
       scope: "core",
       severity: "critical",
       tags: ["security"],
@@ -42,7 +45,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "core-architecture",
-      path: "core/architecture.md",
+      path: "core-architecture.md",
       scope: "core",
       severity: "high",
       tags: ["architecture"],
@@ -50,7 +53,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "web-backend-security",
-      path: "web-backend/security.md",
+      path: "web-backend-security.md",
       scope: "web-backend",
       severity: "critical",
       tags: ["security"],
@@ -58,7 +61,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "web-frontend-security",
-      path: "web-frontend/security.md",
+      path: "web-frontend-security.md",
       scope: "web-frontend",
       severity: "critical",
       tags: ["security"],
@@ -66,7 +69,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "compliance-gdpr",
-      path: "compliance/gdpr.md",
+      path: "compliance-gdpr.md",
       scope: "compliance",
       severity: "critical",
       tags: ["compliance", "gdpr"],
@@ -74,7 +77,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "database-encryption",
-      path: "database/encryption.md",
+      path: "database-encryption.md",
       scope: "database",
       severity: "critical",
       tags: ["database", "encryption"],
@@ -311,7 +314,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core/security.md",
+        path: "core-security.md",
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -338,7 +341,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core/security.md",
+        path: "core-security.md",
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -346,7 +349,7 @@ describe("extractRuleSummaries", () => {
       },
       {
         id: "core-architecture",
-        path: "core/architecture.md",
+        path: "core-architecture.md",
         scope: "core",
         severity: "high",
         tags: ["architecture"],
@@ -396,7 +399,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core/security.md",
+        path: "core-security.md",
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -422,7 +425,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core/security.md",
+        path: "core-security.md",
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -446,7 +449,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-architecture",
-        path: "core/architecture.md",
+        path: "core-architecture.md",
         scope: "core",
         severity: "high",
         tags: ["architecture"],
@@ -469,7 +472,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core/security.md",
+        path: "core-security.md",
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -557,6 +560,169 @@ describe("formatContext", () => {
     const coreIdx = output.indexOf("### Core Rules");
     const backendIdx = output.indexOf("### Web Backend Rules");
     expect(coreIdx).toBeLessThan(backendIdx);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// flattenV2Manifest
+// ---------------------------------------------------------------------------
+describe("flattenV2Manifest", () => {
+  const V2_ROOT: ManifestV2Root = {
+    version: "2.0",
+    repository: "https://github.com/Z-M-Huang/vcp",
+    standards_base_url:
+      "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/",
+    scopes: {
+      core: { manifest: "scopes/core.json", applies: "always" },
+      "web-backend": {
+        manifest: "scopes/web-backend.json",
+        applies: "web-backend",
+      },
+      mobile: { manifest: "scopes/mobile.json", applies: "mobile" },
+      "compliance-gdpr": {
+        manifest: "scopes/compliance-gdpr.json",
+        applies: "compliance:gdpr",
+      },
+    },
+  };
+
+  const CORE_SCOPE: ScopeManifestFile = {
+    scope: "core",
+    standards: [
+      {
+        id: "core-security",
+        path: "core-security.md",
+        severity: "critical",
+        tags: ["security"],
+      },
+      {
+        id: "core-architecture",
+        path: "core-architecture.md",
+        severity: "high",
+        tags: ["architecture"],
+      },
+    ],
+  };
+
+  const BACKEND_SCOPE: ScopeManifestFile = {
+    scope: "web-backend",
+    standards: [
+      {
+        id: "web-backend-security",
+        path: "web-backend-security.md",
+        severity: "critical",
+        tags: ["security"],
+      },
+    ],
+  };
+
+  const MOBILE_SCOPE: ScopeManifestFile = {
+    scope: "mobile",
+    standards: [
+      {
+        id: "mobile-security",
+        path: "mobile-security.md",
+        severity: "critical",
+        tags: ["security", "mobile"],
+      },
+    ],
+  };
+
+  const GDPR_SCOPE: ScopeManifestFile = {
+    scope: "compliance",
+    standards: [
+      {
+        id: "compliance-gdpr",
+        path: "compliance-gdpr.md",
+        severity: "critical",
+        tags: ["compliance", "gdpr"],
+      },
+    ],
+  };
+
+  test("flattens multiple scope manifests into unified Manifest shape", () => {
+    const result = flattenV2Manifest(V2_ROOT, [
+      { scopeKey: "core", applies: "always", sm: CORE_SCOPE },
+      { scopeKey: "web-backend", applies: "web-backend", sm: BACKEND_SCOPE },
+    ]);
+
+    expect(result.version).toBe("2.0");
+    expect(result.repository).toBe("https://github.com/Z-M-Huang/vcp");
+    expect(result.scopes).toEqual(["core", "web-backend"]);
+    expect(result.standards.length).toBe(3);
+  });
+
+  test("preserves applies field from root manifest, not scope manifest", () => {
+    const result = flattenV2Manifest(V2_ROOT, [
+      {
+        scopeKey: "compliance-gdpr",
+        applies: "compliance:gdpr",
+        sm: GDPR_SCOPE,
+      },
+    ]);
+
+    expect(result.standards[0].applies).toBe("compliance:gdpr");
+    expect(result.standards[0].scope).toBe("compliance");
+  });
+
+  test("uses scope from scope manifest file for the scope field", () => {
+    const result = flattenV2Manifest(V2_ROOT, [
+      { scopeKey: "core", applies: "always", sm: CORE_SCOPE },
+    ]);
+
+    expect(result.standards[0].scope).toBe("core");
+    expect(result.standards[1].scope).toBe("core");
+  });
+
+  test("all standard entry fields are populated", () => {
+    const result = flattenV2Manifest(V2_ROOT, [
+      { scopeKey: "mobile", applies: "mobile", sm: MOBILE_SCOPE },
+    ]);
+
+    const entry = result.standards[0];
+    expect(entry.id).toBe("mobile-security");
+    expect(entry.path).toBe("mobile-security.md");
+    expect(entry.scope).toBe("mobile");
+    expect(entry.severity).toBe("critical");
+    expect(entry.tags).toEqual(["security", "mobile"]);
+    expect(entry.applies).toBe("mobile");
+  });
+
+  test("empty scope manifests array produces empty standards", () => {
+    const result = flattenV2Manifest(V2_ROOT, []);
+
+    expect(result.version).toBe("2.0");
+    expect(result.scopes).toEqual([]);
+    expect(result.standards).toEqual([]);
+  });
+
+  test("flattened result works with resolveApplicableStandards", () => {
+    const manifest = flattenV2Manifest(V2_ROOT, [
+      { scopeKey: "core", applies: "always", sm: CORE_SCOPE },
+      { scopeKey: "web-backend", applies: "web-backend", sm: BACKEND_SCOPE },
+      { scopeKey: "mobile", applies: "mobile", sm: MOBILE_SCOPE },
+      {
+        scopeKey: "compliance-gdpr",
+        applies: "compliance:gdpr",
+        sm: GDPR_SCOPE,
+      },
+    ]);
+
+    // Config enables web-backend but not mobile
+    const config: VcpConfig = {
+      version: "1.0",
+      scopes: { "web-backend": true, mobile: false },
+      compliance: ["gdpr"],
+    };
+
+    const result = resolveApplicableStandards(manifest, config);
+    const ids = result.map((s) => s.id);
+
+    expect(ids).toContain("core-security");
+    expect(ids).toContain("core-architecture");
+    expect(ids).toContain("web-backend-security");
+    expect(ids).toContain("compliance-gdpr");
+    expect(ids).not.toContain("mobile-security");
   });
 });
 
