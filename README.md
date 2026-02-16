@@ -82,6 +82,7 @@ Skills scan code against 18 standards across security, architecture, quality, da
 - `/vcp-dependency-check` — Lockfile hygiene, version ranges, slopsquatting
 - `/vcp-pre-commit-review` — All applicable standards in a single pre-commit pass
 - `/vcp-review-tests` — Test quality review for anti-patterns (over-mocking, tautological tests)
+- `/vcp-config` — View and modify `.vcp.json` via natural language (ignore rules, toggle scopes, manage compliance)
 
 Skills use AI-driven analysis that can trace data flow across variables — deeper than regex can reach.
 
@@ -145,52 +146,39 @@ See each folder's `README.md` for detailed contents and planned work.
 
 ## Roadmap
 
-### Phase 1: Core Standards
+### Done
 
 - [x] [Security](https://github.com/Z-M-Huang/vcp/issues/1) — Security-first checklist derived from OWASP Top 10 and CWE
 - [x] [Architecture](https://github.com/Z-M-Huang/vcp/issues/2) — Clean architecture, SRP, separation of concerns
 - [x] [Root Cause Analysis](https://github.com/Z-M-Huang/vcp/issues/3) — Decision framework for fixing bugs at the right level
-- [x] [Code Quality](https://github.com/Z-M-Huang/vcp/issues/5) — Consistency, duplication elimination, dead code removal
-- [x] [Error Handling](https://github.com/Z-M-Huang/vcp/issues/7) — Edge cases, boundary validation, structured errors
-- [x] [Testing](https://github.com/Z-M-Huang/vcp/issues/9) — Test real behavior, not AI assumptions
-- [x] [Dependency Management](https://github.com/Z-M-Huang/vcp/issues/11) — Prevent slopsquatting and supply chain attacks
-
-### Phase 2: Web Target Standards
-
 - [x] [Frontend Structure](https://github.com/Z-M-Huang/vcp/issues/4) — Component organization, state management, folder conventions
+- [x] [Code Quality](https://github.com/Z-M-Huang/vcp/issues/5) — Consistency, duplication elimination, dead code removal
 - [x] [Frontend Security](https://github.com/Z-M-Huang/vcp/issues/6) — XSS prevention, auth token handling, CSP, CORS
+- [x] [Error Handling](https://github.com/Z-M-Huang/vcp/issues/7) — Edge cases, boundary validation, structured errors
 - [x] [Frontend Performance](https://github.com/Z-M-Huang/vcp/issues/8) — Bundle discipline, lazy loading, rendering optimization
+- [x] [Testing](https://github.com/Z-M-Huang/vcp/issues/9) — Test real behavior, not AI assumptions
 - [x] [Backend Structure](https://github.com/Z-M-Huang/vcp/issues/10) — HTTP/business logic separation, service layers
+- [x] [Dependency Management](https://github.com/Z-M-Huang/vcp/issues/11) — Prevent slopsquatting and supply chain attacks
 - [x] [Backend Security](https://github.com/Z-M-Huang/vcp/issues/13) — Injection prevention, auth, secrets management
 - [x] [Backend Data Access](https://github.com/Z-M-Huang/vcp/issues/15) — Query safety, migration patterns, connection management
-
-### Phase 3: GitHub Actions
-
-- [ ] [Issue Triage Pipeline](https://github.com/Z-M-Huang/vcp/issues/18) — Auto-label and deduplicate community issues
-
-### Phase 4: Compliance & Database Standards
-
+- [x] [Guard skills](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills (4 skills, 2 hooks)
+- [x] [Audit skills](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment (2 skills, 1 agent)
+- [x] [Testing skills](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement (3 skills, 1 hook)
 - [x] [GDPR & CCPA/CPRA](https://github.com/Z-M-Huang/vcp/issues/27) — Data deletion, retention, consent, PII handling
 - [x] [PCI DSS v4.0](https://github.com/Z-M-Huang/vcp/issues/28) — Tokenization, card masking, CDE isolation
 - [x] [HIPAA](https://github.com/Z-M-Huang/vcp/issues/29) — PHI encryption, audit logging, retention, minimum necessary
 - [x] [Database Encryption](https://github.com/Z-M-Huang/vcp/issues/30) — TDE, column-level, key management
 - [x] [Database Schema Security](https://github.com/Z-M-Huang/vcp/issues/31) — RLS, data classification, audit triggers, masking
-
-### Phase 5: Manifest & Routing Infrastructure
-
 - [x] [Standards Manifest](https://github.com/Z-M-Huang/vcp/issues/32) — manifest.json for AI skill discovery and routing
 - [x] [Skill Routing Design](https://github.com/Z-M-Huang/vcp/issues/33) — Context detection, .vcp.json config, standard loading
-
-### Phase 6: Plugins
-
-- [x] [Guard skills](https://github.com/Z-M-Huang/vcp/issues/22) — Enforcement hooks and skills (4 skills, 2 hooks)
 - [x] [Proactive security context](https://github.com/Z-M-Huang/vcp/issues/34) — SessionStart hook and `/vcp-context` skill for standards injection
-- [x] [Audit skills](https://github.com/Z-M-Huang/vcp/issues/23) — Codebase assessment (2 skills, 1 agent)
-- [x] [Testing skills](https://github.com/Z-M-Huang/vcp/issues/24) — Test quality enforcement (3 skills, 1 hook)
 
-### Future
+### Up Next
+
+- [ ] [Custom Rule Repositories](https://github.com/Z-M-Huang/vcp/issues/46) — Allow organizations to add their own VCP-compatible standards
 - [ ] [Conformance Model](https://github.com/Z-M-Huang/vcp/issues/25) — MUST/SHOULD/MAY with objective pass/fail criteria
 - [ ] [Agentic AI Security](https://github.com/Z-M-Huang/vcp/issues/26) — Prompt injection, tool boundaries, and human approval gates
+- [ ] [Issue Triage Pipeline](https://github.com/Z-M-Huang/vcp/issues/18) — Auto-label and deduplicate community issues
 - [ ] [Codex CLI Support](https://github.com/Z-M-Huang/vcp/issues/19) — Adapt standards for OpenAI Codex CLI
 - [ ] [Gemini CLI Support](https://github.com/Z-M-Huang/vcp/issues/20) — Adapt standards for Google Gemini CLI
 - [ ] [Migration Plan Tooling](https://github.com/Z-M-Huang/vcp/issues/21) — Analyze existing codebases against VCP (separate repo)
@@ -215,7 +203,16 @@ See each folder's `README.md` for detailed contents and planned work.
 
 ### Customize
 
-`.vcp.json` controls which scopes (web-frontend, web-backend, database), compliance frameworks (GDPR, PCI DSS, HIPAA), and severity thresholds apply to your project. Use the `ignore` field to suppress specific standards (`"core-architecture"`), individual rules (`"core-security/rule-3"`), or CWE patterns (`"CWE-798"`) that don't apply.
+`.vcp.json` controls which scopes (web-frontend, web-backend, database), compliance frameworks (GDPR, PCI DSS, HIPAA), and severity thresholds apply to your project. Use `/vcp-config` to manage your configuration via natural language:
+
+```
+/vcp-config ignore core-architecture
+/vcp-config enable database scope
+/vcp-config add gdpr compliance
+/vcp-config set severity to high
+```
+
+Or edit `.vcp.json` directly — use the `ignore` field to suppress specific standards (`"core-architecture"`), individual rules (`"core-security/rule-3"`), or CWE patterns (`"CWE-798"`) that don't apply.
 
 ---
 
