@@ -278,4 +278,4 @@ Pick an open issue from the [roadmap](#roadmap), read the requirements, and subm
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE.md)
