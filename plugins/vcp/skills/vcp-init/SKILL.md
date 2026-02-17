@@ -1,8 +1,9 @@
 ---
 name: vcp-init
 description: >
-  Initialize VCP configuration for this project. Detects frameworks, scopes, and
-  creates .vcp.json so all VCP skills know what standards to enforce.
+  Initialize VCP configuration for this project. Creates global config (~/.vcp/config.json)
+  if it doesn't exist, then creates project config (.vcp.json). Detects frameworks, scopes,
+  and discovers the plugin path.
   Run this once when setting up VCP for a new project.
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Bash, WebFetch, AskUserQuestion
@@ -11,19 +12,51 @@ argument-hint: ""
 
 # VCP Project Initialization
 
-Create a `.vcp.json` configuration file for this project. This config is read by all VCP skills to determine which standards to enforce.
+Create both a global config (`~/.vcp/config.json`) and a project config (`.vcp.json`). The global config stores the standards repository URL and plugin path, shared by all projects. The project config stores project-specific settings.
 
-## Step 1: Check for Existing Config
+## Step 1: Check for Existing Configs
 
-Read `.vcp.json` from the project root.
+Read both `~/.vcp/config.json` and `.vcp.json` from the project root.
 
-**If it exists and has `pluginRoot`:** Show its contents and ask the user if they want to reconfigure or keep it. If they want to keep it, stop here.
+| Global exists | Project exists | Action |
+|:---:|:---:|---|
+| Yes | Yes (with pluginRoot) | Show both configs and ask if user wants to reconfigure or keep them. If they want to keep them, stop here. |
+| Yes | Yes (no pluginRoot) | Copy `pluginRoot` from global to project config, show what was added, and stop. |
+| Yes | No | Skip to Step 3 (project setup), reusing global config values. |
+| No | Yes | Create global config (Step 2), then check if project needs `pluginRoot` patched. |
+| No | No | Full initialization (Step 2 through Step 6). |
 
-**If it exists but is missing `pluginRoot`:** The config needs patching, not replacing. Skip to Step 4 to discover the plugin path, then add `pluginRoot` to the existing config without changing any other fields. Show the user what was added and stop.
+## Step 2: Create Global Config
 
-**If it does not exist:** Continue to Step 2 for full initialization.
+**Only run this step if `~/.vcp/config.json` does not exist.**
 
-## Step 2: Scan the Project
+1. Tell the user: "VCP needs a global config at `~/.vcp/config.json`. This stores the standards repository URL and plugin path, shared by all your projects on this machine."
+
+2. Ask via AskUserQuestion: "Do you want to use a custom standards repository, or the default VCP public standards?"
+   - **Custom:** Ask for the URL. It must start with `https://` and point to a VCP-compatible `manifest.json`. Validate the URL format.
+   - **Default:** Use `https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/manifest.json`
+
+3. Discover the VCP plugin path:
+   - Use Glob to search `~/.claude/` with pattern `**/vcp/lib/vcp-context-core.ts`
+   - If not found there, search the current project root with the same pattern
+   - From the found file path, derive the plugin root: the `vcp/` directory containing the `lib/` directory
+   - If not found at all, warn the user but continue
+
+4. Optionally ask if the user wants to set global defaults (severity, scopes, compliance, ignore). These become defaults for all projects. If the user declines, use an empty `defaults` object.
+
+5. Write `~/.vcp/config.json` using Bash (`mkdir -p ~/.vcp && ...` to ensure the directory exists):
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/schemas/vcp-global.schema.json",
+  "standards_url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/manifest.json",
+  "pluginRoot": "/home/user/.claude/plugins/vcp",
+  "debug": false,
+  "defaults": {}
+}
+```
+
+## Step 3: Scan the Project
 
 Examine the project to understand what frameworks, languages, and tools are in use. Read dependency manifests (package.json, requirements.txt, pyproject.toml, pom.xml, build.gradle, Gemfile, go.mod, Cargo.toml, etc.), browse the directory structure, and look at file types present.
 
@@ -41,33 +74,23 @@ Based on what you find, determine:
 
 Use your judgment. Do not rely on a fixed lookup table — understand the project and decide what applies.
 
-## Step 3: Confirm with the User
+## Step 4: Confirm with the User
 
 **Always ask the user to confirm before writing the config.** Present your proposed configuration and ask for approval. Do not write `.vcp.json` until the user explicitly confirms.
 
 Show the user:
 
-1. **Scopes** — which scopes you detected and why. Let the user add, remove, or change them.
-2. **Frameworks** — which frameworks you found. Let the user correct the list.
-3. **Compliance** — ask if the project needs to comply with regulatory frameworks (GDPR, PCI DSS, HIPAA). Do not assume any are needed.
-4. **Exclude patterns** — suggest reasonable defaults for the detected ecosystem. Let the user add or remove patterns.
-5. **Severity threshold** — ask what minimum severity to report (critical, high, medium, low). Explain that the default `"medium"` reports medium, high, and critical findings.
+1. **Standards URL** — Show the URL from global config: "Using standards from: `{url}`". If the user wants a different URL for this specific project, they can override it (rare).
+2. **Plugin root** — Show the path from global config: "Plugin path: `{pluginRoot}`"
+3. **Scopes** — which scopes you detected and why. Let the user add, remove, or change them. If global config has `defaults.scopes`, use those as the starting point and merge with detected scopes.
+4. **Frameworks** — which frameworks you found. Let the user correct the list.
+5. **Compliance** — ask if the project needs to comply with regulatory frameworks (GDPR, PCI DSS, HIPAA). Do not assume any are needed.
+6. **Exclude patterns** — suggest reasonable defaults for the detected ecosystem. Let the user add or remove patterns.
+7. **Severity threshold** — ask what minimum severity to report (critical, high, medium, low). If global config has `defaults.severity`, propose that as the default. Explain that the default `"medium"` reports medium, high, and critical findings.
 
 Note: The config also supports an `ignore` array to suppress specific standards, rules, or CWE patterns. Most projects start with nothing ignored, so don't prompt for it during init — the user can add entries later.
 
-Wait for the user to confirm or adjust before proceeding to Step 4.
-
-## Step 4: Discover VCP Plugin Path
-
-Before writing the config, locate the VCP plugin installation directory. This path is needed so other VCP skills can call shared TypeScript modules.
-
-Use Glob to search for the VCP plugin's marker file:
-1. Search `~/.claude/` with pattern `**/vcp/lib/vcp-context-core.ts`
-2. If not found there, search the current project root with the same pattern
-
-From the found file path, derive the plugin root: the `vcp/` directory containing the `lib/` directory. For example, if the file is at `/home/user/.claude/plugins/vcp/lib/vcp-context-core.ts`, the plugin root is `/home/user/.claude/plugins/vcp`.
-
-If the file cannot be found at all, warn the user: "Could not locate VCP plugin directory. Some VCP skills may not work correctly." Still proceed with writing the config, but omit the `pluginRoot` field.
+Wait for the user to confirm or adjust before proceeding to Step 5.
 
 ## Step 5: Write `.vcp.json`
 
@@ -76,7 +99,7 @@ The config must conform to the JSON schema at:
 https://raw.githubusercontent.com/Z-M-Huang/vcp/main/schemas/vcp.schema.json
 ```
 
-Generate the config based on the user-confirmed answers and include the discovered `pluginRoot`. Write it to the project root:
+Generate the config based on the user-confirmed answers. Copy `pluginRoot` from the global config into the project config (so skills can find it). Do NOT copy `standards_url` unless the user explicitly wants a per-project override.
 
 ```json
 {
@@ -106,6 +129,7 @@ Show a summary:
 ```
 VCP initialized for this project.
 
+Standards:   VCP public (https://raw.githubusercontent.com/.../manifest.json)
 Scopes:      web-frontend, web-backend
 Compliance:  none
 Frameworks:  react, express, postgresql
@@ -113,6 +137,8 @@ Exclude:     node_modules/**, dist/**, build/**
 Severity:    medium+
 Plugin root: /home/user/.claude/plugins/vcp
 
-Config written to .vcp.json
+Global config: ~/.vcp/config.json
+Project config: .vcp.json
+
 Run /vcp-audit, /vcp-dependency-check, or /vcp-pre-commit-review to start.
 ```

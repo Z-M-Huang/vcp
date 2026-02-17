@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/schemas/vcp-scope-manifest.schema.json",
+  "title": "VCP Scope Manifest",
+  "description": "Per-scope manifest listing standards with full URLs, severity, and tags.",
+  "type": "object",
+  "required": ["scope", "standards"],
+  "properties": {
+    "scope": {
+      "type": "string",
+      "description": "The scope this manifest covers (e.g., 'core', 'web-frontend', 'compliance')."
+    },
+    "standards": {
+      "type": "array",
+      "description": "List of standards in this scope.",
+      "items": {
+        "type": "object",
+        "required": ["id", "url", "severity", "tags"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique standard identifier (e.g., 'core-security')."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://",
+            "description": "Full HTTPS URL to the standard's markdown file."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "Default severity level for this standard."
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Tags for filtering and categorization."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

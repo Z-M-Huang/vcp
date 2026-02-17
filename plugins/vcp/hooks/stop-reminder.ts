@@ -7,9 +7,12 @@
  * Requires: bun (cross-platform TypeScript runtime)
  */
 
+import { loadGlobalConfig } from "../lib/global-config";
 import { vcpLog } from "../lib/vcp-logger";
 
 const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const globalConfig = await loadGlobalConfig();
+const debug = globalConfig?.debug ?? false;
 
 const output = {
   systemMessage:
@@ -22,6 +25,6 @@ await vcpLog(projectRoot, {
   event: "Stop",
   decision: "info",
   details: "Reminder shown",
-});
+}, debug);
 
 process.exit(0);

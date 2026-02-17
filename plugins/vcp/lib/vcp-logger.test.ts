@@ -26,7 +26,7 @@ describe("vcpLog", () => {
         event: "TestEvent",
         decision: "info",
         details: "hello",
-      });
+      }, true);
       const content = await readFile(join(dir, ".vcp-log"), "utf-8");
       expect(content.length).toBeGreaterThan(0);
     });
@@ -39,13 +39,13 @@ describe("vcpLog", () => {
         event: "Event1",
         decision: "info",
         details: "first",
-      });
+      }, true);
       await vcpLog(dir, {
         source: "test",
         event: "Event2",
         decision: "warn",
         details: "second",
-      });
+      }, true);
       const content = await readFile(join(dir, ".vcp-log"), "utf-8");
       const lines = content.trim().split("\n");
       expect(lines).toHaveLength(2);
@@ -61,7 +61,7 @@ describe("vcpLog", () => {
         event: "PreToolUse",
         decision: "block",
         details: "CWE-798",
-      });
+      }, true);
       const content = await readFile(join(dir, ".vcp-log"), "utf-8");
       // Format: ISO_TIMESTAMP [event] source: decision — details
       expect(content).toMatch(
@@ -77,7 +77,7 @@ describe("vcpLog", () => {
       event: "TestEvent",
       decision: "info",
       details: "should not throw",
-    });
+    }, true);
     // If we reach here without throwing, the test passes
   });
 
@@ -87,7 +87,7 @@ describe("vcpLog", () => {
       source: "test",
       event: "TestEvent",
       decision: "info",
-    });
+    }, true);
     // If we reach here without throwing, the test passes
   });
 
@@ -96,7 +96,7 @@ describe("vcpLog", () => {
       source: "test",
       event: "TestEvent",
       decision: "info",
-    });
+    }, true);
     // If we reach here without throwing, the test passes
   });
 
@@ -106,10 +106,47 @@ describe("vcpLog", () => {
         source: "test",
         event: "TestEvent",
         decision: "allow",
-      });
+      }, true);
       const content = await readFile(join(dir, ".vcp-log"), "utf-8");
       expect(content).not.toContain(" — ");
       expect(content).toMatch(/allow\n$/);
+    });
+  });
+
+  test("skips logging when debug is false", async () => {
+    await withTmpDir(async (dir) => {
+      await vcpLog(dir, {
+        source: "test",
+        event: "TestEvent",
+        decision: "info",
+        details: "should not appear",
+      }, false);
+      const { access } = await import("fs/promises");
+      let exists = true;
+      try {
+        await access(join(dir, ".vcp-log"));
+      } catch {
+        exists = false;
+      }
+      expect(exists).toBe(false);
+    });
+  });
+
+  test("skips logging when debug is omitted (defaults to false)", async () => {
+    await withTmpDir(async (dir) => {
+      await vcpLog(dir, {
+        source: "test",
+        event: "TestEvent",
+        decision: "info",
+      });
+      const { access } = await import("fs/promises");
+      let exists = true;
+      try {
+        await access(join(dir, ".vcp-log"));
+      } catch {
+        exists = false;
+      }
+      expect(exists).toBe(false);
     });
   });
 });

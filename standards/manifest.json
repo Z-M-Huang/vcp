@@ -1,18 +1,17 @@
 {
   "version": "2.0",
   "repository": "https://github.com/Z-M-Huang/vcp",
-  "standards_base_url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/",
   "scopes": {
-    "core": { "manifest": "scopes/core.json", "applies": "always" },
-    "web-frontend": { "manifest": "scopes/web-frontend.json", "applies": "web-frontend" },
-    "web-backend": { "manifest": "scopes/web-backend.json", "applies": "web-backend" },
-    "database": { "manifest": "scopes/database.json", "applies": "database" },
-    "mobile": { "manifest": "scopes/mobile.json", "applies": "mobile" },
-    "desktop": { "manifest": "scopes/desktop.json", "applies": "desktop" },
-    "cli": { "manifest": "scopes/cli.json", "applies": "cli" },
-    "devops": { "manifest": "scopes/devops.json", "applies": "devops" },
-    "compliance-gdpr": { "manifest": "scopes/compliance-gdpr.json", "applies": "compliance:gdpr" },
-    "compliance-pci-dss": { "manifest": "scopes/compliance-pci-dss.json", "applies": "compliance:pci-dss" },
-    "compliance-hipaa": { "manifest": "scopes/compliance-hipaa.json", "applies": "compliance:hipaa" }
+    "core": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/core.json", "applies": "always" },
+    "web-frontend": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/web-frontend.json", "applies": "web-frontend" },
+    "web-backend": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/web-backend.json", "applies": "web-backend" },
+    "database": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/database.json", "applies": "database" },
+    "mobile": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/mobile.json", "applies": "mobile" },
+    "desktop": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/desktop.json", "applies": "desktop" },
+    "cli": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/cli.json", "applies": "cli" },
+    "devops": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/devops.json", "applies": "devops" },
+    "compliance-gdpr": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/compliance-gdpr.json", "applies": "compliance:gdpr" },
+    "compliance-pci-dss": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/compliance-pci-dss.json", "applies": "compliance:pci-dss" },
+    "compliance-hipaa": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/compliance-hipaa.json", "applies": "compliance:hipaa" }
   }
 }

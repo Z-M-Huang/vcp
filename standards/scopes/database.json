@@ -1,7 +1,7 @@
 {
   "scope": "database",
   "standards": [
-    { "id": "database-encryption", "path": "database-encryption.md", "severity": "critical", "tags": ["database", "encryption", "tde", "column-encryption", "key-management", "pii"] },
-    { "id": "database-schema-security", "path": "database-schema-security.md", "severity": "high", "tags": ["database", "rls", "data-classification", "audit", "masking", "multi-tenant"] }
+    { "id": "database-encryption", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/database-encryption.md", "severity": "critical", "tags": ["database", "encryption", "tde", "column-encryption", "key-management", "pii"] },
+    { "id": "database-schema-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/database-schema-security.md", "severity": "high", "tags": ["database", "rls", "data-classification", "audit", "masking", "multi-tenant"] }
   ]
 }

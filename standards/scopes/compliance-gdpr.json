@@ -1,6 +1,6 @@
 {
   "scope": "compliance",
   "standards": [
-    { "id": "compliance-gdpr", "path": "compliance-gdpr.md", "severity": "critical", "tags": ["compliance", "gdpr", "ccpa", "cpra", "pii", "data-protection", "right-to-be-forgotten", "data-deletion"] }
+    { "id": "compliance-gdpr", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/compliance-gdpr.md", "severity": "critical", "tags": ["compliance", "gdpr", "ccpa", "cpra", "pii", "data-protection", "right-to-be-forgotten", "data-deletion"] }
   ]
 }

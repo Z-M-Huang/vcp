@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/schemas/vcp-global.schema.json",
+  "title": "VCP Global Configuration",
+  "description": "Machine-wide VCP settings at ~/.vcp/config.json. Created by /vcp-init.",
+  "type": "object",
+  "required": ["standards_url", "pluginRoot"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "standards_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL to a VCP-compatible standards manifest.json."
+    },
+    "pluginRoot": {
+      "type": "string",
+      "description": "Absolute path to the VCP plugin directory."
+    },
+    "debug": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable diagnostic logging to .vcp-log in the project root. Defaults to false."
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low"]
+        },
+        "scopes": {
+          "type": "object",
+          "properties": {
+            "web-frontend": { "type": "boolean" },
+            "web-backend": { "type": "boolean" },
+            "database": { "type": "boolean" },
+            "mobile": { "type": "boolean" },
+            "desktop": { "type": "boolean" },
+            "cli": { "type": "boolean" },
+            "devops": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "compliance": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["gdpr", "pci-dss", "hipaa"]
+          },
+          "uniqueItems": true
+        },
+        "ignore": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(CWE-\\d+|[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*(\/rule-\\d+)?)$"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

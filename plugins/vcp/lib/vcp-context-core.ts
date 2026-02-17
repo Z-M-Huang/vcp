@@ -12,6 +12,13 @@
  * Requires: bun (cross-platform TypeScript runtime)
  */
 
+import {
+  loadGlobalConfig,
+  validateStandardsUrl,
+  resolveStandardsUrl,
+  applyGlobalDefaults,
+} from "./global-config";
+
 // --- Types ---
 
 export interface VcpConfig {
@@ -23,6 +30,7 @@ export interface VcpConfig {
   exclude?: string[];
   severity?: string;
   pluginRoot?: string;
+  standards_url?: string;
 }
 
 export interface ParsedIgnores {
@@ -33,7 +41,7 @@ export interface ParsedIgnores {
 
 export interface StandardEntry {
   id: string;
-  path: string;
+  url: string;
   scope: string;
   severity: string;
   tags: string[];
@@ -43,7 +51,6 @@ export interface StandardEntry {
 export interface Manifest {
   version: string;
   repository: string;
-  standards_base_url: string;
   scopes: string[];
   standards: StandardEntry[];
 }
@@ -53,7 +60,6 @@ export interface Manifest {
 export interface ManifestV2Root {
   version: string;
   repository: string;
-  standards_base_url: string;
   scopes: Record<string, { manifest: string; applies: string }>;
 }
 
@@ -61,7 +67,7 @@ export interface ScopeManifestFile {
   scope: string;
   standards: {
     id: string;
-    path: string;
+    url: string;
     severity: string;
     tags: string[];
   }[];
@@ -79,11 +85,8 @@ export interface ScopedRules {
 
 // --- Constants ---
 
-const MANIFEST_URL =
-  "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/manifest.json";
-
 export const FALLBACK_MESSAGE =
-  "VCP active. Run /vcp-audit, /vcp-pre-commit-review before committing.";
+  "VCP active but not fully initialized. Run /vcp-init to configure, then /vcp-audit before committing.";
 
 const SEVERITY_ORDER: Record<string, number> = {
   critical: 0,
@@ -152,7 +155,7 @@ export function flattenV2Manifest(
     for (const std of entry.sm.standards) {
       standards.push({
         id: std.id,
-        path: std.path,
+        url: std.url,
         scope: entry.sm.scope,
         severity: std.severity,
         tags: std.tags,
@@ -164,35 +167,48 @@ export function flattenV2Manifest(
   return {
     version: v2.version,
     repository: v2.repository,
-    standards_base_url: v2.standards_base_url,
     scopes: scopeNames,
     standards,
   };
 }
 
-export async function fetchManifest(): Promise<Manifest> {
-  const response = await fetch(MANIFEST_URL);
+export async function fetchManifest(url: string): Promise<Manifest> {
+  const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch manifest: ${response.status}`);
   }
   const raw = await response.json();
 
-  // V1: already in the right shape
+  // V1 backward compat: construct full URLs from standards_base_url + path
   if (raw.version === "1.0") {
-    return raw as Manifest;
+    const v1 = raw as any;
+    return {
+      version: v1.version,
+      repository: v1.repository,
+      scopes: v1.scopes,
+      standards: v1.standards.map((s: any) => ({
+        ...s,
+        url: `${v1.standards_base_url}${s.path}`,
+      })),
+    };
   }
 
-  // V2: fetch scope manifests and flatten to same Manifest shape
+  // V2: scope manifest URLs are already full URLs — validate each before fetching
   const v2 = raw as ManifestV2Root;
-  const baseUrl = v2.standards_base_url;
   const scopeEntries = Object.entries(v2.scopes);
 
   const scopeManifests = await Promise.all(
-    scopeEntries.map(async ([scopeKey, { manifest: manifestPath, applies }]) => {
-      const res = await fetch(`${baseUrl}${manifestPath}`);
+    scopeEntries.map(async ([scopeKey, { manifest: manifestUrl, applies }]) => {
+      const urlError = validateStandardsUrl(manifestUrl);
+      if (urlError) {
+        throw new Error(
+          `Unsafe scope manifest URL for '${scopeKey}' (${manifestUrl}): ${urlError}`,
+        );
+      }
+      const res = await fetch(manifestUrl);
       if (!res.ok) {
         throw new Error(
-          `Failed to fetch scope manifest '${scopeKey}' (${baseUrl}${manifestPath}): ${res.status}`,
+          `Failed to fetch scope manifest '${scopeKey}' (${manifestUrl}): ${res.status}`,
         );
       }
       const sm: ScopeManifestFile = await res.json();
@@ -235,17 +251,34 @@ export function resolveApplicableStandards(
 
 export async function fetchStandards(
   entries: StandardEntry[],
-  baseUrl: string,
 ): Promise<Map<string, string>> {
   const results = new Map<string, string>();
+  const dropped: string[] = [];
   await Promise.all(
     entries.map(async (entry) => {
-      const response = await fetch(`${baseUrl}${entry.path}`);
-      if (response.ok) {
-        results.set(entry.id, await response.text());
+      // Validate each standard URL before fetching — manifest content is untrusted
+      const urlError = validateStandardsUrl(entry.url);
+      if (urlError) {
+        dropped.push(`${entry.id}: unsafe URL (${urlError})`);
+        return;
+      }
+      try {
+        const response = await fetch(entry.url);
+        if (!response.ok) {
+          dropped.push(`${entry.id}: HTTP ${response.status}`);
+        } else {
+          results.set(entry.id, await response.text());
+        }
+      } catch (err) {
+        dropped.push(`${entry.id}: ${err instanceof Error ? err.message : "fetch failed"}`);
       }
     }),
   );
+  if (dropped.length > 0) {
+    console.warn(
+      `[VCP] ${dropped.length} standard(s) dropped during fetch:\n  ${dropped.join("\n  ")}`,
+    );
+  }
   return results;
 }
 
@@ -375,15 +408,25 @@ export function formatContext(rules: ScopedRules): string {
 
 export async function generateContext(projectRoot: string): Promise<string> {
   try {
-    const [config, manifest] = await Promise.all([
+    const [rawConfig, globalConfig] = await Promise.all([
       loadConfig(projectRoot),
-      fetchManifest(),
+      loadGlobalConfig(),
     ]);
 
+    const standardsUrl = resolveStandardsUrl(globalConfig, rawConfig);
+    if (!standardsUrl) {
+      return "VCP active but not initialized. Run /vcp-init to configure.";
+    }
+
+    const config = rawConfig
+      ? applyGlobalDefaults(globalConfig, rawConfig)
+      : rawConfig;
+
+    const manifest = await fetchManifest(standardsUrl);
     const entries = resolveApplicableStandards(manifest, config);
     if (entries.length === 0) return FALLBACK_MESSAGE;
 
-    const standards = await fetchStandards(entries, manifest.standards_base_url);
+    const standards = await fetchStandards(entries);
     if (standards.size === 0) return FALLBACK_MESSAGE;
 
     const rules = extractRuleSummaries(standards, entries, config);

@@ -41,7 +41,9 @@ standards/
 └── README.md
 ```
 
-The root `manifest.json` (v2) maps scope names to scope manifest files. Each scope manifest lists the standards that belong to that scope. The `vcp-context-core.ts` module fetches scope manifests and flattens them into a unified list for downstream consumers.
+The root `manifest.json` (v2) maps scope names to scope manifest files via full HTTPS URLs. Each scope manifest lists the standards that belong to that scope, again with full HTTPS URLs to the standard markdown files. This allows organizations to host manifests and standards at different locations (different repos, internal servers, CDNs) — the system only requires that each URL is reachable and follows the schema.
+
+The `vcp-context-core.ts` module fetches scope manifests and flattens them into a unified list for downstream consumers. JSON schemas for both manifest formats are available at [`schemas/vcp-manifest.schema.json`](../schemas/vcp-manifest.schema.json) and [`schemas/vcp-scope-manifest.schema.json`](../schemas/vcp-scope-manifest.schema.json).
 
 ## Standard File Format Specification
 

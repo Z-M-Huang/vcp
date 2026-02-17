@@ -1,7 +1,7 @@
 {
   "scope": "mobile",
   "standards": [
-    { "id": "mobile-security", "path": "mobile-security.md", "severity": "critical", "tags": ["security", "mobile", "keychain", "keystore", "certificate-pinning", "deep-links", "biometrics", "owasp"] },
-    { "id": "mobile-platform-configuration", "path": "mobile-platform-configuration.md", "severity": "high", "tags": ["mobile", "ios", "android", "ats", "permissions", "webview", "configuration"] }
+    { "id": "mobile-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/mobile-security.md", "severity": "critical", "tags": ["security", "mobile", "keychain", "keystore", "certificate-pinning", "deep-links", "biometrics", "owasp"] },
+    { "id": "mobile-platform-configuration", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/mobile-platform-configuration.md", "severity": "high", "tags": ["mobile", "ios", "android", "ats", "permissions", "webview", "configuration"] }
   ]
 }

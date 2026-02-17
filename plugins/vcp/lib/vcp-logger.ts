@@ -11,7 +11,9 @@ interface LogEntry {
 export async function vcpLog(
   projectRoot: string,
   entry: LogEntry,
+  debug: boolean = false,
 ): Promise<void> {
+  if (!debug) return;
   if (!projectRoot || !isAbsolute(projectRoot)) return;
   try {
     const logFile = join(projectRoot, ".vcp-log");

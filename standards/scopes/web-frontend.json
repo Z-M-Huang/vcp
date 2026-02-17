@@ -1,9 +1,9 @@
 {
   "scope": "web-frontend",
   "standards": [
-    { "id": "web-frontend-security", "path": "web-frontend-security.md", "severity": "critical", "tags": ["security", "xss", "csp", "cors", "auth-tokens", "frontend", "owasp", "cwe"] },
-    { "id": "web-frontend-structure", "path": "web-frontend-structure.md", "severity": "high", "tags": ["frontend", "components", "state-management", "folder-structure", "react", "vue", "svelte"] },
-    { "id": "web-frontend-performance", "path": "web-frontend-performance.md", "severity": "medium", "tags": ["performance", "bundle-size", "lazy-loading", "code-splitting", "rendering", "assets"] },
-    { "id": "web-frontend-accessibility", "path": "web-frontend-accessibility.md", "severity": "high", "tags": ["accessibility", "wcag", "aria", "a11y", "keyboard", "screen-reader", "contrast"] }
+    { "id": "web-frontend-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/web-frontend-security.md", "severity": "critical", "tags": ["security", "xss", "csp", "cors", "auth-tokens", "frontend", "owasp", "cwe"] },
+    { "id": "web-frontend-structure", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/web-frontend-structure.md", "severity": "high", "tags": ["frontend", "components", "state-management", "folder-structure", "react", "vue", "svelte"] },
+    { "id": "web-frontend-performance", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/web-frontend-performance.md", "severity": "medium", "tags": ["performance", "bundle-size", "lazy-loading", "code-splitting", "rendering", "assets"] },
+    { "id": "web-frontend-accessibility", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/web-frontend-accessibility.md", "severity": "high", "tags": ["accessibility", "wcag", "aria", "a11y", "keyboard", "screen-reader", "contrast"] }
   ]
 }

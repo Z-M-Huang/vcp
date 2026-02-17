@@ -21,7 +21,7 @@ Generate a comprehensive test plan for a specific file or module.
    ```bash
    bun "<pluginRoot>/lib/resolve-config.ts" "<project-root>"
    ```
-5. Parse the JSON output. It contains: `standardsBaseUrl`, `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
+5. Parse the JSON output. It contains: `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
 
 ## Step 2: Fetch Applicable Standards
 
@@ -31,7 +31,7 @@ From the `applicableStandards` array in the resolved config, keep only entries w
 
 For each selected standard, use WebFetch to fetch its content from:
 ```
-{standardsBaseUrl}{entry.path}
+{entry.url}
 ```
 
 Extract the **Rules** section and the **Patterns** section from each fetched standard.

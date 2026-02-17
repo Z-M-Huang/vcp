@@ -21,7 +21,7 @@ Verify project dependencies against the VCP dependency management standard.
    ```bash
    bun "<pluginRoot>/lib/resolve-config.ts" "<project-root>"
    ```
-5. Parse the JSON output. It contains: `standardsBaseUrl`, `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
+5. Parse the JSON output. It contains: `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
 6. Also read `.vcp.json` `frameworks` field to determine which package ecosystem(s) to check. If no `frameworks` are listed, auto-detect by looking for manifest files (package.json, requirements.txt, pyproject.toml, pom.xml, build.gradle, Gemfile, go.mod, Cargo.toml).
 
 ## Step 2: Fetch Applicable Standard
@@ -32,7 +32,7 @@ If the standard is not in the list (it was ignored via config), tell the user: "
 
 Use WebFetch to fetch its content from:
 ```
-{standardsBaseUrl}{entry.path}
+{entry.url}
 ```
 
 Extract the **Rules** section.

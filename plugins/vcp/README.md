@@ -12,7 +12,7 @@ Vibe Coding Protocol plugin — project initialization, security enforcement, qu
 
 | Skill | Command | Description |
 |-------|---------|-------------|
-| vcp-init | `/vcp-init` | Initialize VCP configuration — detects frameworks, scopes, creates `.vcp.json`, discovers plugin path |
+| vcp-init | `/vcp-init` | Initialize VCP configuration — creates `~/.vcp/config.json` (global) and `.vcp.json` (project), detects frameworks, scopes, discovers plugin path |
 | vcp-context | `/vcp-context` | Inject VCP rule summaries into context — run after context compaction or at any time to refresh rules |
 | vcp-dependency-check | `/vcp-dependency-check` | Verify lockfile hygiene, version ranges, package existence, typosquatting |
 | vcp-pre-commit-review | `/vcp-pre-commit-review` | Review all staged/changed files against applicable standards. Produces PASS/BLOCK verdict |
@@ -41,20 +41,37 @@ Scanning skills call `resolve-config.ts` via Bash to resolve project config, and
 
 ## How It Works
 
+### Global Configuration
+
+VCP uses a global config at `~/.vcp/config.json` to store machine-level settings shared across all projects:
+
+- **`standards_url`** — URL to the standards manifest (default: VCP public repo; can point to internal GitHub Enterprise)
+- **`pluginRoot`** — Absolute path to the VCP plugin directory
+- **`debug`** — Enable diagnostic logging to `.vcp-log` in the project root (default: `false`)
+- **`defaults`** — Optional defaults: `severity` and `ignore` are applied at runtime; `scopes` and `compliance` are proposed as starting points during `/vcp-init` only
+
+Created by `/vcp-init` on first run. Subsequent project initializations reuse the existing global config. If the global config is missing when a skill runs (e.g., an existing user who hasn't run `/vcp-init` since the global config was introduced), it is auto-created from the project config and defaults. Hooks only read the global config — they never auto-create it (hooks run in untrusted repo context and must stay fast).
+
 ### Standards Discovery
 
-Skills call `resolve-config.ts` (via Bash) to resolve project config and applicable standards. The script fetches `standards/manifest.json` from the VCP repository and uses `standards_base_url` to retrieve individual standard documents. Skills always apply the latest published rules.
+Skills call `resolve-config.ts` (via Bash) to resolve project config and applicable standards. The script resolves the standards URL from global config (or per-project override), fetches the manifest, and resolves full URLs for each standard. Skills always apply the latest published rules.
+
+URL resolution order:
+1. `standards_url` in `.vcp.json` (rare per-project override)
+2. `standards_url` in `~/.vcp/config.json` (the normal case)
 
 ### Project Configuration
 
-Skills require `.vcp.json` in the project root with a `pluginRoot` field (set by `/vcp-init`). The config determines:
-- Which scopes apply (web-frontend, web-backend, database)
+Skills require `.vcp.json` (project) with a `pluginRoot` field (set by `/vcp-init`). Global config (`~/.vcp/config.json`) is auto-created if missing (from project config + defaults), so users don't need to run `/vcp-init` again after upgrading. The project config determines:
+- Which scopes apply (web-frontend, web-backend, database, mobile, desktop, cli, devops)
 - Which compliance frameworks are active (GDPR, PCI DSS, HIPAA)
 - What paths to exclude from scanning
 - The minimum severity threshold for reporting
 - Which standards or rules to ignore
 
-If `.vcp.json` is not found or `pluginRoot` is missing, skills stop and tell the user to run `/vcp-init`.
+At runtime, `severity` falls back to the global default when the project omits it, and `ignore` arrays are merged (union of global + project). `scopes` and `compliance` are required project fields — global defaults for these are only used as starting points during `/vcp-init`, not at runtime.
+
+If `.vcp.json` is not found, skills stop and tell the user to run `/vcp-init`.
 
 ### Security Gate Hook
 

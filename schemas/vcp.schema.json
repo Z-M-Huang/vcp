@@ -94,6 +94,11 @@
     "pluginRoot": {
       "type": "string",
       "description": "Absolute path to the VCP plugin directory. Set by /vcp-init so skills can locate shared TypeScript modules."
+    },
+    "standards_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Per-project override for the standards manifest URL. Overrides the global config."
     }
   },
   "additionalProperties": false

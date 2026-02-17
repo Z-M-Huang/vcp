@@ -1,6 +1,6 @@
 {
   "scope": "compliance",
   "standards": [
-    { "id": "compliance-pci-dss", "path": "compliance-pci-dss.md", "severity": "critical", "tags": ["compliance", "pci-dss", "cardholder-data", "tokenization", "payment"] }
+    { "id": "compliance-pci-dss", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/compliance-pci-dss.md", "severity": "critical", "tags": ["compliance", "pci-dss", "cardholder-data", "tokenization", "payment"] }
   ]
 }

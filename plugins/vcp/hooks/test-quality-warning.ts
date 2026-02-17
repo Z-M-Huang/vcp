@@ -11,9 +11,14 @@
  * Requires: bun (cross-platform TypeScript runtime)
  */
 
+import { loadGlobalConfig } from "../lib/global-config";
 import { vcpLog } from "../lib/vcp-logger";
 
-const input = await Bun.stdin.text();
+const [input, globalConfig] = await Promise.all([
+  Bun.stdin.text(),
+  loadGlobalConfig(),
+]);
+const debug = globalConfig?.debug ?? false;
 
 let toolName: string = "";
 let filePath: string = "";
@@ -182,14 +187,14 @@ if (warnings.length > 0) {
     event: "PostToolUse",
     decision: "warn",
     details: `${warnings.length} issue(s) in ${filePath}`,
-  });
+  }, debug);
 } else {
   await vcpLog(projectRoot, {
     source: "test-quality-warning",
     event: "PostToolUse",
     decision: "allow",
     details: "No issues",
-  });
+  }, debug);
 }
 
 process.exit(0);

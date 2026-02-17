@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/schemas/vcp-manifest.schema.json",
+  "title": "VCP Standards Manifest",
+  "description": "Root manifest for VCP standards. Points to per-scope manifests via full URLs.",
+  "type": "object",
+  "required": ["version", "scopes"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "2.0",
+      "description": "Manifest format version."
+    },
+    "repository": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL of the repository hosting these standards."
+    },
+    "scopes": {
+      "type": "object",
+      "description": "Map of scope keys to their manifest URLs and applicability rules.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["manifest", "applies"],
+        "properties": {
+          "manifest": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://",
+            "description": "Full HTTPS URL to the scope manifest JSON file."
+          },
+          "applies": {
+            "type": "string",
+            "description": "When this scope applies: 'always', a scope name, or 'compliance:<framework>'."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,6 +1,6 @@
 {
   "scope": "compliance",
   "standards": [
-    { "id": "compliance-hipaa", "path": "compliance-hipaa.md", "severity": "critical", "tags": ["compliance", "hipaa", "phi", "healthcare", "audit-logging", "encryption"] }
+    { "id": "compliance-hipaa", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/compliance-hipaa.md", "severity": "critical", "tags": ["compliance", "hipaa", "phi", "healthcare", "audit-logging", "encryption"] }
   ]
 }

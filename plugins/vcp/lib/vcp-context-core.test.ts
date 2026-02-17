@@ -28,16 +28,16 @@ import {
 
 // --- Test fixtures ---
 
+const BASE_URL = "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/";
+
 const BASE_MANIFEST: Manifest = {
   version: "1.0",
   repository: "https://github.com/Z-M-Huang/vcp",
-  standards_base_url:
-    "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/",
   scopes: ["core", "web-frontend", "web-backend", "database", "compliance"],
   standards: [
     {
       id: "core-security",
-      path: "core-security.md",
+      url: `${BASE_URL}core-security.md`,
       scope: "core",
       severity: "critical",
       tags: ["security"],
@@ -45,7 +45,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "core-architecture",
-      path: "core-architecture.md",
+      url: `${BASE_URL}core-architecture.md`,
       scope: "core",
       severity: "high",
       tags: ["architecture"],
@@ -53,7 +53,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "web-backend-security",
-      path: "web-backend-security.md",
+      url: `${BASE_URL}web-backend-security.md`,
       scope: "web-backend",
       severity: "critical",
       tags: ["security"],
@@ -61,7 +61,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "web-frontend-security",
-      path: "web-frontend-security.md",
+      url: `${BASE_URL}web-frontend-security.md`,
       scope: "web-frontend",
       severity: "critical",
       tags: ["security"],
@@ -69,7 +69,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "compliance-gdpr",
-      path: "compliance-gdpr.md",
+      url: `${BASE_URL}compliance-gdpr.md`,
       scope: "compliance",
       severity: "critical",
       tags: ["compliance", "gdpr"],
@@ -77,7 +77,7 @@ const BASE_MANIFEST: Manifest = {
     },
     {
       id: "database-encryption",
-      path: "database-encryption.md",
+      url: `${BASE_URL}database-encryption.md`,
       scope: "database",
       severity: "critical",
       tags: ["database", "encryption"],
@@ -314,7 +314,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core-security.md",
+        url: `${BASE_URL}core-security.md`,
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -341,7 +341,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core-security.md",
+        url: `${BASE_URL}core-security.md`,
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -349,7 +349,7 @@ describe("extractRuleSummaries", () => {
       },
       {
         id: "core-architecture",
-        path: "core-architecture.md",
+        url: `${BASE_URL}core-architecture.md`,
         scope: "core",
         severity: "high",
         tags: ["architecture"],
@@ -367,7 +367,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "test-standard",
-        path: "test.md",
+        url: `${BASE_URL}test.md`,
         scope: "core",
         severity: "medium",
         tags: ["test"],
@@ -383,7 +383,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "missing",
-        path: "missing.md",
+        url: `${BASE_URL}missing.md`,
         scope: "core",
         severity: "high",
         tags: [],
@@ -399,7 +399,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core-security.md",
+        url: `${BASE_URL}core-security.md`,
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -425,7 +425,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core-security.md",
+        url: `${BASE_URL}core-security.md`,
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -449,7 +449,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-architecture",
-        path: "core-architecture.md",
+        url: `${BASE_URL}core-architecture.md`,
         scope: "core",
         severity: "high",
         tags: ["architecture"],
@@ -472,7 +472,7 @@ describe("extractRuleSummaries", () => {
     const entries: StandardEntry[] = [
       {
         id: "core-security",
-        path: "core-security.md",
+        url: `${BASE_URL}core-security.md`,
         scope: "core",
         severity: "critical",
         tags: ["security"],
@@ -570,17 +570,15 @@ describe("flattenV2Manifest", () => {
   const V2_ROOT: ManifestV2Root = {
     version: "2.0",
     repository: "https://github.com/Z-M-Huang/vcp",
-    standards_base_url:
-      "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/",
     scopes: {
-      core: { manifest: "scopes/core.json", applies: "always" },
+      core: { manifest: `${BASE_URL}scopes/core.json`, applies: "always" },
       "web-backend": {
-        manifest: "scopes/web-backend.json",
+        manifest: `${BASE_URL}scopes/web-backend.json`,
         applies: "web-backend",
       },
-      mobile: { manifest: "scopes/mobile.json", applies: "mobile" },
+      mobile: { manifest: `${BASE_URL}scopes/mobile.json`, applies: "mobile" },
       "compliance-gdpr": {
-        manifest: "scopes/compliance-gdpr.json",
+        manifest: `${BASE_URL}scopes/compliance-gdpr.json`,
         applies: "compliance:gdpr",
       },
     },
@@ -591,13 +589,13 @@ describe("flattenV2Manifest", () => {
     standards: [
       {
         id: "core-security",
-        path: "core-security.md",
+        url: `${BASE_URL}core-security.md`,
         severity: "critical",
         tags: ["security"],
       },
       {
         id: "core-architecture",
-        path: "core-architecture.md",
+        url: `${BASE_URL}core-architecture.md`,
         severity: "high",
         tags: ["architecture"],
       },
@@ -609,7 +607,7 @@ describe("flattenV2Manifest", () => {
     standards: [
       {
         id: "web-backend-security",
-        path: "web-backend-security.md",
+        url: `${BASE_URL}web-backend-security.md`,
         severity: "critical",
         tags: ["security"],
       },
@@ -621,7 +619,7 @@ describe("flattenV2Manifest", () => {
     standards: [
       {
         id: "mobile-security",
-        path: "mobile-security.md",
+        url: `${BASE_URL}mobile-security.md`,
         severity: "critical",
         tags: ["security", "mobile"],
       },
@@ -633,7 +631,7 @@ describe("flattenV2Manifest", () => {
     standards: [
       {
         id: "compliance-gdpr",
-        path: "compliance-gdpr.md",
+        url: `${BASE_URL}compliance-gdpr.md`,
         severity: "critical",
         tags: ["compliance", "gdpr"],
       },
@@ -681,7 +679,7 @@ describe("flattenV2Manifest", () => {
 
     const entry = result.standards[0];
     expect(entry.id).toBe("mobile-security");
-    expect(entry.path).toBe("mobile-security.md");
+    expect(entry.url).toBe(`${BASE_URL}mobile-security.md`);
     expect(entry.scope).toBe("mobile");
     expect(entry.severity).toBe("critical");
     expect(entry.tags).toEqual(["security", "mobile"]);
@@ -748,10 +746,11 @@ describe("integration: security-context.ts", () => {
       const stdout = await new Response(proc.stdout).text();
 
       expect(exitCode).toBe(0);
-      // Should output either formatted context or fallback message
+      // Should output formatted context, fallback, or init prompt
       expect(
         stdout.includes("VCP Standards Context") ||
-          stdout.includes("VCP active"),
+          stdout.includes("VCP active") ||
+          stdout.includes("/vcp-init"),
       ).toBe(true);
     });
   }, 20000);

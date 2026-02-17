@@ -3,6 +3,7 @@ name: vcp-config
 description: >
   View and modify VCP configuration. Add or remove ignore entries, toggle scopes,
   manage compliance frameworks, change severity threshold, and manage exclude patterns.
+  Supports both project config (.vcp.json) and global config (~/.vcp/config.json).
 user-invocable: true
 allowed-tools: Read, Write, WebFetch, AskUserQuestion
 argument-hint: "<natural language command>"
@@ -10,9 +11,11 @@ argument-hint: "<natural language command>"
 
 # VCP Config
 
-View and modify `.vcp.json` configuration via natural language commands.
+View and modify `.vcp.json` (project) or `~/.vcp/config.json` (global) configuration via natural language commands.
 
 ## Examples
+
+### Project Config (default)
 
 ```
 /vcp-config show me the current config
@@ -30,19 +33,43 @@ View and modify `.vcp.json` configuration via natural language commands.
 /vcp-config what standards are available
 ```
 
+### Global Config
+
+```
+/vcp-config global show
+/vcp-config global set standards_url <url>
+/vcp-config global set debug true
+/vcp-config global set debug false
+/vcp-config global set default severity <level>
+/vcp-config global set default scopes web-backend,database
+/vcp-config global set default compliance gdpr,hipaa
+/vcp-config global add default ignore <entry>
+/vcp-config global remove default ignore <entry>
+/vcp-config global reset
+```
+
 ## Step 1: Load Config
 
-1. Read `.vcp.json` from the project root.
-2. If it does not exist, stop and tell the user: "No VCP configuration found. Run `/vcp-init` to set up VCP for this project."
+1. If `$ARGUMENTS` starts with "global" → operate on `~/.vcp/config.json`:
+   - Read `~/.vcp/config.json`. If it does not exist, stop and tell the user: "No global VCP config found. Run `/vcp-init` to create it."
+   - Strip "global" from the arguments and proceed to Step 2 with the global config.
+
+2. Otherwise → operate on `.vcp.json` (project config):
+   - Read `.vcp.json` from the project root.
+   - If it does not exist, stop and tell the user: "No VCP configuration found. Run `/vcp-init` to set up VCP for this project."
+   - Also read `~/.vcp/config.json` (global config) for context — used by the `show` command to display the `Source` column.
+
 3. Parse the JSON. This is the working config for all subsequent steps.
 
 ## Step 2: Parse Intent
 
 Interpret `$ARGUMENTS` as a natural language command. Determine the **action** and **target**:
 
+### Project Config Actions
+
 | Action | Target | Description |
 |--------|--------|-------------|
-| **show** | config | Display current config (default if no arguments) |
+| **show** | config | Display current config with source annotations (default if no arguments) |
 | **show** | standards | List available standards from the manifest |
 | **add-ignore** | standard, rule, or CWE | Add entry to the `ignore` array |
 | **remove-ignore** | standard, rule, or CWE | Remove entry from the `ignore` array |
@@ -53,6 +80,20 @@ Interpret `$ARGUMENTS` as a natural language command. Determine the **action** a
 | **set-severity** | severity level | Set the `severity` field |
 | **add-exclude** | glob pattern | Add to the `exclude` array |
 | **remove-exclude** | glob pattern | Remove from the `exclude` array |
+
+### Global Config Actions
+
+| Action | Target | Description |
+|--------|--------|-------------|
+| **show** | global config | Display global config |
+| **set standards_url** | URL | Change the standards manifest URL (must start with `https://`) |
+| **set debug** | true/false | Enable or disable diagnostic logging to `.vcp-log` in the project root |
+| **set default severity** | level | Set `defaults.severity` |
+| **set default scopes** | scope list | Set `defaults.scopes` |
+| **set default compliance** | framework list | Set `defaults.compliance` |
+| **add default ignore** | entry | Add entry to `defaults.ignore` |
+| **remove default ignore** | entry | Remove entry from `defaults.ignore` |
+| **reset** | entire global config | Delete `~/.vcp/config.json` after explicit confirmation |
 
 If the intent is ambiguous, use AskUserQuestion to clarify. Do not guess.
 
@@ -71,12 +112,9 @@ Normalize the entry to the correct format:
 
 The entry must match the regex: `^(CWE-\d+|[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*(\/rule-\d+)?)$`
 
-**Validate against the manifest:** Use WebFetch to fetch the root standards manifest from:
-```
-https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/manifest.json
-```
+**Validate against the manifest:** Read `~/.vcp/config.json` to get `standards_url`. If the file doesn't exist, fall back to the default VCP manifest URL: `https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/manifest.json`. Use WebFetch to fetch the root standards manifest from that URL.
 
-The manifest is v2 format — `scopes` is an object where each key maps to `{ "manifest": "scopes/<name>.json", "applies": "<scope>" }`. To get the list of standard IDs, fetch each scope manifest from `https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/<name>.json` — each contains a `standards` array with `id` fields.
+The manifest is v2 format — `scopes` is an object where each key maps to `{ "manifest": "<full-url>", "applies": "<scope>" }`. To get the list of standard IDs, fetch each scope manifest from the full URL in the `manifest` field — each contains a `standards` array with `id` and `url` fields.
 
 - For standard IDs: check that the `id` exists in any scope manifest's `standards` array. If not found, warn the user: "Standard '[id]' not found in the manifest. Available standards: [list ids]." Use AskUserQuestion to confirm whether to add it anyway.
 - For rule references: check that the standard part exists. The rule number cannot be validated against the manifest (rules are in the standard content), so accept it if the standard exists.
@@ -98,6 +136,10 @@ Valid values: `critical`, `high`, `medium`, `low`. Reject anything else.
 
 Must be a non-empty string. No further validation needed.
 
+### standards_url (global config)
+
+Must start with `https://`. No further validation needed.
+
 ### Duplicates
 
 Before adding, check if the entry already exists in the target array. If it does, tell the user: "'{entry}' is already in the [field] list." and stop.
@@ -118,31 +160,58 @@ Display the warning:
 
 For non-security changes (scopes, severity, exclude, non-security ignores), proceed without extra confirmation.
 
+For global config `reset`, always ask for explicit confirmation: "This will delete `~/.vcp/config.json`. All projects will need to re-run `/vcp-init`. Are you sure?"
+
 ## Step 5: Apply Change
 
-Read the current `.vcp.json`, apply the change to the parsed object, and write it back using the Write tool.
+Read the current config file, apply the change to the parsed object, and write it back using the Write tool.
 
 Preserve all existing fields. Only modify the targeted field. Maintain JSON formatting with 2-space indentation.
 
-### Show Config
+### Show Config (project)
 
-Display the current config in a formatted table:
+Display the current project config in a formatted table with a `Source` column showing where each value comes from:
 
 ```
 ### VCP Configuration
 
-| Field | Value |
-|-------|-------|
-| **Scopes** | web-frontend, web-backend |
-| **Compliance** | gdpr |
-| **Frameworks** | react, express, postgresql |
-| **Severity** | medium |
-| **Exclude** | node_modules/**, dist/**, build/** |
-| **Ignore** | core-architecture/rule-5 |
-| **Plugin root** | /home/user/.claude/plugins/vcp |
+| Field | Value | Source |
+|-------|-------|--------|
+| **Standards URL** | https://raw.githubusercontent.com/.../manifest.json | global |
+| **Plugin root** | /home/user/.claude/plugins/vcp | global |
+| **Debug** | false | global |
+| **Scopes** | web-frontend, web-backend | project |
+| **Compliance** | gdpr | project |
+| **Frameworks** | react, express, postgresql | project |
+| **Severity** | high | global default |
+| **Exclude** | node_modules/**, dist/**, build/** | project |
+| **Ignore** | CWE-798 (global), core-arch/rule-5 (project) | merged |
 ```
 
+**Source values:**
+- `project` — value comes from `.vcp.json`
+- `global` — value comes from `~/.vcp/config.json`
+- `global default` — value inherited from `~/.vcp/config.json` `defaults` (project doesn't set it)
+- `merged` — ignore list is a union of global defaults and project values
+
 If `ignore` is empty, show "none". Same for `compliance`.
+
+### Show Config (global)
+
+Display the global config:
+
+```
+### VCP Global Configuration
+
+| Field | Value |
+|-------|-------|
+| **Standards URL** | https://raw.githubusercontent.com/.../manifest.json |
+| **Plugin root** | /home/user/.claude/plugins/vcp |
+| **Default severity** | medium |
+| **Default scopes** | web-backend, database |
+| **Default compliance** | none |
+| **Default ignore** | CWE-798 |
+```
 
 ### Show Standards
 
@@ -180,4 +249,10 @@ After applying any mutation:
    ```
    Updated .vcp.json — added "CWE-798" to ignore list.
    WARNING: Hardcoded secret detection (CWE-798) is now suppressed in the security gate.
+   ```
+
+4. For global config changes, mention the scope of impact:
+   ```
+   Updated ~/.vcp/config.json — set standards_url to "https://github.example.com/.../manifest.json".
+   All projects on this machine will use this URL (unless overridden per-project).
    ```

@@ -27,7 +27,7 @@ Comprehensive codebase audit against VCP standards. Uses team mode to paralleliz
    ```bash
    bun "<pluginRoot>/lib/resolve-config.ts" "<project-root>"
    ```
-5. Parse the JSON output. It contains: `standardsBaseUrl`, `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
+5. Parse the JSON output. It contains: `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
 
 ## Step 2: Fetch Applicable Standards
 
@@ -62,7 +62,7 @@ If the mapped compliance standard is not in `applicableStandards`, stop and tell
 
 For each selected standard, use WebFetch to fetch its content from:
 ```
-{standardsBaseUrl}{entry.path}
+{entry.url}
 ```
 
 Extract the **Rules** section from each fetched standard.

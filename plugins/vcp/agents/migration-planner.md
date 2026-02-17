@@ -19,7 +19,7 @@ You are a codebase migration planner. Your job is to audit a codebase against al
    ```bash
    bun "<pluginRoot>/lib/resolve-config.ts" "<project-root>"
    ```
-5. Parse the JSON output. It contains: `standardsBaseUrl`, `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
+5. Parse the JSON output. It contains: `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
 
 ## Step 2: Fetch All Applicable Standards
 
@@ -27,7 +27,7 @@ You are a codebase migration planner. Your job is to audit a codebase against al
 
 For each standard, use WebFetch to fetch its content from:
 ```
-{standardsBaseUrl}{entry.path}
+{entry.url}
 ```
 
 Extract the **Rules** section from each fetched standard.

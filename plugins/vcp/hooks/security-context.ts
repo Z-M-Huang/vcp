@@ -8,10 +8,15 @@
  */
 
 import { generateContext } from "../lib/vcp-context-core";
+import { loadGlobalConfig } from "../lib/global-config";
 import { vcpLog } from "../lib/vcp-logger";
 
 const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const output = await generateContext(projectRoot);
+const [output, globalConfig] = await Promise.all([
+  generateContext(projectRoot),
+  loadGlobalConfig(),
+]);
+const debug = globalConfig?.debug ?? false;
 if (output) console.log(output);
 
 await vcpLog(projectRoot, {
@@ -19,6 +24,6 @@ await vcpLog(projectRoot, {
   event: "SessionStart",
   decision: "info",
   details: `Generated context (${output?.length ?? 0} chars)`,
-});
+}, debug);
 
 process.exit(0);

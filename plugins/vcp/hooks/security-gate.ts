@@ -18,8 +18,13 @@
  */
 
 import { vcpLog } from "../lib/vcp-logger";
+import { loadGlobalConfig, mergeIgnoreArrays } from "../lib/global-config";
 
-const input = await Bun.stdin.text();
+const [input, globalConfig] = await Promise.all([
+  Bun.stdin.text(),
+  loadGlobalConfig(),
+]);
+const debug = globalConfig?.debug ?? false;
 
 // Extract the content to check based on tool type
 let content: string;
@@ -45,7 +50,7 @@ try {
     event: "PreToolUse",
     decision: "block",
     details: "Could not parse input",
-  });
+  }, debug);
   process.exit(2);
 }
 
@@ -57,11 +62,11 @@ if (!content) {
     event: "PreToolUse",
     decision: "allow",
     details: "Empty content",
-  });
+  }, debug);
   process.exit(0);
 }
 
-// Load .vcp.json ignore list for CWE suppression (only checks project root, never walks above it)
+// Load .vcp.json and global config ignore lists for CWE suppression
 let vcpConfig: any = null;
 if (projectRoot) {
   try {
@@ -70,8 +75,11 @@ if (projectRoot) {
     // No config found — proceed with empty ignore set
   }
 }
-const ignoreList: string[] = vcpConfig?.ignore ?? [];
-const ignoredCWEs = new Set(ignoreList.filter((id: string) => /^CWE-\d+$/.test(id)));
+const mergedIgnore = mergeIgnoreArrays(
+  globalConfig?.defaults?.ignore ?? [],
+  vcpConfig?.ignore ?? [],
+);
+const ignoredCWEs = new Set(mergedIgnore.filter((id: string) => /^CWE-\d+$/.test(id)));
 
 interface Finding {
   cwe: string;
@@ -211,7 +219,7 @@ if (suppressed > 0) {
     event: "PreToolUse",
     decision: "warn",
     details: `Suppressed ${suppressed} finding(s) (${suppressedCWEs})`,
-  });
+  }, debug);
 }
 
 if (filtered.length > 0) {
@@ -223,7 +231,7 @@ if (filtered.length > 0) {
     event: "PreToolUse",
     decision: "block",
     details: blockedCWEs,
-  });
+  }, debug);
   process.exit(2);
 }
 
@@ -232,5 +240,5 @@ await vcpLog(projectRoot, {
   event: "PreToolUse",
   decision: "allow",
   details: "No findings",
-});
+}, debug);
 process.exit(0);

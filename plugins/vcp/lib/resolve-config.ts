@@ -1,9 +1,9 @@
 /**
  * VCP Config Resolution — CLI entrypoint for skills.
  *
- * Reads .vcp.json, fetches the standards manifest, resolves applicable
- * standards (with ignores applied), and outputs structured JSON for
- * skills to consume.
+ * Reads .vcp.json and ~/.vcp/config.json, fetches the standards manifest,
+ * resolves applicable standards (with ignores applied), and outputs
+ * structured JSON for skills to consume.
  *
  * Usage: bun resolve-config.ts [project-root]
  *
@@ -20,34 +20,63 @@ import {
   parseIgnoreList,
 } from "./vcp-context-core";
 
+import {
+  loadGlobalConfig,
+  ensureGlobalConfig,
+  resolveStandardsUrl,
+  applyGlobalDefaults,
+  mergeIgnoreArrays,
+} from "./global-config";
+
 const projectRoot = process.argv[2] || process.cwd();
 
-const config = await loadConfig(projectRoot);
-if (!config) {
+const [rawConfig, initialGlobalConfig] = await Promise.all([
+  loadConfig(projectRoot),
+  loadGlobalConfig(),
+]);
+
+if (!rawConfig) {
   console.error(
-    "No .vcp.json found. Run /vcp-init to configure VCP for this project.",
+    "No .vcp.json found in this project. Run /vcp-init to configure VCP for this project.",
+  );
+  process.exit(1);
+}
+
+// Auto-create global config if missing but project config exists
+const globalConfig = initialGlobalConfig ?? await ensureGlobalConfig(rawConfig);
+
+const config = applyGlobalDefaults(globalConfig, rawConfig);
+const standardsUrl = resolveStandardsUrl(globalConfig, rawConfig);
+
+if (!standardsUrl) {
+  console.error(
+    "No standards URL available. Set standards_url in ~/.vcp/config.json (run /vcp-init) or .vcp.json.",
   );
   process.exit(1);
 }
 
 let manifest;
 try {
-  manifest = await fetchManifest();
+  manifest = await fetchManifest(standardsUrl);
 } catch (err) {
   console.error(
-    `Failed to fetch VCP standards manifest: ${err instanceof Error ? err.message : err}`,
+    `Failed to fetch VCP standards manifest from ${standardsUrl}: ${err instanceof Error ? err.message : err}`,
   );
   process.exit(1);
 }
 
 const applicableStandards = resolveApplicableStandards(manifest, config);
-const ignores = parseIgnoreList(config.ignore ?? []);
+const mergedIgnore = mergeIgnoreArrays(
+  globalConfig?.defaults?.ignore ?? [],
+  config.ignore ?? [],
+);
+const ignores = parseIgnoreList(mergedIgnore);
 
 const output = {
-  standardsBaseUrl: manifest.standards_base_url,
+  standardsUrl,
   applicableStandards: applicableStandards.map((s) => ({
     id: s.id,
-    path: s.path,
+    url: s.url,
     scope: s.scope,
     severity: s.severity,
     tags: s.tags,

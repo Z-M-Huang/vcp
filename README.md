@@ -129,7 +129,7 @@ If a control doesn't affect what code gets written, it's not a VCP standard.
 ```
 vcp/
 ├── standards/           # AI-optimized principled standards (30 standards, 9 scopes)
-│   ├── manifest.json    # Root v2 manifest — indexes scope manifests
+│   ├── manifest.json    # Root v2 manifest — indexes scope manifests via full URLs
 │   ├── scopes/          # Per-scope manifest files (core, web-*, mobile, desktop, cli, devops, compliance-*)
 │   ├── core-*.md        # Universal: security, architecture, testing, etc.
 │   ├── web-frontend-*.md # Browser-side: XSS, accessibility, performance
@@ -140,6 +140,11 @@ vcp/
 │   ├── cli-*.md         # CLI: shell injection, argument injection, exit codes
 │   ├── devops-*.md      # DevOps: containers, CI/CD, IaC, Kubernetes
 │   └── compliance-*.md  # Regulatory: GDPR, PCI DSS, HIPAA
+├── schemas/             # JSON schemas for config and manifest validation
+│   ├── vcp.schema.json            # Project config schema (.vcp.json)
+│   ├── vcp-global.schema.json     # Global config schema (~/.vcp/config.json)
+│   ├── vcp-manifest.schema.json   # Root manifest schema (v2)
+│   └── vcp-scope-manifest.schema.json # Scope manifest schema
 ├── plugins/             # Claude Code plugins
 │   └── vcp/             # All VCP skills, hooks, and agents
 └── .claude-plugin/      # Marketplace manifest
@@ -190,7 +195,7 @@ See [`standards/README.md`](standards/README.md) for the format specification an
 
 ### Up Next
 
-- [ ] [Custom Rule Repositories](https://github.com/Z-M-Huang/vcp/issues/46) — Allow organizations to add their own VCP-compatible standards
+- [x] [Custom Rule Repositories](https://github.com/Z-M-Huang/vcp/issues/46) — Allow organizations to add their own VCP-compatible standards
 - [ ] [Conformance Model](https://github.com/Z-M-Huang/vcp/issues/25) — MUST/SHOULD/MAY with objective pass/fail criteria
 - [ ] [Agentic AI Security](https://github.com/Z-M-Huang/vcp/issues/26) — Prompt injection, tool boundaries, and human approval gates
 - [ ] [Issue Triage Pipeline](https://github.com/Z-M-Huang/vcp/issues/18) — Auto-label and deduplicate community issues
@@ -207,7 +212,7 @@ See [`standards/README.md`](standards/README.md) for the format specification an
 ### Install
 
 1. **Add the plugin** — `claude plugin add vcp` (marketplace, when published) or add the plugin source directly
-2. **Initialize your project** — Run `/vcp-init` to detect your frameworks and create `.vcp.json`
+2. **Initialize your project** — Run `/vcp-init` to create `~/.vcp/config.json` (global, first time only) and `.vcp.json` (per project). This detects your frameworks, asks about scopes and compliance, and configures the standards URL. If the global config is missing when a skill runs, it is auto-created from the project config.
 
 ### What happens
 
@@ -218,16 +223,19 @@ See [`standards/README.md`](standards/README.md) for the format specification an
 
 ### Customize
 
-`.vcp.json` controls which scopes (web-frontend, web-backend, database, mobile, desktop, cli, devops), compliance frameworks (GDPR, PCI DSS, HIPAA), and severity thresholds apply to your project. Use `/vcp-config` to manage your configuration via natural language:
+VCP uses two config files: `~/.vcp/config.json` (global — standards URL, plugin path, defaults) and `.vcp.json` (project — scopes, compliance, severity, frameworks, exclude, ignore). Use `/vcp-config` to manage either via natural language:
 
 ```
 /vcp-config ignore core-architecture
 /vcp-config enable database scope
 /vcp-config add gdpr compliance
 /vcp-config set severity to high
+/vcp-config global show
+/vcp-config global set standards_url https://github.example.com/.../manifest.json
+/vcp-config global set default severity high
 ```
 
-Or edit `.vcp.json` directly — use the `ignore` field to suppress specific standards (`"core-architecture"`), individual rules (`"core-security/rule-3"`), or CWE patterns (`"CWE-798"`) that don't apply.
+Or edit the config files directly — use the `ignore` field to suppress specific standards (`"core-architecture"`), individual rules (`"core-security/rule-3"`), or CWE patterns (`"CWE-798"`) that don't apply. Organizations can point `standards_url` to their own VCP-compatible standards manifest — the manifest uses full HTTPS URLs for all references, so standards can be hosted anywhere (different repos, internal servers, CDNs). See [`schemas/vcp-manifest.schema.json`](schemas/vcp-manifest.schema.json) and [`schemas/vcp-scope-manifest.schema.json`](schemas/vcp-scope-manifest.schema.json) for the manifest contract.
 
 ---
 

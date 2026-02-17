@@ -1,6 +1,6 @@
 {
   "scope": "desktop",
   "standards": [
-    { "id": "desktop-security", "path": "desktop-security.md", "severity": "critical", "tags": ["security", "electron", "tauri", "context-isolation", "ipc", "csp", "desktop", "owasp", "cwe"] }
+    { "id": "desktop-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/desktop-security.md", "severity": "critical", "tags": ["security", "electron", "tauri", "context-isolation", "ipc", "csp", "desktop", "owasp", "cwe"] }
   ]
 }

@@ -21,7 +21,7 @@ Analyze a proposed bug fix to determine whether it addresses the root cause or p
    ```bash
    bun "<pluginRoot>/lib/resolve-config.ts" "<project-root>"
    ```
-5. Parse the JSON output. It contains: `standardsBaseUrl`, `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
+5. Parse the JSON output. It contains: `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
 
 ## Step 2: Fetch Applicable Standards
 
@@ -30,7 +30,7 @@ From the `applicableStandards` array in the resolved config, keep only the entry
 
 Use WebFetch to fetch its content from:
 ```
-{standardsBaseUrl}{entry.path}
+{entry.url}
 ```
 
 Extract the **Rules** section and the **Patterns** section from the fetched standard.

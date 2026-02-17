@@ -1,12 +1,12 @@
 {
   "scope": "core",
   "standards": [
-    { "id": "core-security", "path": "core-security.md", "severity": "critical", "tags": ["security", "owasp", "cwe", "input-validation", "authentication", "cryptography"] },
-    { "id": "core-architecture", "path": "core-architecture.md", "severity": "high", "tags": ["architecture", "srp", "separation-of-concerns", "dependency-direction", "duplication"] },
-    { "id": "core-root-cause-analysis", "path": "core-root-cause-analysis.md", "severity": "high", "tags": ["root-cause", "debugging", "death-spiral", "bug-fixing", "tracing"] },
-    { "id": "core-code-quality", "path": "core-code-quality.md", "severity": "high", "tags": ["quality", "duplication", "dead-code", "consistency", "naming", "churn"] },
-    { "id": "core-error-handling", "path": "core-error-handling.md", "severity": "high", "tags": ["error-handling", "validation", "edge-cases", "boundaries", "exceptions"] },
-    { "id": "core-testing", "path": "core-testing.md", "severity": "high", "tags": ["testing", "mocking", "behavior", "edge-cases", "tdd", "boundaries"] },
-    { "id": "core-dependency-management", "path": "core-dependency-management.md", "severity": "critical", "tags": ["dependencies", "supply-chain", "slopsquatting", "lockfile", "security", "owasp"] }
+    { "id": "core-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-security.md", "severity": "critical", "tags": ["security", "owasp", "cwe", "input-validation", "authentication", "cryptography"] },
+    { "id": "core-architecture", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-architecture.md", "severity": "high", "tags": ["architecture", "srp", "separation-of-concerns", "dependency-direction", "duplication"] },
+    { "id": "core-root-cause-analysis", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-root-cause-analysis.md", "severity": "high", "tags": ["root-cause", "debugging", "death-spiral", "bug-fixing", "tracing"] },
+    { "id": "core-code-quality", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-code-quality.md", "severity": "high", "tags": ["quality", "duplication", "dead-code", "consistency", "naming", "churn"] },
+    { "id": "core-error-handling", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-error-handling.md", "severity": "high", "tags": ["error-handling", "validation", "edge-cases", "boundaries", "exceptions"] },
+    { "id": "core-testing", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-testing.md", "severity": "high", "tags": ["testing", "mocking", "behavior", "edge-cases", "tdd", "boundaries"] },
+    { "id": "core-dependency-management", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-dependency-management.md", "severity": "critical", "tags": ["dependencies", "supply-chain", "slopsquatting", "lockfile", "security", "owasp"] }
   ]
 }
