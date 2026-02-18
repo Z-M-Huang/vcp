@@ -4,7 +4,9 @@
  * Blocks tool calls that contain known dangerous code patterns.
  * Reads JSON from stdin, checks content against 19 regex patterns across 9 CWEs.
  *
- * For Write|Edit: checks new_string/content fields.
+ * For Write|Edit: checks new_string/content fields. Documentation files (.md, .mdx,
+ * .txt, .rst) are exempt — they are never executed and routinely contain anti-pattern
+ * examples that would cause false positives.
  * For Bash: checks the command field + Bash-specific obfuscation patterns.
  *
  * Exit 0 = allow the tool call
@@ -30,6 +32,7 @@ const debug = globalConfig?.debug ?? false;
 let content: string;
 let toolName: string = "";
 let cwd: string = "";
+let filePath: string = "";
 try {
   const json = JSON.parse(input);
   toolName = json.tool_name ?? "";
@@ -40,6 +43,7 @@ try {
     content = toolInput.command ?? "";
   } else {
     // Write or Edit
+    filePath = toolInput.file_path ?? "";
     content = toolInput.new_string ?? toolInput.content ?? "";
   }
 } catch {
@@ -64,6 +68,23 @@ if (!content) {
     details: "Empty content",
   }, debug);
   process.exit(0);
+}
+
+// Documentation files are never executed — patterns in them cannot cause harm.
+// Skip scanning for .md, .mdx, .txt, .rst to avoid false positives on anti-pattern
+// examples in standards, issue bodies, and other documentation.
+const DOC_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst"]);
+if (filePath) {
+  const ext = filePath.toLowerCase().match(/\.[^./\\]+$/)?.[0] ?? "";
+  if (DOC_EXTENSIONS.has(ext)) {
+    await vcpLog(projectRoot, {
+      source: "security-gate",
+      event: "PreToolUse",
+      decision: "allow",
+      details: `Documentation file (${ext}) — scan skipped`,
+    }, debug);
+    process.exit(0);
+  }
 }
 
 // Load .vcp.json and global config ignore lists for CWE suppression

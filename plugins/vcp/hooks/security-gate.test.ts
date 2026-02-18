@@ -79,10 +79,10 @@ function parseOutput(stdout: string): any {
   }
 }
 
-function writeInput(content: string, cwd?: string) {
+function writeInput(content: string, cwd?: string, filePath?: string) {
   return {
     tool_name: "Write",
-    tool_input: { content },
+    tool_input: { content, ...(filePath ? { file_path: filePath } : {}) },
     ...(cwd ? { cwd } : {}),
   };
 }
@@ -283,6 +283,48 @@ describe("new pattern detection", () => {
 
   test("allows short Bearer placeholder", async () => {
     const r = await runHook(writeInput('"Bearer ${token}"'));
+    expect(r.exitCode).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Documentation file bypass
+// ---------------------------------------------------------------------------
+describe("documentation file bypass", () => {
+  test("allows .md file containing patterns that block code files", async () => {
+    const r = await runHook(writeInput(SQL_TEMPLATE, undefined, "/tmp/standards/web-backend-security.md"));
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("allows .mdx file containing patterns that block code files", async () => {
+    const r = await runHook(writeInput(EVAL_USER, undefined, "/docs/guide.mdx"));
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("allows .txt file containing patterns that block code files", async () => {
+    const r = await runHook(writeInput(HARDCODED_SECRET, undefined, "/tmp/issue-body.txt"));
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("allows .rst file containing patterns that block code files", async () => {
+    const r = await runHook(writeInput(PICKLE_LOAD, undefined, "/docs/security.rst"));
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("still blocks .ts file with the same content", async () => {
+    const r = await runHook(writeInput(SQL_TEMPLATE, undefined, "/src/db/users.ts"));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-89");
+  });
+
+  test("still blocks when no file_path is provided", async () => {
+    const r = await runHook(writeInput(SQL_TEMPLATE));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-89");
+  });
+
+  test("extension check is case-insensitive", async () => {
+    const r = await runHook(writeInput(SQL_TEMPLATE, undefined, "/docs/README.MD"));
     expect(r.exitCode).toBe(0);
   });
 });
