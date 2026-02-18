@@ -76,7 +76,7 @@ Security and architecture standards injected into the AI's context at session st
 
 ### Layer 2: On-Demand Scanning
 
-Skills scan code against 30 standards across 9 scopes — security, architecture, quality, data access, mobile, desktop, CLI, DevOps, and compliance:
+Skills scan code against 32 standards across 9 scopes — security, architecture, quality, data access, mobile, desktop, CLI, DevOps, and compliance:
 
 - `/vcp-audit` — Full audit against all standards (security, architecture, quality, compliance) with modes for targeted scans
 - `/vcp-dependency-check` — Lockfile hygiene, version ranges, slopsquatting
@@ -90,11 +90,13 @@ Skills use AI-driven analysis that can trace data flow across variables — deep
 
 A security gate hook runs on every `Write`, `Edit`, and `Bash` tool call, blocking dangerous patterns *before code is written to disk*:
 
-- Hardcoded secrets, AWS keys, private keys, JWT tokens (CWE-798)
+- Hardcoded secrets, AWS keys, private keys, JWT tokens, DB connection strings, Bearer tokens, Google/GitHub API key prefixes (CWE-798)
 - SQL string concatenation and template literal injection (CWE-89)
 - `eval()` with user input, shell eval with dynamic input (CWE-95)
 - `innerHTML` with variable assignment (CWE-79)
 - Insecure deserialization: pickle, unsafe YAML, node-serialize (CWE-502)
+- XPath injection via string concatenation (CWE-643)
+- Prototype pollution via `__proto__` or `constructor.prototype` assignment (CWE-1321)
 - Encoded data piped to shell execution (CWE-116)
 
 The layers are complementary: Layer 3 catches the most dangerous patterns instantly, Layer 2 provides deep analysis on demand, and Layer 1 prevents violations at the source by making the AI aware of rules before it writes.
@@ -128,7 +130,7 @@ If a control doesn't affect what code gets written, it's not a VCP standard.
 
 ```
 vcp/
-├── standards/           # AI-optimized principled standards (30 standards, 9 scopes)
+├── standards/           # AI-optimized principled standards (32 standards, 9 scopes)
 │   ├── manifest.json    # Root v2 manifest — indexes scope manifests via full URLs
 │   ├── scopes/          # Per-scope manifest files (core, web-*, mobile, desktop, cli, devops, compliance-*)
 │   ├── core-*.md        # Universal: security, architecture, testing, etc.

@@ -36,6 +36,13 @@ const YAML_UNSAFE = P("ya", "ml.unsafe_load(data)");
 const UNSERIALIZE = P("obj.unse", "rialize(payload)");
 const BASE64_BASH = P("echo payload | base64 --dec", "ode | bash");
 const SHELL_EVAL = P('ev', 'al "$user_input"');
+const DB_CONN_STRING = P('const url = "mongo', 'db://admin:s3cret@prod-db.example.com:27017/mydb"');
+const BEARER_TOKEN = P('"Bearer ', 'eyJhbGciOiJIUzI1NiIsInR5cCI6', 'IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3', 'ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"');
+const GOOGLE_API_KEY = P("const key = 'AIza", "SyCnEtHiSiSaFaKeKeY0123456789abcdef';");
+const GITHUB_PAT = P("const token = 'ghp_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij';");
+const XPATH_INJECTION = P('.xpa', 'th(f"/users/user[@name=\'{username}\']")');
+const PROTO_POLLUTION = P('obj["__prot', 'o__"] = malicious');
+const PROTO_POLLUTION_DOT = P('obj.constr', 'uctor.prototype.isAdmin = true');
 
 // --- Helpers ---
 
@@ -213,6 +220,69 @@ describe("Bash tool checks", () => {
 
   test("allows safe bash commands", async () => {
     const r = await runHook(bashInput("git status"));
+    expect(r.exitCode).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New pattern detection (CWE-798 extras, CWE-643, CWE-1321)
+// ---------------------------------------------------------------------------
+describe("new pattern detection", () => {
+  test("blocks database connection string with credentials — CWE-798", async () => {
+    const r = await runHook(writeInput(DB_CONN_STRING));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-798");
+  });
+
+  test("blocks hardcoded Bearer token — CWE-798", async () => {
+    const r = await runHook(writeInput(BEARER_TOKEN));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-798");
+  });
+
+  test("blocks Google API key — CWE-798", async () => {
+    const r = await runHook(writeInput(GOOGLE_API_KEY));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-798");
+  });
+
+  test("blocks GitHub PAT — CWE-798", async () => {
+    const r = await runHook(writeInput(GITHUB_PAT));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-798");
+  });
+
+  test("blocks XPath injection — CWE-643", async () => {
+    const r = await runHook(writeInput(XPATH_INJECTION));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-643");
+  });
+
+  test("blocks prototype pollution via bracket notation — CWE-1321", async () => {
+    const r = await runHook(writeInput(PROTO_POLLUTION));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-1321");
+  });
+
+  test("blocks prototype pollution via dot notation — CWE-1321", async () => {
+    const r = await runHook(writeInput(PROTO_POLLUTION_DOT));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-1321");
+  });
+
+  // False-positive avoidance tests
+  test("allows defensive __proto__ check in condition", async () => {
+    const r = await runHook(writeInput(P('if (key === "__prot', 'o__") throw new Error("blocked")')));
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("allows safe database URL without credentials", async () => {
+    const r = await runHook(writeInput('const url = "mongodb://prod-db.example.com:27017/mydb"'));
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("allows short Bearer placeholder", async () => {
+    const r = await runHook(writeInput('"Bearer ${token}"'));
     expect(r.exitCode).toBe(0);
   });
 });

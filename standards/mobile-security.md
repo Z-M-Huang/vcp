@@ -3,7 +3,7 @@ id: mobile-security
 title: Mobile Security
 scope: mobile
 severity: critical
-tags: [security, mobile, keychain, keystore, certificate-pinning, deep-links, biometrics, owasp]
+tags: [security, mobile, keychain, keystore, certificate-pinning, deep-links, biometrics, owasp, app-attestation, binary-protection, privacy, backup, owasp-m6, owasp-m7]
 references:
   - title: "OWASP Mobile Application Security Verification Standard (MASVS)"
     url: https://mas.owasp.org/MASVS/
@@ -13,6 +13,14 @@ references:
     url: https://cwe.mitre.org/data/definitions/312.html
   - title: "CWE-295 — Improper Certificate Validation"
     url: https://cwe.mitre.org/data/definitions/295.html
+  - title: "OWASP Mobile Top 10:2024 M6 — Inadequate Privacy Controls"
+    url: https://owasp.org/www-project-mobile-top-10/
+  - title: "OWASP Mobile Top 10:2024 M7 — Insufficient Binary Protections"
+    url: https://owasp.org/www-project-mobile-top-10/
+  - title: "Apple — App Attest"
+    url: https://developer.apple.com/documentation/devicecheck/establishing-your-app-s-integrity
+  - title: "Google — Play Integrity API"
+    url: https://developer.android.com/google/play/integrity
 ---
 
 ## Principle
@@ -29,23 +37,33 @@ Mobile apps run on devices you do not control. The binary is decompilable, the f
 
 2. **Implement certificate pinning with public key pins.** Pin the public key (SPKI hash), not the certificate — certificates rotate, keys typically don't. iOS: use URLSession's `didReceive challenge` delegate. Android: use Network Security Config with `pin-sha256`. React Native: use libraries that support native pinning. Always include a backup pin for rotation. (CWE-295)
 
-8. **Enforce TLS and validate server identity.** All network traffic must use TLS 1.2+. iOS: do not disable App Transport Security (ATS). Android: set `cleartextTrafficPermitted="false"` in Network Security Config. Never accept self-signed certificates in production.
+3. **Enforce TLS and validate server identity.** All network traffic must use TLS 1.2+. iOS: do not disable App Transport Security (ATS). Android: set `cleartextTrafficPermitted="false"` in Network Security Config. Never accept self-signed certificates in production.
 
 ### Deep Links and IPC
 
-3. **Validate deep links and universal links.** Configure universal links (iOS) and app links (Android) with verified domain association (`apple-app-site-association`, `assetlinks.json`). Validate all parameters received through deep links — they are attacker-controlled input. Never auto-navigate to arbitrary URLs from deep links. Never pass authentication tokens via deep link parameters.
+4. **Validate deep links and universal links.** Configure universal links (iOS) and app links (Android) with verified domain association (`apple-app-site-association`, `assetlinks.json`). Validate all parameters received through deep links — they are attacker-controlled input. Never auto-navigate to arbitrary URLs from deep links. Never pass authentication tokens via deep link parameters.
 
 5. **Secure IPC and exported components.** Android: set `exported="false"` on Activities, Services, BroadcastReceivers, and ContentProviders that should not be accessible to other apps. Use signature-level permissions for inter-app communication. Validate all data received via Intents. iOS: validate URL scheme callbacks.
 
 ### Authentication
 
-4. **Use cryptographic binding for biometric authentication.** Biometric auth must be backed by a cryptographic operation, not a boolean "is authenticated" callback. iOS: bind to Keychain item with `.biometryCurrentSet`. Android: use `CryptoObject` with `BiometricPrompt`. A boolean check is trivially bypassed with runtime hooking tools (Frida, Objection).
+6. **Use cryptographic binding for biometric authentication.** Biometric auth must be backed by a cryptographic operation, not a boolean "is authenticated" callback. iOS: bind to Keychain item with `.biometryCurrentSet`. Android: use `CryptoObject` with `BiometricPrompt`. A boolean check is trivially bypassed with runtime hooking tools (Frida, Objection).
 
 ### Data Protection
 
-6. **Prevent background data exposure.** iOS takes a screenshot when the app goes to background (visible in app switcher). Implement `applicationWillResignActive` to hide sensitive content. Clear clipboard of sensitive data. Disable keyboard caching for sensitive inputs. Never log sensitive data (tokens, PII) — logs are readable on rooted/jailbroken devices.
+7. **Prevent background data exposure.** iOS takes a screenshot when the app goes to background (visible in app switcher). Implement `applicationWillResignActive` to hide sensitive content. Clear clipboard of sensitive data. Disable keyboard caching for sensitive inputs. Never log sensitive data (tokens, PII) — logs are readable on rooted/jailbroken devices.
 
-7. **Never embed secrets in the app bundle.** Mobile binaries (APK, IPA) are trivially decompilable. API keys, signing secrets, and encryption keys in the binary are public. Use server-side key exchange, app attestation (Play Integrity, DeviceCheck), or sealed secrets that require a valid session.
+8. **Never embed secrets in the app bundle.** Mobile binaries (APK, IPA) are trivially decompilable. API keys, signing secrets, and encryption keys in the binary are public. Use server-side key exchange, app attestation (Play Integrity, DeviceCheck), or sealed secrets that require a valid session.
+
+### Platform Integrity
+
+9. **Implement app attestation for API requests (OWASP M3).** Use App Attest (iOS) and Play Integrity (Android) to verify API requests come from a legitimate, unmodified app on a genuine device. This prevents API abuse from modified APKs, emulators, and automation tools. iOS: use `DCAppAttestService` to generate attestation keys, attest them with Apple, and generate assertions for each API request — the server verifies the assertion against Apple's attestation servers. Android: use Play Integrity API to get integrity verdicts — the server verifies the verdict token to confirm app integrity, device integrity, and license status.
+
+10. **Apply binary protections for release builds (OWASP M7, MASVS-RESILIENCE).** Apply code obfuscation, anti-tampering, and anti-debugging for release builds. iOS: strip symbols, enable Position Independent Executable (PIE). Android: enable R8/ProGuard with shrinking and obfuscation, use Play Integrity for root detection. Do not rely solely on these — they raise the bar but are not absolute defenses.
+
+11. **Exclude sensitive data from backups and cloud sync (OWASP M9).** Exclude sensitive data from iCloud, Google backups, and cloud sync. iOS: use `NSFileProtectionComplete`, set `isExcludedFromBackup` on sensitive files. Android: set `android:allowBackup="false"` in manifest or use `android:fullBackupContent` to exclude sensitive directories. Keychain items should use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` (not synced to iCloud Keychain).
+
+12. **Implement privacy controls and data minimization (OWASP M6).** Implement App Tracking Transparency (ATT) on iOS before tracking. Maintain accurate privacy labels (iOS Privacy Nutrition Labels, Android Data Safety Section). Minimize data collection — only collect what is necessary for the feature. Purpose-limit collected data — do not repurpose location data collected for navigation into analytics without consent.
 
 ## Patterns
 
@@ -423,6 +441,313 @@ fun authenticateWithBiometrics(activity: FragmentActivity) {
 ```
 
 **Why it's wrong:** Exported components are accessible to any app on the device. A malicious app can start your AdminActivity directly (bypassing login), send crafted broadcasts to your PaymentReceiver, or query your ContentProvider for user data. Set `exported="false"` on everything that is not explicitly designed for inter-app access.
+
+### App Attestation (iOS)
+
+#### Do This
+
+```swift
+import DeviceCheck
+
+// Generate and attest a key, then create assertions for API requests
+class AttestationService {
+    private let service = DCAppAttestService.shared
+
+    func generateAttestationKey() async throws -> String {
+        guard service.isSupported else {
+            throw AttestationError.notSupported
+        }
+        return try await service.generateKey()
+    }
+
+    func attestKey(_ keyId: String, clientDataHash: Data) async throws -> Data {
+        return try await service.attestKey(keyId, clientDataHash: clientDataHash)
+    }
+
+    func generateAssertion(_ keyId: String, clientDataHash: Data) async throws -> Data {
+        return try await service.generateAssertion(keyId, clientDataHash: clientDataHash)
+    }
+
+    // Attach assertion to API request
+    func makeAttestedRequest(url: URL, body: Data, keyId: String) async throws -> URLRequest {
+        let hash = SHA256.hash(data: body)
+        let clientDataHash = Data(hash)
+        let assertion = try await generateAssertion(keyId, clientDataHash: clientDataHash)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue(assertion.base64EncodedString(), forHTTPHeaderField: "X-Apple-Assertion")
+        return request
+    }
+}
+```
+
+#### Not This
+
+```swift
+// Trusting a client-reported app version or simple API key
+var request = URLRequest(url: apiURL)
+request.setValue("my-secret-api-key-12345", forHTTPHeaderField: "X-API-Key")
+request.setValue(Bundle.main.infoDictionary?["CFBundleVersion"] as? String, forHTTPHeaderField: "X-App-Version")
+// Anyone with the API key can call your endpoints — modified APK, script, curl
+```
+
+**Why it's wrong:** API keys embedded in the binary are trivially extractable. Client-reported version headers can be spoofed by any HTTP client. App attestation cryptographically proves the request originates from a genuine, unmodified app on a real device — the server verifies the assertion against Apple/Google, not the client's self-reported identity.
+
+### App Attestation (Android)
+
+#### Do This
+
+```kotlin
+import com.google.android.play.core.integrity.IntegrityManagerFactory
+import com.google.android.play.core.integrity.IntegrityTokenRequest
+
+// Request Play Integrity token and send to server for verification
+class PlayIntegrityService(private val context: Context) {
+
+    suspend fun getIntegrityToken(requestHash: String): String {
+        val integrityManager = IntegrityManagerFactory.create(context)
+
+        val request = IntegrityTokenRequest.builder()
+            .setCloudProjectNumber(CLOUD_PROJECT_NUMBER)
+            .setRequestHash(requestHash) // Hash of the request body for binding
+            .build()
+
+        val response = integrityManager.requestIntegrityToken(request).await()
+        return response.token()
+    }
+
+    // Attach integrity token to API request
+    suspend fun makeAttestedRequest(url: String, body: String): Request {
+        val requestHash = body.toByteArray().sha256().base64()
+        val integrityToken = getIntegrityToken(requestHash)
+
+        return Request.Builder()
+            .url(url)
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .addHeader("X-Play-Integrity-Token", integrityToken)
+            .build()
+    }
+}
+// Server decodes and verifies the token via Google's API
+```
+
+#### Not This
+
+```kotlin
+// Simple API key that any modified APK or script can extract and reuse
+val request = Request.Builder()
+    .url(apiUrl)
+    .addHeader("X-API-Key", BuildConfig.API_KEY) // Extractable from APK
+    .addHeader("X-App-Version", BuildConfig.VERSION_NAME) // Spoofable
+    .build()
+```
+
+**Why it's wrong:** `BuildConfig.API_KEY` is a string constant compiled into the APK — extractable with `apktool` or `jadx` in seconds. Play Integrity tokens are cryptographically signed by Google and verify that the app is genuine (not repackaged), the device has integrity (not rooted/emulated), and the app is licensed (installed from Play Store).
+
+### Backup Exclusion (iOS)
+
+#### Do This
+
+```swift
+// Exclude sensitive files from iCloud backup
+func excludeFromBackup(fileURL: URL) throws {
+    var url = fileURL
+    var resourceValues = URLResourceValues()
+    resourceValues.isExcludedFromBackup = true
+    try url.setResourceValues(resourceValues)
+}
+
+// Store Keychain items as device-only (not synced to iCloud Keychain)
+let query: [String: Any] = [
+    kSecClass as String:       kSecClassGenericPassword,
+    kSecAttrAccount as String: "session_token",
+    kSecValueData as String:   tokenData,
+    kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+    // "ThisDeviceOnly" = not synced to iCloud Keychain, not included in backups
+]
+SecItemAdd(query as CFDictionary, nil)
+```
+
+#### Not This
+
+```swift
+// Default file storage — included in iCloud backup automatically
+let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+let tokenFile = documentsDir.appendingPathComponent("session.token")
+try tokenData.write(to: tokenFile)
+// This file will be backed up to iCloud and visible in unencrypted iTunes backups
+
+// Keychain with kSecAttrAccessibleAfterFirstUnlock — syncs to iCloud Keychain
+let query: [String: Any] = [
+    kSecClass as String:       kSecClassGenericPassword,
+    kSecAttrAccount as String: "session_token",
+    kSecValueData as String:   tokenData,
+    kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+    // Synced to iCloud Keychain — accessible on all user's devices
+]
+```
+
+**Why it's wrong:** Files in the Documents directory are included in iCloud and iTunes backups by default. Unencrypted iTunes backups are plaintext on disk. Keychain items without `ThisDeviceOnly` sync to iCloud Keychain, making session tokens available on every device signed into that Apple ID. Sensitive data should stay on the device where it was created.
+
+### Backup Exclusion (Android)
+
+#### Do This
+
+```kotlin
+// AndroidManifest.xml — disable auto-backup or exclude sensitive dirs
+// Option 1: Disable backup entirely
+// <application android:allowBackup="false" ...>
+
+// Option 2: Selective backup exclusion (preferred)
+// <application android:fullBackupContent="@xml/backup_rules" ...>
+
+// res/xml/backup_rules.xml:
+// <full-backup-content>
+//     <exclude domain="sharedpref" path="secure_prefs.xml" />
+//     <exclude domain="database" path="sessions.db" />
+//     <exclude domain="file" path="tokens/" />
+// </full-backup-content>
+
+// For Android 12+ (API 31+), also use data extraction rules:
+// <application android:dataExtractionRules="@xml/data_extraction_rules" ...>
+
+// res/xml/data_extraction_rules.xml:
+// <data-extraction-rules>
+//     <cloud-backup>
+//         <exclude domain="sharedpref" path="secure_prefs.xml" />
+//         <exclude domain="database" path="sessions.db" />
+//     </cloud-backup>
+//     <device-transfer>
+//         <exclude domain="sharedpref" path="secure_prefs.xml" />
+//     </device-transfer>
+// </data-extraction-rules>
+```
+
+#### Not This
+
+```kotlin
+// Default manifest — all app data backed up to Google Drive
+// <application android:allowBackup="true" ...>
+// Tokens, session data, cached credentials all backed up in plaintext
+// Accessible via adb backup on older Android versions
+```
+
+**Why it's wrong:** With `allowBackup="true"` (the default), Google auto-backup copies SharedPreferences, databases, and files to Google Drive. On older Android versions, `adb backup` extracts this data without root. An attacker with physical access or Google account compromise can extract session tokens, cached credentials, and sensitive user data from backups.
+
+### Privacy Controls (iOS)
+
+#### Do This
+
+```swift
+import AppTrackingTransparency
+
+// Request ATT permission before any tracking
+func requestTrackingPermission(completion: @escaping (Bool) -> Void) {
+    ATTrackingManager.requestTrackingAuthorization { status in
+        switch status {
+        case .authorized:
+            completion(true)
+        case .denied, .restricted, .notDetermined:
+            completion(false)
+            // Disable all tracking SDKs, analytics identifiers
+            disableTracking()
+        @unknown default:
+            completion(false)
+            disableTracking()
+        }
+    }
+}
+
+// Data minimization — only collect what the feature needs
+struct LocationRequest {
+    let purpose: LocationPurpose
+
+    enum LocationPurpose {
+        case navigation  // Precise location needed
+        case weather     // City-level sufficient
+    }
+
+    var accuracy: CLLocationAccuracy {
+        switch purpose {
+        case .navigation: return kCLLocationAccuracyBest
+        case .weather:    return kCLLocationAccuracyReduced
+        }
+    }
+}
+```
+
+#### Not This
+
+```swift
+// Tracking without ATT consent — App Store rejection + privacy violation
+let idfa = ASIdentifierManager.shared().advertisingIdentifier
+Analytics.setUserId(idfa.uuidString) // Used without requesting permission
+
+// Collecting precise location for a feature that only needs city-level
+locationManager.desiredAccuracy = kCLLocationAccuracyBest
+locationManager.requestAlwaysAuthorization() // "Always" when "WhenInUse" suffices
+// Location data sent to analytics backend "for future use"
+```
+
+**Why it's wrong:** Using IDFA without ATT consent violates Apple's App Store guidelines and results in rejection. Collecting precise location when approximate suffices violates data minimization principles, increases liability under GDPR/CCPA, and erodes user trust. Always match data collection granularity to the actual feature requirement.
+
+### Privacy Controls (Android)
+
+#### Do This
+
+```kotlin
+// Declare accurate Data Safety Section in Play Console
+// Only request permissions actually needed by the feature
+
+// Use approximate location when precise isn't needed
+if (featureNeedsPreciseLocation) {
+    ActivityCompat.requestPermissions(
+        activity,
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+        REQUEST_CODE
+    )
+} else {
+    // Android 12+ supports approximate-only location
+    ActivityCompat.requestPermissions(
+        activity,
+        arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION),
+        REQUEST_CODE
+    )
+}
+
+// Respect user's permission choices — degrade gracefully
+override fun onRequestPermissionsResult(
+    requestCode: Int, permissions: Array<String>, grantResults: IntArray
+) {
+    if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+        enableLocationFeature()
+    } else {
+        // Feature works without location — use manual city selection
+        showManualCitySelector()
+    }
+}
+```
+
+#### Not This
+
+```kotlin
+// Requesting all permissions upfront regardless of feature usage
+ActivityCompat.requestPermissions(
+    activity,
+    arrayOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.CAMERA,
+        Manifest.permission.READ_CONTACTS,
+        Manifest.permission.RECORD_AUDIO
+    ),
+    REQUEST_CODE
+)
+// User hasn't used camera or contacts features yet — permission fatigue
+```
+
+**Why it's wrong:** Requesting all permissions at launch causes permission fatigue and trains users to tap "Allow" without reading. It also signals to the OS and security reviewers that the app is over-privileged. Request permissions at the moment they are needed, for the feature that needs them, with the minimum granularity required.
 
 ## Exceptions
 

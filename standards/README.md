@@ -8,7 +8,7 @@ All standard files are in the `standards/` root directory with a `{scope}-{topic
 
 | Scope | Standards | Description |
 |-------|-----------|-------------|
-| `core` | `core-security.md`, `core-architecture.md`, `core-root-cause-analysis.md`, `core-code-quality.md`, `core-error-handling.md`, `core-testing.md`, `core-dependency-management.md` | Universal standards for all code |
+| `core` | `core-security.md`, `core-architecture.md`, `core-root-cause-analysis.md`, `core-code-quality.md`, `core-error-handling.md`, `core-testing.md`, `core-dependency-management.md`, `core-secure-defaults.md`, `core-api-design-security.md` | Universal standards for all code |
 | `web-frontend` | `web-frontend-security.md`, `web-frontend-structure.md`, `web-frontend-performance.md`, `web-frontend-accessibility.md` | Client-side web development standards |
 | `web-backend` | `web-backend-security.md`, `web-backend-structure.md`, `web-backend-data-access.md`, `web-backend-api-design.md`, `web-backend-realtime.md`, `web-backend-caching.md` | Server-side web development standards |
 | `database` | `database-encryption.md`, `database-schema-security.md` | Database-layer security standards |
@@ -37,7 +37,7 @@ standards/
 │   └── compliance-hipaa.json
 ├── core-security.md       # All .md files are flat in the root
 ├── core-architecture.md
-├── ...                    # (30 total standard files)
+├── ...                    # (32 total standard files)
 └── README.md
 ```
 

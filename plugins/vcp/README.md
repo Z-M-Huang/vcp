@@ -75,13 +75,15 @@ If `.vcp.json` is not found, skills stop and tell the user to run `/vcp-init`.
 
 ### Security Gate Hook
 
-The `security-gate.ts` hook runs on every `Write`, `Edit`, or `Bash` tool call. It parses the tool input JSON from stdin and checks the content against 14 regex patterns across 6 CWEs:
+The `security-gate.ts` hook runs on every `Write`, `Edit`, or `Bash` tool call. It parses the tool input JSON from stdin and checks the content against 19 regex patterns across 9 CWEs:
 
-- **CWE-798** — Hardcoded secrets (passwords, API keys), AWS access keys (AKIA/ASIA/etc.), private keys (all PEM formats), JWT tokens
+- **CWE-798** — Hardcoded secrets (passwords, API keys), AWS access keys (AKIA/ASIA/etc.), private keys (all PEM formats), JWT tokens, database connection strings with embedded credentials, hardcoded Bearer tokens, Google/GitHub API key prefixes
 - **CWE-89** — SQL string concatenation and template literal injection in query calls, covering Prisma (`$queryRawUnsafe`, `$executeRawUnsafe`) and Knex (`whereRaw`, `havingRaw`, `orderByRaw`, `joinRaw`)
 - **CWE-95** — `eval()` with user-controlled input; shell `eval` with dynamic input (Bash only)
 - **CWE-79** — `innerHTML` assigned a variable
 - **CWE-502** — `pickle.load/loads`, `yaml.load` without Loader, `yaml.unsafe_load`/`full_load`, `node-serialize` `.unserialize()`
+- **CWE-643** — XPath injection via string concatenation in `.xpath()` calls
+- **CWE-1321** — Prototype pollution via `__proto__` or `constructor.prototype` assignment
 - **CWE-116** — Encoded data (base64/xxd) piped to shell execution or combined with `sh -c` (Bash only)
 
 If any pattern matches, the hook exits with code 2 (block) and prints the finding to stderr (fed to Claude as error message). If patterns are suppressed via CWE ignore, the hook exits 0 and outputs a JSON warning to stdout (shown to user via `systemMessage`). Otherwise it exits 0 (allow).

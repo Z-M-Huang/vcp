@@ -3,7 +3,7 @@ id: desktop-security
 title: Desktop Application Security
 scope: desktop
 severity: critical
-tags: [security, electron, tauri, context-isolation, ipc, csp, desktop, owasp, cwe]
+tags: [security, electron, tauri, context-isolation, ipc, csp, desktop, owasp, cwe, code-signing, notarization, cwe-489, cwe-829, cwe-1321]
 references:
   - title: "Electron — Security Best Practices"
     url: https://www.electronjs.org/docs/latest/tutorial/security
@@ -11,6 +11,12 @@ references:
     url: https://tauri.app/security/
   - title: "CWE-94 — Improper Control of Generation of Code"
     url: https://cwe.mitre.org/data/definitions/94.html
+  - title: "CWE-489 — Active Debug Code"
+    url: https://cwe.mitre.org/data/definitions/489.html
+  - title: "CWE-1321 — Prototype Pollution"
+    url: https://cwe.mitre.org/data/definitions/1321.html
+  - title: "Apple — Notarizing macOS Software"
+    url: https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution
 ---
 
 ## Principle
@@ -44,6 +50,18 @@ Desktop applications run with full operating system access. A vulnerability in t
 ### Framework-Agnostic
 
 10. **Verify auto-update signatures and sources.** Auto-update mechanisms must verify the cryptographic signature of updates before applying them. Use code signing (macOS notarization, Windows Authenticode). Updates must be fetched over HTTPS from a controlled domain. Never allow update URLs to be configured by the user. (CWE-494)
+
+### Build and Distribution Security
+
+11. **Sign and notarize all release builds.** Sign all release builds. macOS: use Apple Developer ID certificate and notarize with `notarytool`. Windows: use Authenticode with an EV code signing certificate. Unsigned apps trigger security warnings, get flagged by antivirus, and cannot use certain OS features (auto-update, Gatekeeper bypass). Sign updates too.
+
+12. **Disable DevTools in production builds (CWE-489).** Disable Chromium DevTools in packaged/production builds. Electron: use `webPreferences: { devtools: false }` or intercept with `mainWindow.webContents.on('devtools-opened', () => mainWindow.webContents.closeDevTools())`. DevTools give full access to the renderer process, network traffic, localStorage, cookies, and allow arbitrary code execution.
+
+13. **Validate preload script integrity.** In Electron, preload scripts run in a privileged context. If an attacker can replace the preload script (via writable app directory, symlink attack, or update MITM), they gain full access to the contextBridge API surface. Use ASAR archives (which are read-only) and verify app integrity at startup via code signing.
+
+14. **Vet and pin native Node.js modules (CWE-829).** Audit all native Node.js addon modules (`.node` files). They run outside the V8 sandbox with full OS access. Pin native module versions. Verify prebuilt binary hashes when using prebuild-based distribution. Prefer pure-JavaScript alternatives when security is critical.
+
+15. **Sanitize IPC payloads against prototype pollution (CWE-1321).** Electron's IPC uses structured clone, but if you `JSON.parse` messages or merge objects from IPC into application state, you are vulnerable to prototype pollution. Validate that no message contains `__proto__`, `constructor`, or `prototype` keys before merging into application objects.
 
 ## Patterns
 
@@ -152,8 +170,10 @@ ipcMain.handle("file:read", async (event, filePath) => {
   }
 
   // 3. Validate path — prevent traversal
+  // Use ALLOWED_BASE_DIR + path.sep to prevent sibling-prefix bypass
+  // (e.g., /home/user/documents-evil would match /home/user/documents without the sep check)
   const resolved = path.resolve(ALLOWED_BASE_DIR, filePath);
-  if (!resolved.startsWith(ALLOWED_BASE_DIR)) {
+  if (resolved !== ALLOWED_BASE_DIR && !resolved.startsWith(ALLOWED_BASE_DIR + path.sep)) {
     throw new Error("Access denied — path outside allowed directory");
   }
 
@@ -334,6 +354,157 @@ fn read_file(file_path: String) -> Result<String, String> {
 ```
 
 **Why it's wrong:** Tauri commands receive arguments from the WebView frontend, which is a web context subject to XSS. Without validating the path argument — checking for traversal sequences, restricting to an allowed directory, and canonicalizing the resolved path — the Rust backend becomes a file-read oracle that an attacker can use to exfiltrate any file readable by the application process.
+
+### Code Signing and Notarization
+
+#### Do This
+
+```javascript
+// electron-forge.config.js — Configure signing and notarization
+module.exports = {
+  packagerConfig: {
+    osxSign: {
+      identity: "Developer ID Application: Your Company (TEAMID)",
+      hardenedRuntime: true,
+      entitlements: "entitlements.plist",
+      "entitlements-inherit": "entitlements.plist",
+    },
+    osxNotarize: {
+      appleId: process.env.APPLE_ID,
+      appleIdPassword: process.env.APPLE_APP_PASSWORD,
+      teamId: process.env.APPLE_TEAM_ID,
+    },
+  },
+};
+
+// macOS CLI notarization:
+// xcrun notarytool submit MyApp.zip --apple-id "$APPLE_ID" \
+//   --password "$APPLE_APP_PASSWORD" --team-id "$TEAM_ID" --wait
+
+// Windows Authenticode signing:
+// signtool sign /fd SHA256 /tr http://timestamp.digicert.com \
+//   /td SHA256 /n "Your Company" MyApp.exe
+```
+
+#### Not This
+
+```javascript
+// Distributing unsigned binaries
+module.exports = {
+  packagerConfig: {
+    // No osxSign — app triggers Gatekeeper warning
+    // No osxNotarize — macOS blocks the app entirely on 10.15+
+    // No Windows signing — SmartScreen warns "unknown publisher"
+  },
+};
+// Users must right-click → Open or disable Gatekeeper to run your app
+// Windows Defender may quarantine the unsigned executable
+```
+
+**Why it's wrong:** Unsigned macOS apps are blocked by Gatekeeper since macOS 10.15 — users cannot open them without manually overriding security settings. Unsigned Windows apps trigger SmartScreen warnings and are more likely to be flagged as malware by antivirus. Code signing establishes publisher identity, and notarization confirms Apple has scanned the app for malware.
+
+### DevTools Disabled in Production
+
+#### Do This
+
+```javascript
+// main.js — Disable DevTools in production builds
+const { BrowserWindow } = require("electron");
+
+const mainWindow = new BrowserWindow({
+  webPreferences: {
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    devtools: process.env.NODE_ENV === "development", // Disabled in production
+    preload: path.join(__dirname, "preload.js"),
+  },
+});
+
+// Belt-and-suspenders: also intercept devtools-opened in production
+if (process.env.NODE_ENV !== "development") {
+  mainWindow.webContents.on("devtools-opened", () => {
+    mainWindow.webContents.closeDevTools();
+  });
+}
+```
+
+#### Not This
+
+```javascript
+// DevTools accessible in shipped application
+const mainWindow = new BrowserWindow({
+  webPreferences: {
+    contextIsolation: true,
+    nodeIntegration: false,
+    // devtools defaults to true — accessible via Ctrl+Shift+I in production
+  },
+});
+// Any user can open DevTools and:
+//   - Inspect and modify localStorage, cookies, session tokens
+//   - Execute arbitrary JavaScript in the renderer context
+//   - Intercept and modify network requests
+//   - Access the contextBridge API surface directly from console
+```
+
+**Why it's wrong:** DevTools give full access to the renderer process — network traffic inspection, localStorage/cookie manipulation, arbitrary JavaScript execution, and direct access to the contextBridge API. In production, this means any user (or malware with UI automation) can extract tokens, bypass client-side validation, and probe the IPC attack surface.
+
+### IPC Prototype Pollution Guard
+
+#### Do This
+
+```javascript
+// main.js — Sanitize IPC message payloads before merging
+const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function hasPollutionKeys(obj) {
+  if (obj === null || typeof obj !== "object") return false;
+
+  for (const key of Object.keys(obj)) {
+    if (DANGEROUS_KEYS.has(key)) return true;
+    if (typeof obj[key] === "object" && hasPollutionKeys(obj[key])) return true;
+  }
+  return false;
+}
+
+ipcMain.handle("settings:update", async (event, newSettings) => {
+  // Validate sender
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!senderWindow) throw new Error("Unknown sender");
+
+  // Check for prototype pollution keys
+  if (typeof newSettings !== "object" || newSettings === null) {
+    throw new Error("Invalid settings format");
+  }
+  if (hasPollutionKeys(newSettings)) {
+    throw new Error("Invalid keys in settings payload");
+  }
+
+  // Safe to merge — no __proto__, constructor, or prototype keys
+  const allowedKeys = new Set(["theme", "language", "fontSize"]);
+  const sanitized = Object.fromEntries(
+    Object.entries(newSettings).filter(([key]) => allowedKeys.has(key))
+  );
+
+  Object.assign(appConfig, sanitized);
+  return { success: true };
+});
+```
+
+#### Not This
+
+```javascript
+// INSECURE — merging IPC data directly into application state
+ipcMain.handle("settings:update", async (_event, newSettings) => {
+  // Direct merge — attacker can send { "__proto__": { "isAdmin": true } }
+  Object.assign(appConfig, newSettings);
+  // Now Object.prototype.isAdmin === true for ALL objects in the process
+  // Every `if (user.isAdmin)` check now passes
+  return { success: true };
+});
+```
+
+**Why it's wrong:** `Object.assign` and the spread operator copy all enumerable properties, including `__proto__`. A renderer compromised by XSS can send `{ "__proto__": { "isAdmin": true } }` via IPC, which pollutes `Object.prototype` — every object in the main process now has `isAdmin === true`. This can escalate privileges, bypass authorization checks, or cause denial of service.
 
 ## Exceptions
 

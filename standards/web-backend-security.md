@@ -3,7 +3,7 @@ id: web-backend-security
 title: Backend Security
 scope: web-backend
 severity: critical
-tags: [security, injection, authentication, authorization, secrets, rate-limiting, ssrf, path-traversal, file-upload, owasp, cwe]
+tags: [security, injection, authentication, authorization, secrets, rate-limiting, ssrf, path-traversal, file-upload, owasp, cwe, xxe, jwt, oauth, request-smuggling, cwe-611, cwe-444, cwe-347, cwe-613, cwe-601, cwe-922]
 references:
   - title: "OWASP Top 10:2025"
     url: https://owasp.org/Top10/2025/
@@ -27,6 +27,16 @@ references:
     url: https://owasp.org/www-community/attacks/Path_Traversal
   - title: "OWASP — File Upload Cheat Sheet"
     url: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+  - title: "CWE-611 — XML External Entity (XXE)"
+    url: https://cwe.mitre.org/data/definitions/611.html
+  - title: "CWE-347 — Improper Verification of Cryptographic Signature"
+    url: https://cwe.mitre.org/data/definitions/347.html
+  - title: "OWASP ASVS 5.0 V9 — Self-Contained Tokens"
+    url: https://owasp.org/www-project-application-security-verification-standard/
+  - title: "OWASP ASVS 5.0 V10 — OAuth and OIDC"
+    url: https://owasp.org/www-project-application-security-verification-standard/
+  - title: "RFC 7636 — Proof Key for Code Exchange (PKCE)"
+    url: https://www.rfc-editor.org/rfc/rfc7636
 ---
 
 ## Principle
@@ -103,6 +113,42 @@ AI-generated backend code has severe gaps: improper password handling (1.88x mor
     - **Rename to UUID:** Generate a random UUID for the stored filename. Store the original filename as metadata in the database. This prevents path traversal via filenames and prevents overwriting existing files.
     - **Never execute uploaded files.** Do not set execute permissions. Do not store uploads in directories scanned by interpreters (e.g., PHP's include path). Strip or quarantine executable content.
     - **Scan for malicious content** when feasible. For images, re-encode them (strips embedded scripts). For documents, use sandboxed processing. (CWE-434)
+
+### Advanced Injection Prevention
+
+18. **Prevent XML External Entity (XXE) attacks.** Disable external entities and DTD processing in ALL XML parsers. Most XML libraries enable external entities by default. In Python: use `defusedxml` instead of `xml.etree`. In Java: `factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)`. In Node.js: use `fast-xml-parser` with `processEntities: false` and `allowBooleanAttributes: true`, or avoid XML parsing entirely and use JSON. `xml2js` delegates to `sax` and does not expose DTD/entity controls — it is not safe for untrusted XML without wrapping in a sanitizer. (CWE-611)
+
+19. **Prevent HTTP request smuggling.** Normalize `Transfer-Encoding` headers. Reject requests with both `Content-Length` and `Transfer-Encoding`. Reject malformed chunked encoding. Use HTTP/2 end-to-end where possible. Configure your reverse proxy and application server to agree on request boundary parsing. (CWE-444)
+
+20. **Strip server information from responses.** Remove `Server`, `X-Powered-By`, `X-AspNet-Version`, `X-AspNetMvc-Version` headers from all responses. These expose framework and version information that attackers use to target known vulnerabilities. In Express: `app.disable('x-powered-by')`. In Nginx: `server_tokens off`. (CWE-200)
+
+21. **Enforce TLS for database connections.** Require SSL/TLS for all database connections. Verify server certificates. Do not use `sslmode=disable` or `ssl=false`. Configure connection strings with `sslmode=verify-full` (PostgreSQL) or `ssl: { rejectUnauthorized: true }` (Node.js). (CWE-319)
+
+22. **Limit GraphQL batch and alias attacks.** Limit the number of queries in a single batch request (max 5-10). Limit alias count per query. Detect and reject alias-based field duplication attacks that bypass per-field rate limiting. Cross-reference [API Design](web-backend-api-design) R7-R9.
+
+### JWT and Token Security
+
+23. **Prevent JWT algorithm confusion.** Never trust the `alg` header from the token. Always specify the expected algorithm server-side when verifying. Reject `alg: none`. If using RS256, reject HS256 — an attacker can use the public key as an HMAC secret to forge tokens. (CWE-347)
+
+24. **Enforce token expiration.** Always validate the `exp` claim. Set reasonable TTLs: 15 minutes for access tokens, 7 days for refresh tokens. Reject tokens with missing `exp`. Reject tokens with `exp` more than a maximum allowed lifetime in the future — this prevents "forever" tokens. (CWE-613)
+
+25. **Validate token audience and issuer.** Validate `aud` and `iss` claims on every token verification. A token issued for Service A must not be accepted by Service B. Reject tokens with missing `aud` or `iss` when these claims are expected. (CWE-347)
+
+26. **Implement JWK Set rotation and kid verification.** Fetch public keys from a JWKS endpoint. Cache with TTL. Support key rotation by matching the `kid` header to keys in the set. Handle key rollover gracefully — accept both old and new keys during the rotation window. (CWE-327)
+
+27. **Choose signed vs encrypted JWTs correctly.** Use JWS (signed) when you need integrity verification but the payload is not sensitive. Use JWE (encrypted) when the token contains PII, roles, or other sensitive data that should not be readable by intermediaries. Never send sensitive claims in an unencrypted JWT. (CWE-311)
+
+### OAuth and OIDC
+
+28. **Enforce PKCE for all OAuth authorization code flows.** Use PKCE (Proof Key for Code Exchange) for all clients — not just public clients. Generate a cryptographic random `code_verifier`, derive `code_challenge` with S256 method. Reject authorization flows without PKCE. (RFC 7636, CWE-352)
+
+29. **Validate the state parameter.** Generate a cryptographic random `state` parameter for every authorization request. Bind it to the user's session. Validate it on the callback. This prevents CSRF attacks in the OAuth flow. (CWE-352)
+
+30. **Enforce strict redirect URI matching.** Register exact redirect URIs. Do not use wildcard patterns or prefix matching. Reject callbacks to unregistered URIs. A permissive redirect URI allows attackers to steal authorization codes. (CWE-601)
+
+31. **Store tokens server-side in a BFF pattern.** Store access and refresh tokens server-side in a backend-for-frontend. The browser gets an httpOnly session cookie pointing to the BFF session. The BFF proxies API calls with the stored token. Tokens never reach client-side JavaScript. (CWE-922)
+
+32. **Rotate refresh tokens on every use.** Issue a new refresh token with every refresh request. Invalidate the old one. If a previously-used refresh token is presented again, invalidate the entire token family (assume compromise). This limits the window of refresh token theft. (CWE-613)
 
 ## Patterns
 
@@ -394,6 +440,296 @@ app.post("/upload", (req, res) => {
 ```
 
 **Why it's wrong:** The attacker controls the filename and extension. Uploading `shell.php` to a directory served by Apache/Nginx with PHP enabled gives the attacker remote code execution. Uploading `exploit.html` enables stored XSS. Storing in the webroot with the original name is a double vulnerability: path traversal via the filename and arbitrary file execution.
+
+### XXE Prevention
+
+#### Do This
+
+```python
+# Python — use defusedxml to prevent XXE (CWE-611)
+import defusedxml.ElementTree as ET
+
+def parse_xml_safely(xml_string: str):
+    """Parse XML with external entities and DTDs disabled."""
+    return ET.fromstring(xml_string)
+```
+
+```typescript
+// Node.js — use fast-xml-parser with entity processing disabled
+import { XMLParser } from "fast-xml-parser";
+
+function parseXmlSafely(xmlString: string) {
+  // Reject input containing DOCTYPE declarations (external entity vector)
+  if (/<!DOCTYPE/i.test(xmlString)) {
+    throw new Error("DOCTYPE declarations are not allowed");
+  }
+
+  const parser = new XMLParser({
+    processEntities: false,       // Do not resolve XML entities
+    allowBooleanAttributes: true,
+    ignoreAttributes: false,
+  });
+  return parser.parse(xmlString);
+}
+```
+
+#### Not This
+
+```python
+# Standard library with default settings — XXE enabled (CWE-611)
+import xml.etree.ElementTree as ET
+
+def parse_xml(xml_string: str):
+    # External entities are processed by default — attacker can read local files
+    # <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+    return ET.fromstring(xml_string)
+```
+
+**Why it's wrong:** The default XML parser processes external entities. An attacker sends XML containing `<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>` and the parser reads the local file, exfiltrating its contents in the response. `defusedxml` disables external entities, DTD processing, and entity expansion by default.
+
+### JWT Algorithm Confusion Prevention
+
+#### Do This
+
+```python
+# Python — specify algorithm explicitly, reject alg:none and HS256 when using RS256
+import jwt
+
+PUBLIC_KEY = load_rsa_public_key()  # Load from JWKS or config
+EXPECTED_ALGORITHM = "RS256"
+
+def verify_token(token: str) -> dict:
+    """Verify JWT with explicit algorithm — never trust the token's alg header."""
+    return jwt.decode(
+        token,
+        key=PUBLIC_KEY,
+        algorithms=[EXPECTED_ALGORITHM],  # Allowlist — only RS256 accepted
+        options={
+            "require": ["exp", "iss", "aud"],  # Reject tokens missing these claims
+        },
+        audience="https://api.example.com",
+        issuer="https://auth.example.com",
+    )
+```
+
+```typescript
+// Node.js — jose library with explicit algorithm enforcement
+import { jwtVerify } from "jose";
+
+const JWKS = createRemoteJWKSet(new URL("https://auth.example.com/.well-known/jwks.json"));
+
+async function verifyToken(token: string) {
+  const { payload } = await jwtVerify(token, JWKS, {
+    algorithms: ["RS256"],           // Only accept RS256
+    audience: "https://api.example.com",
+    issuer: "https://auth.example.com",
+    requiredClaims: ["exp", "iss", "aud"],
+  });
+  return payload;
+}
+```
+
+#### Not This
+
+```python
+# Trusting the token's alg header — algorithm confusion attack (CWE-347)
+import jwt
+
+PUBLIC_KEY = load_rsa_public_key()
+
+def verify_token(token: str) -> dict:
+    # No algorithms parameter — library reads alg from the token header
+    # Attacker sets alg: HS256 and signs with the public key (which is public!)
+    return jwt.decode(token, key=PUBLIC_KEY)
+```
+
+**Why it's wrong:** When the server expects RS256 but does not enforce it, an attacker sets `alg: HS256` in the token header and signs the token using the RSA public key as the HMAC secret. Since the public key is public, the attacker can forge valid tokens. Always specify `algorithms=["RS256"]` server-side and never trust the `alg` claim from the token.
+
+### PKCE for OAuth Authorization Code Flow
+
+#### Do This
+
+```python
+# Python — PKCE implementation for OAuth authorization code flow (RFC 7636)
+import secrets
+import hashlib
+import base64
+
+def generate_pkce_pair() -> tuple[str, str]:
+    """Generate code_verifier and code_challenge for PKCE S256."""
+    # 32 bytes = 43 characters in base64url — meets RFC 7636 minimum (43) and maximum (128)
+    code_verifier = secrets.token_urlsafe(32)
+    # S256: SHA-256 hash of the verifier, base64url-encoded without padding
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return code_verifier, code_challenge
+
+# Authorization request — send the challenge
+code_verifier, code_challenge = generate_pkce_pair()
+session["pkce_verifier"] = code_verifier  # Store verifier in session
+
+auth_url = (
+    f"https://auth.example.com/authorize"
+    f"?response_type=code"
+    f"&client_id={CLIENT_ID}"
+    f"&redirect_uri={REDIRECT_URI}"
+    f"&code_challenge={code_challenge}"
+    f"&code_challenge_method=S256"
+    f"&state={generate_state_param()}"
+)
+
+# Token exchange — send the verifier
+async def exchange_code(code: str, session_verifier: str) -> dict:
+    response = await httpx.post("https://auth.example.com/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": REDIRECT_URI,
+        "client_id": CLIENT_ID,
+        "code_verifier": session_verifier,  # Server verifies SHA256(verifier) == challenge
+    })
+    return response.json()
+```
+
+```typescript
+// Node.js — PKCE with openid-client
+import { generators } from "openid-client";
+
+const codeVerifier = generators.codeVerifier();
+const codeChallenge = generators.codeChallenge(codeVerifier);
+
+// Store codeVerifier in session, send codeChallenge in auth request
+const authUrl = client.authorizationUrl({
+  scope: "openid profile",
+  code_challenge: codeChallenge,
+  code_challenge_method: "S256",
+  state: generators.state(),
+});
+
+// On callback — exchange code with verifier
+const tokenSet = await client.callback(REDIRECT_URI, params, {
+  code_verifier: codeVerifier,
+  state: expectedState,
+});
+```
+
+#### Not This
+
+```python
+# OAuth without PKCE — authorization code interception attack (CWE-352)
+auth_url = (
+    f"https://auth.example.com/authorize"
+    f"?response_type=code"
+    f"&client_id={CLIENT_ID}"
+    f"&redirect_uri={REDIRECT_URI}"
+    # No code_challenge — authorization code can be intercepted and exchanged by attacker
+)
+
+async def exchange_code(code: str) -> dict:
+    response = await httpx.post("https://auth.example.com/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": REDIRECT_URI,
+        "client_id": CLIENT_ID,
+        # No code_verifier — server cannot verify the caller is the same entity that started the flow
+    })
+    return response.json()
+```
+
+**Why it's wrong:** Without PKCE, an attacker who intercepts the authorization code (via malicious app on the device, open redirect, or referrer leakage) can exchange it for tokens. PKCE binds the token exchange to the original authorization request — only the party that generated the `code_verifier` can complete the exchange, because the authorization server verifies `SHA256(code_verifier) == code_challenge`.
+
+### BFF Token Storage Pattern
+
+#### Do This
+
+```typescript
+// Node.js/Express — BFF pattern: tokens stored server-side, browser gets httpOnly cookie
+import session from "express-session";
+import RedisStore from "connect-redis";
+
+app.use(session({
+  store: new RedisStore({ client: redisClient }),
+  secret: process.env.SESSION_SECRET,
+  cookie: {
+    httpOnly: true,    // Not accessible to JavaScript
+    secure: true,      // HTTPS only
+    sameSite: "lax",   // CSRF protection
+    maxAge: 3600000,   // 1 hour
+  },
+  resave: false,
+  saveUninitialized: false,
+}));
+
+// After OAuth callback — store tokens in session, never send to browser
+app.get("/auth/callback", async (req, res) => {
+  const tokens = await exchangeCodeForTokens(req.query.code);
+  req.session.accessToken = tokens.access_token;
+  req.session.refreshToken = tokens.refresh_token;
+  res.redirect("/dashboard");  // Browser gets session cookie, not tokens
+});
+
+// BFF proxy — attach stored token to upstream API calls
+app.use("/api", async (req, res) => {
+  if (!req.session.accessToken) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+  const response = await fetch(`${API_BASE}${req.path}`, {
+    method: req.method,
+    headers: {
+      "Authorization": `Bearer ${req.session.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: ["GET", "HEAD"].includes(req.method) ? undefined : JSON.stringify(req.body),
+  });
+  res.status(response.status).json(await response.json());
+});
+```
+
+```python
+# Python/FastAPI — BFF pattern with server-side token storage
+from starlette.middleware.sessions import SessionMiddleware
+
+app.add_middleware(SessionMiddleware, secret_key=os.environ["SESSION_SECRET"])
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request, code: str):
+    tokens = await exchange_code_for_tokens(code)
+    request.session["access_token"] = tokens["access_token"]
+    request.session["refresh_token"] = tokens["refresh_token"]
+    return RedirectResponse("/dashboard")
+
+@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def bff_proxy(request: Request, path: str):
+    token = request.session.get("access_token")
+    if not token:
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+    response = await httpx.request(
+        method=request.method,
+        url=f"{API_BASE}/{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        content=await request.body(),
+    )
+    return JSONResponse(status_code=response.status_code, content=response.json())
+```
+
+#### Not This
+
+```typescript
+// Storing tokens in localStorage — accessible to any XSS (CWE-922)
+app.get("/auth/callback", async (req, res) => {
+  const tokens = await exchangeCodeForTokens(req.query.code);
+  // Sending tokens to the browser — any XSS can steal them
+  res.json({
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token,
+  });
+});
+
+// Client stores in localStorage:
+// localStorage.setItem("access_token", data.access_token);
+// Any XSS payload can read localStorage and exfiltrate tokens
+```
+
+**Why it's wrong:** Tokens stored in `localStorage` or non-httpOnly cookies are accessible to any JavaScript running on the page. A single XSS vulnerability — in your code, a third-party script, or an injected ad — can steal the access and refresh tokens and send them to an attacker's server. The BFF pattern keeps tokens entirely server-side: the browser only holds an httpOnly session cookie that JavaScript cannot read, and all API calls flow through the backend proxy.
 
 ## Exceptions
 

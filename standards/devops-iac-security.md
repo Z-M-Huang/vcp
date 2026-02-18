@@ -3,7 +3,7 @@ id: devops-iac-security
 title: Infrastructure as Code Security
 scope: devops
 severity: high
-tags: [security, terraform, pulumi, cloudformation, iam, infrastructure]
+tags: [security, terraform, pulumi, cloudformation, iam, infrastructure, policy-as-code, drift-detection, tfsec, checkov]
 references:
   - title: "CIS AWS Foundations Benchmark"
     url: https://www.cisecurity.org/benchmark/amazon_web_services
@@ -40,6 +40,14 @@ Infrastructure as Code turns misconfigurations into version-controlled, reproduc
 ### State Management
 
 6. **Lock and encrypt state files.** Terraform state contains secrets in plaintext. Store state in encrypted backends (S3 + DynamoDB locking, Terraform Cloud, GCS with encryption). Never commit state files to version control. Restrict state file access to deployment pipelines only.
+
+### Continuous Validation
+
+7. **Run policy-as-code scanning in CI.** Run tfsec, checkov, Sentinel, or OPA on every PR that modifies IaC files. Block merging on policy failures. Define policies for: no public buckets, no wildcard IAM, encryption required, no open security groups. Treat policy violations as build failures, not warnings. (OWASP A02)
+
+8. **Deploy drift detection and alerting.** Alert when infrastructure diverges from declared state. Use `terraform plan` in CI on a schedule, or tools like driftctl or Spacelift. Manual console changes create untracked security gaps — a developer opening a port "temporarily" in the console bypasses all IaC review. Alert on drift and require reconciliation through IaC. (CWE-1188)
+
+9. **Pin Terraform module sources with checksums.** Pin all Terraform module sources to exact versions. Use `.terraform.lock.hcl` for provider locking. Prefer private registries for internal modules. Verify module source authenticity before first use. Never reference `ref=main` — use tagged releases with version constraints. (OWASP A03)
 
 ## Patterns
 
@@ -204,6 +212,100 @@ terraform {
 ```
 
 **Why it's wrong:** Terraform state files contain every secret value managed by Terraform in plaintext — database passwords, access keys, private endpoints. A local state file has no encryption, no access control, and no locking. Storing it in version control exposes all secrets to anyone with repo access. An encrypted remote backend with locking prevents both secret exposure and concurrent state corruption.
+
+### Policy-as-Code in CI
+
+#### Do This
+
+```yaml
+# GitHub Actions — run tfsec and checkov on IaC changes
+name: IaC Security
+on:
+  pull_request:
+    paths: ["infra/**/*.tf", "modules/**/*.tf"]
+
+permissions: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
+
+      - name: tfsec scan
+        uses: aquasecurity/tfsec-action@b842aa196dde9c455e90b85123123123f89f2222 # v1.0.3
+        with:
+          soft_fail: false  # Fail the build on findings
+
+      - name: checkov scan
+        uses: bridgecrewio/checkov-action@abcdef1234567890abcdef1234567890abcdef12 # v12.2.2
+        with:
+          directory: infra/
+          framework: terraform
+          soft_fail: false
+```
+
+#### Not This
+
+```hcl
+# No CI scanning — IaC changes merge without security review
+# This wildcard IAM policy ships to production unchecked:
+resource "aws_iam_policy" "app_policy" {
+  policy = jsonencode({
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "*"
+      Resource = "*"
+    }]
+  })
+}
+# Manual review missed the wildcard — tfsec would have caught it
+```
+
+**Why it's wrong:** Without automated policy scanning, IaC misconfigurations rely on human reviewers to catch every issue — wildcard IAM, public buckets, unencrypted storage, open security groups. Automated tools like tfsec and checkov check hundreds of policies on every PR and block merging before misconfigurations reach production.
+
+### Terraform Module Pinning
+
+#### Do This
+
+```hcl
+# Pin to exact version tag — immutable reference
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.5.1"  # Exact version, locked in .terraform.lock.hcl
+}
+
+# Private registry for internal modules — version pinned
+module "auth" {
+  source  = "app.terraform.io/myorg/auth/aws"
+  version = "2.1.0"
+}
+
+# Git source — pinned to tag, not branch
+module "shared" {
+  source = "git::https://github.com/myorg/tf-modules.git//networking?ref=v1.3.2"
+}
+```
+
+#### Not This
+
+```hcl
+# Unpinned branch reference — content changes without your knowledge
+module "vpc" {
+  source = "git::https://github.com/myorg/tf-modules.git//networking?ref=main"
+}
+
+# No version constraint — any version can be pulled
+module "auth" {
+  source = "terraform-aws-modules/vpc/aws"
+}
+```
+
+**Why it's wrong:** `ref=main` means the module content changes every time someone pushes to main — your infrastructure silently changes without any change to your IaC code. A compromised module or accidental breaking change propagates to every consumer. Pinning to exact versions with lock files ensures reproducible, auditable infrastructure changes.
 
 ## Exceptions
 

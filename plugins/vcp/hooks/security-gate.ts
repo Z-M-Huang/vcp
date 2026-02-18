@@ -2,7 +2,7 @@
  * VCP Security Gate — PreToolUse hook for Write|Edit|Bash
  *
  * Blocks tool calls that contain known dangerous code patterns.
- * Reads JSON from stdin, checks content against 14 regex patterns across 6 CWEs.
+ * Reads JSON from stdin, checks content against 19 regex patterns across 9 CWEs.
  *
  * For Write|Edit: checks new_string/content fields.
  * For Bash: checks the command field + Bash-specific obfuscation patterns.
@@ -181,6 +181,46 @@ if (/\.unserialize\s*\(/.test(content)) {
   findings.push({
     cwe: "CWE-502",
     message: "Insecure deserialization detected. node-serialize is never safe with untrusted data.",
+  });
+}
+
+// CWE-798: Database connection strings with embedded credentials
+if (/\b(mongodb|postgres|postgresql|mysql|redis|amqp):\/\/[^:\/\s]+:[^@\/\s]+@/i.test(content)) {
+  findings.push({
+    cwe: "CWE-798",
+    message: "Database connection string with embedded credentials detected. Use environment variables for connection strings.",
+  });
+}
+
+// CWE-798: Hardcoded Bearer/OAuth tokens (40+ char token values)
+if (/["']Bearer\s+[A-Za-z0-9+\/=_-]{40,}["']/.test(content)) {
+  findings.push({
+    cwe: "CWE-798",
+    message: "Hardcoded Bearer token detected. Use environment variables or a secret manager.",
+  });
+}
+
+// CWE-798: Google/GitHub API key prefixes
+if (/\b(AIza[0-9A-Za-z_-]{35}|ghp_[0-9A-Za-z]{36}|gho_[0-9A-Za-z]{36}|ghs_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22,})/.test(content)) {
+  findings.push({
+    cwe: "CWE-798",
+    message: "API key with known provider prefix detected. Use environment variables or a secret manager.",
+  });
+}
+
+// CWE-643: XPath injection via string concatenation
+if (/\.xpath\s*\(\s*(f["']|["'].*\+|["'].*\$\{|`[^`]*\$\{)/.test(content)) {
+  findings.push({
+    cwe: "CWE-643",
+    message: "XPath query with string concatenation detected. Use parameterized XPath queries.",
+  });
+}
+
+// CWE-1321: Prototype pollution via __proto__ or constructor.prototype assignment
+if (/\["?__proto__"?\]\s*=|\.__proto__\s*=|constructor\s*\[\s*["']prototype["']\s*\]|constructor\.prototype\s*[.=]/.test(content)) {
+  findings.push({
+    cwe: "CWE-1321",
+    message: "Prototype pollution pattern detected. Never assign to __proto__ or constructor.prototype.",
   });
 }
 

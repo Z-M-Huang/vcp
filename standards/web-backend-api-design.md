@@ -3,7 +3,7 @@ id: web-backend-api-design
 title: API Design and Security
 scope: web-backend
 severity: high
-tags: [api, rest, graphql, grpc, pagination, versioning, idempotency, owasp]
+tags: [api, rest, graphql, grpc, pagination, versioning, idempotency, owasp, business-logic, api-consumption, persisted-queries]
 references:
   - title: "RFC 7807 — Problem Details for HTTP APIs"
     url: https://www.rfc-editor.org/rfc/rfc7807
@@ -13,6 +13,10 @@ references:
     url: https://www.rfc-editor.org/rfc/rfc9457
   - title: "Google API Design Guide"
     url: https://cloud.google.com/apis/design
+  - title: "OWASP API Security Top 10 — API6:2023 Unrestricted Access to Sensitive Business Flows"
+    url: https://owasp.org/API-Security/editions/2023/en/0xa6-unrestricted-access-to-sensitive-business-flows/
+  - title: "OWASP API Security Top 10 — API10:2023 Unsafe Consumption of APIs"
+    url: https://owasp.org/API-Security/editions/2023/en/0xaa-unsafe-consumption-of-apis/
 ---
 
 ## Principle
@@ -54,6 +58,14 @@ AI-generated APIs consistently get these wrong: 200 responses with error bodies,
 ### Cross-Cutting
 
 12. **Validate all request schemas against a published specification.** Use OpenAPI/Swagger (REST), GraphQL schema validation (GraphQL), or protobuf definitions (gRPC) to validate incoming requests. Reject requests with unknown fields, missing required fields, or type mismatches. Never silently accept malformed requests.
+
+### API Protection
+
+13. **Use persisted GraphQL queries in production.** Use a persisted query allowlist. Clients send query hashes instead of full query strings. The server rejects unknown queries. This prevents arbitrary query execution, query injection, and simplifies rate limiting. (OWASP API8:2023)
+
+14. **Validate third-party API responses.** Treat responses from external APIs as untrusted input. Validate the schema, check for unexpected fields, enforce type constraints. An external API can return malicious payloads, unexpected formats, or oversized responses. Set timeouts and response size limits. (OWASP API10:2023)
+
+15. **Protect business-critical flows.** Sensitive business operations (checkout, money transfer, account signup, password reset) must have additional protections: rate limiting per user/IP, CAPTCHA or proof-of-work for automated abuse, bot detection, and step-up authentication for high-value transactions. (OWASP API6:2023)
 
 ## Patterns
 
@@ -410,6 +422,116 @@ async def create_order(request: Request):
 ```
 
 **Why it's wrong:** Without schema validation, the endpoint accepts any JSON shape. A string where an integer is expected causes a runtime crash deep in the service layer. Extra fields (`is_admin`, `price_override`) may be inadvertently respected downstream. Missing required fields cause confusing errors far from the entry point. Schema validation at the API boundary catches malformed requests immediately and returns clear, structured errors.
+
+### Third-Party API Response Validation
+
+#### Do This
+
+```python
+# Validate external API responses — treat as untrusted input (OWASP API10)
+import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+class ExternalPriceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # Reject unexpected fields
+
+    currency: str
+    amount: float
+    valid_until: str
+
+EXTERNAL_API_TIMEOUT = 5.0  # seconds
+MAX_RESPONSE_SIZE = 1024 * 1024  # 1 MB
+
+async def get_external_price(product_id: str) -> ExternalPriceResponse:
+    async with httpx.AsyncClient(timeout=EXTERNAL_API_TIMEOUT) as client:
+        response = await client.get(
+            f"https://pricing.partner.com/v1/prices/{product_id}",
+            headers={"Accept": "application/json"},
+        )
+        response.raise_for_status()
+
+        # Enforce response size limit before parsing
+        if len(response.content) > MAX_RESPONSE_SIZE:
+            raise ValueError("External API response exceeds size limit")
+
+        # Validate response shape and types against expected schema
+        try:
+            return ExternalPriceResponse(**response.json())
+        except ValidationError as e:
+            # Log the validation error with response details for debugging
+            logger.error(f"External API response validation failed: {e}")
+            raise ValueError("External API returned invalid response format")
+```
+
+#### Not This
+
+```python
+# Blindly trusting external API response — no validation (OWASP API10)
+async def get_external_price(product_id: str) -> dict:
+    response = httpx.get(f"https://pricing.partner.com/v1/prices/{product_id}")
+    # No timeout — hangs forever if partner is slow
+    # No size limit — partner could return gigabytes
+    # No schema validation — trusting whatever shape comes back
+    # No type checking — amount could be a string, currency could be missing
+    return response.json()  # Passed directly to business logic
+```
+
+**Why it's wrong:** External APIs are outside your control. A compromised partner, API version change, or unexpected response format can inject malicious data into your system. Without a timeout, your service hangs when the partner is slow. Without a size limit, a large response exhausts memory. Without schema validation, unexpected fields or wrong types propagate through your business logic and can cause data corruption, crashes, or security issues downstream.
+
+### Business-Critical Flow Protection
+
+#### Do This
+
+```python
+# Protect sensitive business operations — rate limit, verify, step up (OWASP API6)
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+
+@app.post("/checkout")
+@limiter.limit("3/minute")  # Per-IP rate limit for checkout
+async def checkout(request: Request):
+    user = request.state.user
+
+    # Per-user rate limit (in addition to per-IP)
+    if await rate_limiter.is_exceeded(f"checkout:{user.id}", max_requests=5, window=300):
+        return problem_response(429, "rate-limited", "Too Many Requests",
+            "Too many checkout attempts. Please wait before trying again.")
+
+    # Step-up authentication for high-value transactions
+    cart = await cart_service.get(user.id)
+    if cart.total > 500_00:  # Over $500 — require recent re-authentication
+        if not await auth_service.has_recent_auth(user.id, max_age_seconds=300):
+            return problem_response(403, "step-up-required", "Re-authentication Required",
+                "High-value transactions require recent authentication.")
+
+    # CAPTCHA verification for bot prevention
+    captcha_token = (await request.json()).get("captcha_token")
+    if not await captcha_service.verify(captcha_token):
+        return problem_response(403, "captcha-failed", "CAPTCHA Required",
+            "Please complete the CAPTCHA verification.")
+
+    order = await order_service.create_from_cart(user.id)
+    return JSONResponse(status_code=201, content=order.to_dict())
+```
+
+#### Not This
+
+```python
+# No protections on business-critical endpoint — vulnerable to automated abuse (OWASP API6)
+@app.post("/checkout")
+async def checkout(request: Request):
+    user = request.state.user
+    # No rate limiting — bots can submit thousands of checkouts per minute
+    # No CAPTCHA — automated scripts abuse the endpoint freely
+    # No step-up auth — compromised session can drain accounts
+    cart = await cart_service.get(user.id)
+    order = await order_service.create_from_cart(user.id)
+    return JSONResponse(status_code=201, content=order.to_dict())
+```
+
+**Why it's wrong:** Without rate limiting, an attacker with stolen credentials can drain an account in seconds by submitting rapid checkout requests. Without CAPTCHA, bots can automate account creation, coupon abuse, or inventory hoarding. Without step-up authentication, a session hijacked hours ago can authorize high-value transactions. Business-critical operations need layered defenses because they are the highest-value targets for attackers.
 
 ## Exceptions
 

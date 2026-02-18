@@ -3,7 +3,7 @@ id: devops-kubernetes-security
 title: Kubernetes Security
 scope: devops
 severity: high
-tags: [security, kubernetes, k8s, rbac, pod-security, network-policy]
+tags: [security, kubernetes, k8s, rbac, pod-security, network-policy, mtls, service-mesh, istio, falco, cluster-hardening, ingress]
 references:
   - title: "CIS Kubernetes Benchmark"
     url: https://www.cisecurity.org/benchmark/kubernetes
@@ -11,6 +11,10 @@ references:
     url: https://kubernetes.io/docs/concepts/security/pod-security-standards/
   - title: "NSA/CISA Kubernetes Hardening Guide"
     url: https://www.nsa.gov/Press-Room/News-Highlights/Article/Article/2716980/nsa-cisa-release-kubernetes-hardening-guidance/
+  - title: "Istio — Security"
+    url: https://istio.io/latest/docs/concepts/security/
+  - title: "Falco — Runtime Security"
+    url: https://falco.org/docs/
 ---
 
 ## Principle
@@ -42,6 +46,16 @@ Kubernetes defaults are optimized for ease of adoption, not security. By default
 ### Scanning and Admission Control
 
 7. **Scan manifests and images in CI.** Use kubesec, kube-score, or Trivy for manifest scanning. Scan container images before deployment. Enforce admission policies with OPA/Gatekeeper or Kyverno to reject non-compliant pods.
+
+### Service Mesh and Cluster Hardening
+
+8. **Enforce mTLS between services.** Use a service mesh (Istio, Linkerd) to enforce mutual TLS for all inter-service communication. Services authenticate each other via certificates, and all traffic is encrypted in transit. Without mTLS, a compromised pod can sniff plaintext traffic between other services on the cluster network. (ASVS V12, CWE-319)
+
+9. **Secure ingress with TLS and WAF.** Terminate TLS at the ingress controller with valid certificates. Deploy WAF rules (ModSecurity, AWS WAF) at the ingress layer. Use OAuth2 Proxy or similar for authentication at the edge. Rate limit at ingress before requests reach application pods. (ASVS V12)
+
+10. **Deploy runtime security monitoring.** Use Falco or equivalent for runtime anomaly detection. Alert on: unexpected process execution in containers, network connections to suspicious destinations, file access to sensitive paths, and privilege escalation attempts. Integrate alerts with incident response tooling. Without runtime monitoring, container compromise is detected only after damage is done. (CWE-778)
+
+11. **Harden cluster configuration.** Enable etcd encryption at rest. Restrict API server access with network policies and RBAC. Enable audit logging for all API server requests. Disable anonymous authentication. Restrict kubelet access. Use admission controllers to enforce security policies. Follow the NSA/CISA Kubernetes Hardening Guide as a baseline.
 
 ## Patterns
 
@@ -244,6 +258,192 @@ roleRef:
 ```
 
 **Why it's wrong:** `cluster-admin` grants unrestricted access to every resource in every namespace — including Secrets, RBAC bindings, and node-level operations. If the `deploy-bot` service account token is compromised (via a pod vulnerability, leaked token, or SSRF), the attacker has full cluster control: read all secrets, deploy malicious workloads, delete infrastructure, and pivot to the cloud provider via service account annotations. Scoped RBAC limits the blast radius to exactly what the service account needs.
+
+### mTLS with Istio
+
+#### Do This
+
+```yaml
+# Enforce strict mTLS across the mesh — no plaintext allowed
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system  # Mesh-wide policy
+spec:
+  mtls:
+    mode: STRICT
+
+---
+# Per-namespace policy for production
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: production
+spec:
+  mtls:
+    mode: STRICT
+```
+
+#### Not This
+
+```yaml
+# Permissive mode — allows plaintext connections alongside mTLS
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: production
+spec:
+  mtls:
+    mode: PERMISSIVE  # Accepts both plaintext and mTLS
+# A compromised pod can sniff unencrypted traffic between services
+```
+
+**Why it's wrong:** `PERMISSIVE` mode accepts both plaintext and mTLS connections. A compromised pod performing ARP spoofing or network sniffing can intercept plaintext traffic between services that haven't upgraded to mTLS. `STRICT` mode ensures all inter-service communication is encrypted and mutually authenticated — a compromised pod cannot impersonate another service or read traffic it wasn't intended to receive.
+
+### Runtime Security with Falco
+
+#### Do This
+
+```yaml
+# Deploy Falco as a DaemonSet for runtime anomaly detection
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: falco-system
+spec:
+  selector:
+    matchLabels:
+      app: falco
+  template:
+    metadata:
+      labels:
+        app: falco
+    spec:
+      serviceAccountName: falco
+      containers:
+        - name: falco
+          image: falcosecurity/falco:0.37.1
+          securityContext:
+            privileged: true  # Required for syscall monitoring
+          volumeMounts:
+            - name: dev
+              mountPath: /host/dev
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: custom-rules
+              mountPath: /etc/falco/rules.d
+      volumes:
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: custom-rules
+          configMap:
+            name: falco-custom-rules
+
+---
+# Custom rules for your workloads
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-custom-rules
+  namespace: falco-system
+data:
+  custom-rules.yaml: |
+    - rule: Unexpected shell in container
+      desc: Detect shell execution in non-shell containers
+      condition: >
+        spawned_process and container and
+        proc.name in (bash, sh, zsh) and
+        not container.image.repository in (allowed-debug-image)
+      output: >
+        Shell spawned in container
+        (container=%container.name image=%container.image.repository
+         proc=%proc.name user=%user.name)
+      priority: WARNING
+```
+
+#### Not This
+
+```yaml
+# No runtime monitoring — rely solely on pre-deployment scanning
+# A compromised container running a cryptominer, reverse shell,
+# or data exfiltration goes undetected until external damage is visible
+```
+
+**Why it's wrong:** Pre-deployment scanning catches known vulnerabilities in images, but cannot detect runtime attacks: zero-day exploits, compromised dependencies activating post-deploy, lateral movement, or insider threats. Without runtime monitoring like Falco, a compromised container can run cryptominers, establish reverse shells, exfiltrate data, and escalate privileges — all invisible to the operations team until the damage is done.
+
+### Cluster Hardening
+
+#### Do This
+
+```yaml
+# etcd encryption configuration
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  - resources:
+      - secrets
+    providers:
+      - aescbc:
+          keys:
+            - name: key1
+              secret: <base64-encoded-key>
+      - identity: {}  # Fallback for reading unencrypted secrets
+
+---
+# Audit policy — log all requests to sensitive resources
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  # Log all access to secrets
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets"]
+  # Log all changes to RBAC
+  - level: RequestResponse
+    resources:
+      - group: "rbac.authorization.k8s.io"
+        resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+  # Log all pod exec/attach
+  - level: RequestResponse
+    resources:
+      - group: ""
+        resources: ["pods/exec", "pods/attach"]
+```
+
+```bash
+# API server flags for hardening
+kube-apiserver \
+    --anonymous-auth=false \
+    --audit-log-path=/var/log/kubernetes/audit.log \
+    --audit-policy-file=/etc/kubernetes/audit-policy.yaml \
+    --encryption-provider-config=/etc/kubernetes/encryption-config.yaml \
+    --enable-admission-plugins=NodeRestriction,PodSecurity \
+    --kubelet-certificate-authority=/etc/kubernetes/pki/ca.crt
+```
+
+#### Not This
+
+```bash
+# Default cluster config — no hardening
+kube-apiserver \
+    --anonymous-auth=true \          # Anyone can query the API
+    --audit-log-path="" \            # No audit trail
+    # No encryption config          — secrets stored plaintext in etcd
+    # No admission plugins          — no policy enforcement
+    # No kubelet cert verification  — MITM attacks possible
+```
+
+**Why it's wrong:** Default Kubernetes configuration prioritizes ease of setup over security. Anonymous auth lets unauthenticated users query the API server. Unencrypted etcd means anyone with etcd access reads all Secrets in plaintext. No audit logging means compromise detection is impossible. No admission plugins means no enforcement of security policies. Each default left unchanged is an attack vector.
 
 ## Exceptions
 

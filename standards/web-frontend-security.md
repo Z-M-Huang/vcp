@@ -3,7 +3,7 @@ id: web-frontend-security
 title: Frontend Security
 scope: web-frontend
 severity: critical
-tags: [security, xss, csp, cors, auth-tokens, frontend, owasp, cwe]
+tags: [security, xss, csp, cors, auth-tokens, frontend, owasp, cwe, clickjacking, sri, postmessage, dom-xss, cwe-1021, cwe-829, cwe-345]
 references:
   - title: "OWASP — Cross-Site Scripting Prevention Cheat Sheet"
     url: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Scripting_Prevention_Cheat_Sheet.html
@@ -17,6 +17,14 @@ references:
     url: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
   - title: "CWE-352 — Cross-Site Request Forgery (CSRF)"
     url: https://cwe.mitre.org/data/definitions/352.html
+  - title: "CWE-1021 — Improper Restriction of Rendered UI Layers (Clickjacking)"
+    url: https://cwe.mitre.org/data/definitions/1021.html
+  - title: "CWE-829 — Inclusion of Functionality from Untrusted Control Sphere"
+    url: https://cwe.mitre.org/data/definitions/829.html
+  - title: "CWE-345 — Insufficient Verification of Data Authenticity"
+    url: https://cwe.mitre.org/data/definitions/345.html
+  - title: "MDN — Subresource Integrity"
+    url: https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity
 ---
 
 ## Principle
@@ -73,6 +81,20 @@ AI fails to generate XSS-safe code **86% of the time** (CWE-79/80). Auth token h
 ### Client-Side Validation
 
 13. **Validate on the client for UX. Validate on the server for security.** Client-side validation provides instant feedback to users — it is not a security boundary. Every validation rule on the client must be duplicated on the server. An attacker can bypass the browser entirely and send any request they want to your API.
+
+### Browser-Level Defenses
+
+14. **Set `frame-ancestors` in CSP to prevent clickjacking.** Set `frame-ancestors 'none'` or `frame-ancestors 'self'` in your Content Security Policy to prevent your pages from being embedded in attacker-controlled iframes. Also set `X-Frame-Options: DENY` (or `SAMEORIGIN`) as a fallback for older browsers that do not support CSP `frame-ancestors`. Clickjacking overlays invisible iframes to trick users into clicking buttons on your site — the user thinks they are clicking on the attacker's page, but they are actually performing actions on yours. (CWE-1021)
+
+15. **Never use DOM lookups for security-critical references where user HTML is rendered.** Do not rely on `document.getElementById()` or `document.forms` for security-critical element lookups when user-generated HTML exists on the page. Attackers can inject `<img id="csrf_token">` or `<form name="login">` elements that override your JavaScript references (DOM clobbering). Use unique prefixed IDs, namespace your security-critical elements, or use closures to capture references before user content is injected. (CWE-79)
+
+16. **Require Subresource Integrity (SRI) for all CDN-loaded scripts and stylesheets.** Every `<script>` and `<link>` tag loading from a CDN or third-party domain must include an `integrity` attribute with a SHA-384 or SHA-512 hash and `crossorigin="anonymous"`. If the CDN is compromised, SRI prevents the tampered script from executing — the browser compares the downloaded file's hash against the declared hash and blocks execution on mismatch. (CWE-829)
+
+17. **Sandbox third-party scripts.** Load analytics, ads, and third-party widgets in sandboxed iframes or use CSP to isolate their execution. Third-party scripts run with the same privileges as your own code — they can read cookies, access localStorage, and make requests as the user. Use `<iframe sandbox="allow-scripts">` or strict CSP `script-src` directives that separate first-party and third-party origins. (CWE-829)
+
+18. **Validate `postMessage` origin and data before processing.** Always verify `event.origin` against an explicit allowlist before processing `postMessage` events. Always validate the structure and type of `event.data`. Never use `*` as the target origin when sending messages containing sensitive data. Without origin validation, any page (including attacker-controlled sites) can send messages to your window. (CWE-345)
+
+19. **Never pass user input to DOM XSS sinks.** The following APIs execute or interpret strings as code or markup — never pass user-controlled values to them: `innerHTML`, `outerHTML`, `document.write()`, `document.writeln()`, `insertAdjacentHTML()`, `eval()`, `setTimeout(string)`, `setInterval(string)`, `new Function(string)`, `location.href` assignment from user data, `location.assign()`, `location.replace()`. Use `textContent` for rendering text, `createElement`/`setAttribute` for DOM construction, and the Trusted Types API where available to enforce sink safety at the browser level. (CWE-79)
 
 ## Patterns
 
@@ -202,6 +224,139 @@ Content-Security-Policy: default-src *; script-src 'self' 'unsafe-inline' 'unsaf
 ```
 
 **Why it's wrong:** `'unsafe-inline'` allows any inline `<script>` tag to execute — including those injected via XSS. `'unsafe-eval'` allows `eval()`, `Function()`, and `setTimeout("string")` — all XSS execution paths. `default-src *` allows loading resources from any origin. This CSP provides effectively zero protection.
+
+### Browser-Level Defense Patterns
+
+#### Clickjacking Prevention (R14)
+
+##### Do This
+
+```
+Content-Security-Policy: frame-ancestors 'none';
+X-Frame-Options: DENY
+```
+
+```typescript
+// Express middleware — set both headers for full browser coverage
+app.use((req, res, next) => {
+  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  res.setHeader("X-Frame-Options", "DENY");
+  next();
+});
+```
+
+##### Not This
+
+```
+// No frame protection headers at all — attacker embeds your page in an invisible iframe
+// and overlays a "Click here to win!" button on top of your "Transfer $1000" button
+```
+
+**Why it's wrong:** Without `frame-ancestors` or `X-Frame-Options`, any site can embed your page in an `<iframe>`. An attacker positions the iframe invisibly over a decoy page, tricking users into clicking your site's buttons (delete account, transfer funds, change settings) while they think they're interacting with the attacker's page.
+
+#### Subresource Integrity (R16)
+
+##### Do This
+
+```html
+<!-- SRI hash ensures CDN-served file hasn't been tampered with -->
+<script
+  src="https://cdn.example.com/lib@3.2.1/lib.min.js"
+  integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8w"
+  crossorigin="anonymous"
+></script>
+
+<link
+  rel="stylesheet"
+  href="https://cdn.example.com/styles@1.0.0/main.css"
+  integrity="sha384-Tn2K3lGq02mJGbBv0Sb5r0qXhMXhGJqoHhf4M1U7k0TzDEj55R2J50MFn2oXFnp"
+  crossorigin="anonymous"
+/>
+```
+
+##### Not This
+
+```html
+<!-- No integrity check — if the CDN is compromised, your users run the attacker's code -->
+<script src="https://cdn.example.com/lib.js"></script>
+```
+
+**Why it's wrong:** Without `integrity`, the browser trusts whatever the CDN serves. If the CDN is compromised or a supply chain attack replaces the file, every visitor to your site executes the attacker's JavaScript with full access to your page's cookies, DOM, and user data.
+
+#### postMessage Validation (R18)
+
+##### Do This
+
+```typescript
+const TRUSTED_ORIGINS = new Set([
+  "https://trusted.example.com",
+  "https://app.example.com",
+]);
+
+window.addEventListener("message", (event: MessageEvent) => {
+  // Always check origin against an explicit allowlist
+  if (!TRUSTED_ORIGINS.has(event.origin)) return;
+
+  // Validate data structure before processing
+  if (typeof event.data !== "object" || event.data === null) return;
+  if (typeof event.data.action !== "string") return;
+
+  processMessage(event.data);
+});
+
+// When sending, always specify the exact target origin
+targetWindow.postMessage({ action: "update" }, "https://trusted.example.com");
+```
+
+##### Not This
+
+```typescript
+// No origin check — any page can send messages to your window (CWE-345)
+window.addEventListener("message", (event) => {
+  processData(event.data); // Attacker opens your page and sends crafted messages
+});
+
+// Using wildcard target — sensitive data sent to any origin
+iframe.contentWindow.postMessage(sensitiveData, "*");
+```
+
+**Why it's wrong:** Without origin validation, any website that opens your page (via `window.open` or embedding) can send arbitrary `postMessage` events. The attacker crafts a malicious payload that your handler processes as if it came from a trusted source. Using `*` as the target origin means any page — including attacker-controlled ones — can receive your sensitive data.
+
+#### DOM XSS Sink Prevention (R19)
+
+##### Do This
+
+```typescript
+// Use textContent for user-provided text — it is never parsed as HTML
+element.textContent = userInput;
+
+// Use createElement + setAttribute for dynamic DOM construction
+const link = document.createElement("a");
+link.setAttribute("href", sanitizedUrl);
+link.textContent = userProvidedLabel;
+container.appendChild(link);
+
+// Use Trusted Types API to enforce sink safety (where supported)
+if (window.trustedTypes) {
+  const policy = trustedTypes.createPolicy("default", {
+    createHTML: (input: string) => DOMPurify.sanitize(input),
+  });
+}
+```
+
+##### Not This
+
+```typescript
+// Passing user input to DOM XSS sinks — all execute attacker code (CWE-79)
+element["innerHTML"] = userInput;              // Classic DOM XSS
+element["outerHTML"] = userInput;              // Replaces element with attacker HTML
+setTimeout(userControlledString, 0);           // Compiles string as code
+setInterval(userControlledString, 1000);       // Compiles string as code
+document.write("<div>" + userInput + "</div>"); // Injects raw HTML into page
+location.href = userSuppliedUrl;               // javascript: URI execution
+```
+
+**Why it's wrong:** Every one of these APIs interprets its input as executable code or raw markup. If `userInput` contains `<img src=x onerror="steal()">`, the `innerHTML` sink executes the attacker's JavaScript. `setTimeout("string")` and `new Function("string")` compile strings as code. `location.href = "javascript:..."` executes arbitrary JavaScript. These are the DOM XSS sinks — the endpoints where tainted data becomes code.
 
 ## Exceptions
 

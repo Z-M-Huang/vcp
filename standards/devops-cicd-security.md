@@ -3,7 +3,7 @@ id: devops-cicd-security
 title: CI/CD Pipeline Security
 scope: devops
 severity: critical
-tags: [security, cicd, github-actions, pipeline, secrets, supply-chain]
+tags: [security, cicd, github-actions, pipeline, secrets, supply-chain, slsa, provenance, artifact-signing]
 references:
   - title: "OWASP CI/CD Security Top 10"
     url: https://owasp.org/www-project-top-10-ci-cd-security-risks/
@@ -11,6 +11,10 @@ references:
     url: https://nvd.nist.gov/vuln/detail/CVE-2025-30066
   - title: "GitHub — Security Hardening for GitHub Actions"
     url: https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions
+  - title: "SLSA — Supply-chain Levels for Software Artifacts"
+    url: https://slsa.dev/
+  - title: "GitHub — Security Hardening — Using pull_request_target"
+    url: https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
 ---
 
 ## Principle
@@ -44,6 +48,12 @@ A CI/CD pipeline has the keys to the kingdom — it can read secrets, push to pr
 6. **Require signed commits for protected branches.** Configure branch protection to require verified commit signatures. This prevents an attacker who gains repo write access from injecting unsigned malicious commits.
 
 7. **Treat pipeline configuration as code — review all changes.** Require PR reviews for changes to `.github/workflows/`, `Jenkinsfile`, `.gitlab-ci.yml`, and similar pipeline configs. A malicious pipeline change can exfiltrate secrets, modify deployments, or compromise the supply chain.
+
+### Supply Chain Integrity
+
+8. **Sign build artifacts and generate provenance attestations.** Sign build artifacts (binaries, packages, container images) and generate provenance attestations documenting the build process. Use SLSA GitHub generator or cosign for attestation. Verify signatures before deployment. This ensures that artifacts have not been tampered with between build and deploy. Target SLSA Level 2+ for production artifacts.
+
+9. **Never checkout PR head ref in `pull_request_target` workflows.** `pull_request_target` runs with the base branch's secrets and permissions but can be triggered by fork PRs. If the workflow checks out the PR head, the fork's code runs with access to repository secrets. Use `pull_request` trigger for code-executing workflows. Use `pull_request_target` only for metadata operations (labeling, commenting) that never execute PR code. (CWE-829)
 
 ## Patterns
 
@@ -144,6 +154,138 @@ jobs:
 ```
 
 **Why it's wrong:** Long-lived AWS credentials stored as repository secrets can be exfiltrated by any workflow that reads secrets. If the secret leaks (via logs, a compromised action, or a fork PR), the attacker has persistent access until the key is rotated. OIDC tokens are short-lived (minutes), scoped to specific workflow runs, and never stored anywhere.
+
+### SLSA Provenance Attestation
+
+#### Do This
+
+```yaml
+# GitHub Actions — generate SLSA provenance for container images
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # Required for signing
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
+
+      - name: Build and push image
+        id: push
+        run: |
+          docker build -t ghcr.io/myorg/myapp:${{ github.ref_name }} .
+          docker push ghcr.io/myorg/myapp:${{ github.ref_name }}
+          # Capture the image digest for provenance attestation
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/myorg/myapp:${{ github.ref_name }} | cut -d@ -f2)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # Sign with cosign and attach SLSA provenance
+      - uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+      - name: Sign image
+        run: cosign sign ghcr.io/myorg/myapp:${{ github.ref_name }}
+        env:
+          COSIGN_EXPERIMENTAL: "true"  # Keyless signing via Fulcio
+
+  provenance:
+    needs: build
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.0.0
+    with:
+      image: ghcr.io/myorg/myapp
+      digest: ${{ needs.build.outputs.digest }}
+```
+
+#### Not This
+
+```yaml
+# No signing, no provenance — deploy whatever the build produces
+jobs:
+  deploy:
+    steps:
+      - run: docker build -t myapp:latest . && docker push myapp:latest
+      # No signature — anyone with registry write access can replace the image
+      # No provenance — no proof this artifact came from this repo's CI
+```
+
+**Why it's wrong:** Without artifact signing, a compromised registry or CI runner can inject malicious artifacts that look identical to legitimate ones. Without provenance attestation, there is no verifiable record of which source code, build process, and CI environment produced the artifact. SLSA provenance creates a tamper-proof chain from source to deployment.
+
+### Restricting pull_request_target
+
+#### Do This
+
+```yaml
+# Safe: pull_request_target only reads metadata, never checks out PR code
+name: Label PR
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      # Only read PR metadata — never checkout PR head code
+      - name: Add label
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['needs-review']
+            })
+
+---
+# Safe: use pull_request trigger for workflows that execute code
+name: CI
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
+      - run: npm test
+```
+
+#### Not This
+
+```yaml
+# DANGEROUS: pull_request_target checks out fork PR code with base branch secrets
+name: CI
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Fork's code now runs with access to repository secrets
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: npm test  # Attacker's code runs with your secrets
+```
+
+**Why it's wrong:** `pull_request_target` runs with the base branch's workflow definition and has access to repository secrets. Checking out the PR head ref (`github.event.pull_request.head.sha`) means a fork's malicious code executes with full secret access. The attacker can exfiltrate `GITHUB_TOKEN`, deployment keys, and any other repository secrets. Use `pull_request` trigger for any workflow that executes code from the PR.
 
 ## Exceptions
 
