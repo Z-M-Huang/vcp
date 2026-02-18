@@ -1,5 +1,13 @@
 # VCP — Vibe Coding Protocol
 
+![Visitors](https://visitor-badge.laobi.icu/badge?page_id=Z-M-Huang.vcp&style=flat-square)
+![GitHub release](https://img.shields.io/github/v/release/Z-M-Huang/vcp?style=flat-square)
+![GitHub license](https://img.shields.io/github/license/Z-M-Huang/vcp?style=flat-square)
+![GitHub last commit](https://img.shields.io/github/last-commit/Z-M-Huang/vcp?style=flat-square)
+![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
+
 **Make AI-generated code secure, maintainable, and architecturally sound from the first line.**
 
 VCP is a standards enforcement protocol for AI coding assistants. It injects security and architecture rules directly into the AI's context, blocks dangerous patterns in real time, and provides deep on-demand analysis — so the code your AI writes follows the same principles a senior engineer would enforce in code review.
