@@ -96,8 +96,8 @@ const SEVERITY_ORDER: Record<string, number> = {
 };
 
 const CHARS_PER_TOKEN = 4;
-const CORE_TOKEN_BUDGET = 700;
-const FULL_TOKEN_BUDGET = 1500;
+const CORE_TOKEN_BUDGET = 1200;
+const FULL_TOKEN_BUDGET = 2500;
 
 // --- Functions ---
 
