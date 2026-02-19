@@ -1,4 +1,10 @@
+<p align="right"><a href="https://github.com/Z-M-Huang/vcp/wiki/Home.zh">中文文档</a></p>
+
+<div align="center">
+
 # VCP — Vibe Coding Protocol
+
+**Make AI-generated code secure, maintainable, and architecturally sound from the first line.**
 
 ![Visitors](https://visitor-badge.laobi.icu/badge?page_id=Z-M-Huang.vcp&style=flat-square)
 ![GitHub release](https://img.shields.io/github/v/release/Z-M-Huang/vcp?style=flat-square)
@@ -8,9 +14,37 @@
 ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 
-**Make AI-generated code secure, maintainable, and architecturally sound from the first line.**
+![32 Standards](https://img.shields.io/badge/Standards-32-blue?style=flat-square)
+![9 Scopes](https://img.shields.io/badge/Scopes-9-green?style=flat-square)
+![OWASP Top 10](https://img.shields.io/badge/OWASP_Top_10-Covered-critical?style=flat-square)
+
+</div>
 
 VCP is a standards enforcement protocol for AI coding assistants. It injects security and architecture rules directly into the AI's context, blocks dangerous patterns in real time, and provides deep on-demand analysis — so the code your AI writes follows the same principles a senior engineer would enforce in code review.
+
+---
+
+## Table of Contents
+
+- [Why VCP Matters](#why-vcp-matters)
+- [What You Get](#what-you-get)
+  - [Prevention, Not Just Detection](#prevention-not-just-detection)
+  - [Coverage Backed by Industry Standards](#coverage-backed-by-industry-standards)
+  - [Organization-Wide Enforcement](#organization-wide-enforcement)
+- [How It Works](#how-it-works)
+  - [Layer 1: Proactive Context](#layer-1-proactive-context--prevent-before-writing)
+  - [Layer 2: On-Demand Scanning](#layer-2-on-demand-scanning--deep-analysis)
+  - [Layer 3: Real-Time Blocking](#layer-3-real-time-blocking--stop-dangerous-code-instantly)
+- [Quick Start](#quick-start)
+- [Organization-Wide Standards](#organization-wide-standards)
+- [Configuration](#configuration)
+- [Standards Coverage](#standards-coverage)
+- [Core Philosophy](#core-philosophy)
+- [Roadmap](#roadmap)
+- [How to Contribute](#how-to-contribute)
+- [Repo Structure](#repo-structure)
+- [References](#references)
+- [License](#license)
 
 ---
 
@@ -86,6 +120,9 @@ Skills scan code against 32 standards across 9 scopes using AI-driven analysis:
 
 A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking dangerous patterns before they reach disk:
 
+<details>
+<summary><strong>19 patterns across 9 CWEs</strong> — click to expand</summary>
+
 | CWE | What It Catches |
 |-----|----------------|
 | CWE-798 | Hardcoded secrets, AWS keys, private keys, JWT tokens, DB connection strings, Bearer tokens, API key prefixes |
@@ -96,6 +133,8 @@ A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking da
 | CWE-643 | XPath injection via string concatenation |
 | CWE-1321 | Prototype pollution via `__proto__` or `constructor.prototype` |
 | CWE-116 | Encoded data piped to shell execution |
+
+</details>
 
 **No single layer catches everything.** Layer 1 prevents violations at the source. Layer 3 blocks the most dangerous patterns instantly. Layer 2 catches the nuanced issues through deep analysis. Together they provide defense in depth.
 
@@ -141,51 +180,65 @@ Root Manifest (manifest.json)
     └── org-data-classification.md (your custom standard)
 ```
 
-### Set Up for Your Organization
+<details>
+<summary><strong>Set up for your organization</strong> — click to expand</summary>
 
-1. **Create your standards** — Write markdown files following the [VCP format spec](standards/README.md). Each standard has YAML frontmatter, a principle, numbered rules with code examples, and anti-patterns.
+#### 1. Create your standards
 
-2. **Create scope manifests** — JSON files listing your standards with severity and tags:
-   ```json
-   {
-     "scope": "org-internal",
-     "standards": [
-       {
-         "id": "org-logging-policy",
-         "url": "https://your-org.github.io/standards/org-logging-policy.md",
-         "severity": "high",
-         "tags": ["logging", "compliance"]
-       }
-     ]
-   }
-   ```
+Write markdown files following the [VCP format spec](standards/README.md). Each standard has YAML frontmatter, a principle, numbered rules with code examples, and anti-patterns.
 
-3. **Create a root manifest** — Point to your scope manifests (include VCP defaults or replace them):
-   ```json
-   {
-     "version": "2.0",
-     "repository": "https://github.com/your-org/vcp-standards",
-     "scopes": {
-       "core": {
-         "manifest": "https://your-org.github.io/standards/scopes/core.json",
-         "applies": "always"
-       },
-       "org-internal": {
-         "manifest": "https://your-org.github.io/standards/scopes/org-internal.json",
-         "applies": "always"
-       }
-     }
-   }
-   ```
+#### 2. Create scope manifests
 
-4. **Point VCP to your manifest** — Set the URL globally (applies to all projects) or per-project:
-   ```bash
-   # Global — all projects on this machine use your org's standards
-   /vcp-config global set standards_url https://your-org.github.io/standards/manifest.json
+JSON files listing your standards with severity and tags:
 
-   # Per-project — override for a specific repo
-   /vcp-config set standards_url https://your-org.github.io/standards/manifest.json
-   ```
+```json
+{
+  "scope": "org-internal",
+  "standards": [
+    {
+      "id": "org-logging-policy",
+      "url": "https://your-org.github.io/standards/org-logging-policy.md",
+      "severity": "high",
+      "tags": ["logging", "compliance"]
+    }
+  ]
+}
+```
+
+#### 3. Create a root manifest
+
+Point to your scope manifests (include VCP defaults or replace them):
+
+```json
+{
+  "version": "2.0",
+  "repository": "https://github.com/your-org/vcp-standards",
+  "scopes": {
+    "core": {
+      "manifest": "https://your-org.github.io/standards/scopes/core.json",
+      "applies": "always"
+    },
+    "org-internal": {
+      "manifest": "https://your-org.github.io/standards/scopes/org-internal.json",
+      "applies": "always"
+    }
+  }
+}
+```
+
+#### 4. Point VCP to your manifest
+
+Set the URL globally (applies to all projects) or per-project:
+
+```bash
+# Global — all projects on this machine use your org's standards
+/vcp-config global set standards_url https://your-org.github.io/standards/manifest.json
+
+# Per-project — override for a specific repo
+/vcp-config set standards_url https://your-org.github.io/standards/manifest.json
+```
+
+</details>
 
 ### What This Enables
 
@@ -210,6 +263,9 @@ VCP uses two config files:
 
 Manage via natural language with `/vcp-config`:
 
+<details>
+<summary><strong>Configuration examples</strong> — click to expand</summary>
+
 ```
 /vcp-config ignore core-architecture          # Suppress a standard
 /vcp-config ignore core-security/rule-3       # Suppress a specific rule
@@ -219,6 +275,8 @@ Manage via natural language with `/vcp-config`:
 /vcp-config set severity to high              # Change severity threshold
 /vcp-config global show                       # View global config
 ```
+
+</details>
 
 ---
 
@@ -286,6 +344,9 @@ See [GitHub Issues](https://github.com/Z-M-Huang/vcp/issues) for the full backlo
 
 ## Repo Structure
 
+<details>
+<summary><strong>Project layout</strong> — click to expand</summary>
+
 ```
 vcp/
 ├── standards/           # 32 AI-optimized principled standards across 9 scopes
@@ -303,6 +364,8 @@ vcp/
 ├── plugins/vcp/         # Claude Code plugin (skills, hooks, agents)
 └── .claude-plugin/      # Marketplace manifest
 ```
+
+</details>
 
 ---
 
