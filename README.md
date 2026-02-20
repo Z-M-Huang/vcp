@@ -143,8 +143,11 @@ A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking da
 ## Quick Start
 
 ```bash
+# Add the VCP marketplace
+/plugin marketplace add Z-M-Huang/vcp
+
 # Install the plugin
-claude plugin add vcp
+/plugin install vcp@vcp
 
 # Initialize your project (creates ~/.vcp/config.json + .vcp.json)
 /vcp-init
@@ -288,9 +291,9 @@ Manage via natural language with `/vcp-config`:
 |-------|-----------|----------------|
 | **Core** (always active) | 9 | Security, architecture, root cause analysis, code quality, error handling, testing, dependency management, secure defaults, API misuse prevention |
 | **Web Frontend** | 4 | XSS prevention, CSP, accessibility (WCAG 2.2), performance, component structure |
-| **Web Backend** | 5 | Injection prevention, API design, WebSocket/SSE, caching security, backend structure |
+| **Web Backend** | 6 | Injection prevention, API design, data access, WebSocket/SSE, caching security, backend structure |
 | **Database** | 2 | Encryption (TDE, column-level, key management), schema security (RLS, masking, audit) |
-| **Mobile** | 1 | Keychain/KeyStore, certificate pinning, deep links, biometrics, attestation |
+| **Mobile** | 2 | Keychain/KeyStore, certificate pinning, deep links, biometrics, attestation, platform configuration |
 | **Desktop** | 1 | Electron context isolation, Tauri capabilities, IPC validation, code signing |
 | **CLI** | 1 | Shell injection, argument injection, exit codes, signal handling |
 | **DevOps** | 4 | Containers, CI/CD, Infrastructure as Code, Kubernetes |

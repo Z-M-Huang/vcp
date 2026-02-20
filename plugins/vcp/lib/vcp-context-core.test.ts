@@ -18,6 +18,8 @@ import {
   formatContext,
   flattenV2Manifest,
   FALLBACK_MESSAGE,
+  CHARS_PER_TOKEN,
+  CORE_TOKEN_BUDGET,
   type Manifest,
   type ManifestV2Root,
   type ScopeManifestFile,
@@ -530,9 +532,9 @@ describe("formatContext", () => {
   });
 
   test("truncates lowest-severity standards when over budget", () => {
-    // Create many low-severity rules to exceed the ~700-token core budget
+    // Generate enough low-severity rules to exceed the core-only budget.
     const longRules = Array.from(
-      { length: 50 },
+      { length: 100 },
       (_, i) => `This is a deliberately verbose rule number ${i + 1} that takes up space in the token budget.`,
     );
     const rules: ScopedRules = {
@@ -545,7 +547,7 @@ describe("formatContext", () => {
     // Critical standard should survive truncation
     expect(output).toContain("**Security** (critical)");
     // Low-severity standard should be truncated if budget is exceeded
-    const charBudget = 700 * 4;
+    const charBudget = CORE_TOKEN_BUDGET * CHARS_PER_TOKEN;
     expect(output.length).toBeLessThanOrEqual(charBudget + 200); // Allow small margin for edge cases
   });
 
