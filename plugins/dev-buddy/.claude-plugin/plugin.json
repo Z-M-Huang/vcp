@@ -1,0 +1,19 @@
+{
+  "name": "dev-buddy",
+  "version": "0.2.0",
+  "description": "Multi-AI pipeline orchestration with session management, preset providers, and hybrid backend routing",
+  "author": {
+    "name": "Z-M-Huang"
+  },
+  "repository": "https://github.com/Z-M-Huang/vcp",
+  "license": "MIT",
+  "keywords": [
+    "orchestration",
+    "pipeline",
+    "code-review",
+    "feature-implement",
+    "codex",
+    "task-based"
+  ],
+  "skills": "./skills/"
+}

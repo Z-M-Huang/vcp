@@ -1,0 +1,190 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["approved", "needs_changes", "needs_clarification", "rejected"]
+    },
+    "acceptance_criteria_verification": {
+      "type": "object",
+      "description": "Verifies each acceptance criterion from user-story.json against the implementation",
+      "required": ["total", "verified", "missing", "details"],
+      "properties": {
+        "total": {
+          "type": "number",
+          "description": "Total number of acceptance criteria"
+        },
+        "verified": {
+          "type": "number",
+          "description": "Number of ACs verified as IMPLEMENTED"
+        },
+        "missing": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of AC IDs not implemented"
+        },
+        "details": {
+          "type": "array",
+          "description": "Array of AC verification results",
+          "items": {
+            "type": "object",
+            "required": ["ac_id", "status", "evidence", "notes"],
+            "properties": {
+              "ac_id": {
+                "type": "string",
+                "description": "Acceptance criterion ID (e.g., 'AC1')"
+              },
+              "status": {
+                "type": "string",
+                "enum": ["IMPLEMENTED", "NOT_IMPLEMENTED", "PARTIAL"],
+                "description": "Implementation status for this AC"
+              },
+              "evidence": {
+                "type": "string",
+                "description": "Code location or test proving implementation"
+              },
+              "notes": {
+                "type": "string",
+                "description": "Additional notes about the verification"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "needs_clarification": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, pauses autonomous pipeline to ask user for clarification on ambiguous requirements"
+    },
+    "clarification_questions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Questions to ask user when needs_clarification is true"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief overall assessment"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique issue ID for references (e.g., issue-1)"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["error", "warning", "suggestion"]
+          },
+          "category": {
+            "type": "string",
+            "enum": ["security", "error_handling", "resource", "config", "quality", "concurrency", "logging", "deps", "api", "compat", "test", "over_engineering"],
+            "description": "Review category this issue belongs to"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "suggestion": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "severity", "category", "file", "line", "message", "suggestion"],
+        "additionalProperties": false
+      }
+    },
+    "checklist": {
+      "type": "object",
+      "properties": {
+        "security_owasp": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL"],
+          "description": "OWASP Top 10 security check"
+        },
+        "error_handling": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL"],
+          "description": "Error handling completeness"
+        },
+        "resource_management": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL"],
+          "description": "Memory/connection leak prevention"
+        },
+        "configuration": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL"],
+          "description": "No hardcoded secrets/values"
+        },
+        "code_quality": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL"],
+          "description": "Readability, simplification, comments, DRY"
+        },
+        "concurrency": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL", "N/A"],
+          "description": "Race conditions, thread safety"
+        },
+        "logging": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL"],
+          "description": "No secrets in logs, appropriate logging"
+        },
+        "dependencies": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL"],
+          "description": "No CVEs, minimal dependencies"
+        },
+        "api_design": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL", "N/A"],
+          "description": "Input validation, response consistency"
+        },
+        "backward_compatibility": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL", "N/A"],
+          "description": "Breaking changes, migration"
+        },
+        "testing": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL"],
+          "description": "Test coverage and quality"
+        },
+        "over_engineering": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL"],
+          "description": "Unnecessary complexity detection"
+        }
+      },
+      "required": [
+        "security_owasp",
+        "error_handling",
+        "resource_management",
+        "configuration",
+        "code_quality",
+        "concurrency",
+        "logging",
+        "dependencies",
+        "api_design",
+        "backward_compatibility",
+        "testing",
+        "over_engineering"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": ["status", "needs_clarification", "clarification_questions", "summary", "issues", "checklist", "acceptance_criteria_verification"],
+  "additionalProperties": false
+}

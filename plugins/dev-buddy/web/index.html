@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dev Buddy Configuration</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+  <script src="app.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body x-data="devBuddyApp()" x-init="init()">
+
+  <header>
+    <h1>Dev Buddy</h1>
+    <p class="subtitle">AI Pipeline Configuration</p>
+  </header>
+
+  <nav>
+    <button
+      x-bind:class="{ active: tab === 'presets' }"
+      x-on:click="tab = 'presets'; stopSessionPolling(); loadPresets()"
+    >AI Presets</button>
+    <button
+      x-bind:class="{ active: tab === 'pipeline' }"
+      x-on:click="tab = 'pipeline'; stopSessionPolling(); loadPipelineConfig()"
+    >Pipeline Config</button>
+    <button
+      x-bind:class="{ active: tab === 'sessions' }"
+      x-on:click="tab = 'sessions'; loadSessions(); startSessionPolling()"
+    >Session Managers</button>
+  </nav>
+
+  <!-- Error banner -->
+  <div class="error-banner" x-show="errorMsg" x-text="errorMsg"></div>
+
+  <!-- Success banner -->
+  <div class="success-banner" x-show="successMsg" x-text="successMsg"></div>
+
+  <!-- ============ AI Presets Tab ============ -->
+  <section x-show="tab === 'presets'" class="tab-content">
+    <div class="section-header">
+      <h2>AI Presets</h2>
+      <button class="btn-primary" x-on:click="showAddPreset = !showAddPreset">
+        + Add Preset
+      </button>
+    </div>
+
+    <!-- Add Preset Form -->
+    <div class="card" x-show="showAddPreset">
+      <h3>Add New Preset</h3>
+      <form x-on:submit.prevent="addPreset()">
+        <label>
+          Preset Name (key)
+          <input type="text" x-model="newPreset.key" placeholder="e.g. openrouter" required>
+        </label>
+        <label>
+          Display Name
+          <input type="text" x-model="newPreset.name" placeholder="e.g. OpenRouter API" required>
+        </label>
+        <label>
+          Type
+          <select x-model="newPreset.type">
+            <option value="subscription">Subscription (Claude Task tool)</option>
+            <option value="api">API (Direct API + session manager)</option>
+            <option value="cli">CLI (Command-line tool)</option>
+          </select>
+        </label>
+        <label>
+          Description (optional)
+          <input type="text" x-model="newPreset.description" placeholder="Optional description">
+        </label>
+
+        <!-- API-specific fields -->
+        <template x-if="newPreset.type === 'api'">
+          <div>
+            <label>
+              Base URL
+              <input type="url" x-model="newPreset.base_url" placeholder="https://openrouter.ai/api/v1" required>
+            </label>
+            <label>
+              Provider Credential
+              <input type="password" x-model="newPreset.api_key" placeholder="Enter provider credential" required>
+            </label>
+            <label>
+              Models (comma-separated)
+              <input type="text" x-model="newPreset.models_str" placeholder="anthropic/claude-sonnet-4-5,anthropic/claude-opus-4">
+            </label>
+          </div>
+        </template>
+
+        <!-- CLI-specific fields -->
+        <template x-if="newPreset.type === 'cli'">
+          <div>
+            <label>
+              Command
+              <input type="text" x-model="newPreset.command" placeholder="e.g. codex" required>
+            </label>
+            <label>
+              Arguments (comma-separated, optional)
+              <input type="text" x-model="newPreset.args_str" placeholder="e.g. --model,o3">
+            </label>
+          </div>
+        </template>
+
+        <div class="form-actions">
+          <button type="submit" class="btn-primary">Add Preset</button>
+          <button type="button" class="btn-secondary" x-on:click="showAddPreset = false; resetNewPreset()">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Presets list -->
+    <div x-show="loading.presets" class="loading">Loading presets...</div>
+
+    <template x-if="!loading.presets">
+      <div>
+        <template x-if="Object.keys(presets).length === 0">
+          <p class="empty-state">No presets configured. Add one above.</p>
+        </template>
+
+        <template x-for="[name, preset] in Object.entries(presets)" x-bind:key="name">
+          <div class="card preset-card">
+            <div class="preset-header">
+              <div>
+                <span class="preset-name" x-text="name"></span>
+                <span class="badge" x-bind:class="'badge-' + preset.type" x-text="preset.type"></span>
+              </div>
+              <button class="btn-danger btn-sm" x-on:click="deletePreset(name)">Remove</button>
+            </div>
+
+            <div class="preset-details">
+              <div x-text="preset.name" class="preset-display-name"></div>
+              <div x-show="preset.description" x-text="preset.description" class="preset-desc"></div>
+
+              <!-- API preset details -->
+              <template x-if="preset.type === 'api'">
+                <div class="api-details">
+                  <div class="detail-row">
+                    <span class="label">Base URL:</span>
+                    <span x-text="preset.base_url"></span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="label">Credential:</span>
+                    <span x-text="revealedKeys[name] || preset.api_key"></span>
+                    <button
+                      class="btn-sm btn-secondary"
+                      x-show="!revealedKeys[name]"
+                      x-on:click="revealKey(name)"
+                    >Reveal</button>
+                    <button
+                      class="btn-sm btn-secondary"
+                      x-show="revealedKeys[name]"
+                      x-on:click="hideKey(name)"
+                    >Hide</button>
+                  </div>
+                  <div class="detail-row" x-show="preset.models && preset.models.length > 0">
+                    <span class="label">Models:</span>
+                    <span x-text="Array.isArray(preset.models) ? preset.models.join(', ') : ''"></span>
+                  </div>
+                </div>
+              </template>
+
+              <!-- CLI preset details -->
+              <template x-if="preset.type === 'cli'">
+                <div class="cli-details">
+                  <div class="detail-row">
+                    <span class="label">Command:</span>
+                    <span x-text="preset.command"></span>
+                    <span x-show="preset.args && preset.args.length > 0" x-text="Array.isArray(preset.args) ? preset.args.join(' ') : ''"></span>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
+  </section>
+
+  <!-- ============ Pipeline Config Tab ============ -->
+  <section x-show="tab === 'pipeline'" class="tab-content">
+    <div class="section-header">
+      <h2>Pipeline Configuration</h2>
+      <button class="btn-primary" x-on:click="savePipelineConfig()" x-bind:disabled="saving.pipeline">
+        <span x-text="saving.pipeline ? 'Saving...' : 'Save Config'"></span>
+      </button>
+    </div>
+
+    <div x-show="loading.pipeline" class="loading">Loading pipeline config...</div>
+
+    <template x-if="!loading.pipeline && pipelineConfig">
+      <div>
+        <div class="card">
+          <h3>Pipeline Stages</h3>
+          <p class="hint">Select which AI preset handles each pipeline stage.</p>
+
+          <template x-for="stage in pipelineStages" x-bind:key="stage.key">
+            <div class="stage-row">
+              <label x-text="stage.label" class="stage-label"></label>
+              <select
+                x-model="pipelineConfig.pipeline.stages[stage.key].provider"
+                class="stage-select"
+              >
+                <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
+                  <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
+                </template>
+              </select>
+            </div>
+          </template>
+        </div>
+
+        <div class="card">
+          <h3>Pipeline Settings</h3>
+          <label>
+            Max Iterations per Reviewer
+            <input type="number" min="1" max="50" x-model.number="pipelineConfig.pipeline.max_iterations">
+          </label>
+          <label>
+            Team Name Pattern
+            <input type="text" x-model="pipelineConfig.pipeline.team_name_pattern">
+          </label>
+        </div>
+      </div>
+    </template>
+  </section>
+
+  <!-- ============ Session Managers Tab ============ -->
+  <section x-show="tab === 'sessions'" class="tab-content">
+    <div class="section-header">
+      <h2>Session Managers</h2>
+      <button class="btn-secondary" x-on:click="loadSessions()">Refresh</button>
+    </div>
+
+    <div x-show="loading.sessions" class="loading">Loading session status...</div>
+
+    <template x-if="!loading.sessions">
+      <div>
+        <template x-if="sessions.length === 0">
+          <p class="empty-state">No session managers are currently running.</p>
+        </template>
+
+        <template x-for="session in sessions" x-bind:key="session.preset_name || session.port">
+          <div class="card session-card">
+            <div class="session-header">
+              <span class="preset-name" x-text="session.preset_name"></span>
+              <span
+                class="health-badge"
+                x-bind:class="'health-' + (session.health || 'unknown')"
+                x-text="session.health || 'unknown'"
+              ></span>
+            </div>
+            <div class="session-details">
+              <div class="detail-row">
+                <span class="label">Port:</span>
+                <span x-text="session.port"></span>
+              </div>
+              <div class="detail-row" x-show="session.uptime_ms !== undefined">
+                <span class="label">Uptime:</span>
+                <span x-text="formatUptime(session.uptime_ms)"></span>
+              </div>
+              <div class="detail-row" x-show="session.task_count !== undefined">
+                <span class="label">Tasks:</span>
+                <span x-text="session.task_count"></span>
+              </div>
+              <div class="detail-row error-detail" x-show="session.error">
+                <span class="label">Error:</span>
+                <span x-text="session.error"></span>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
+  </section>
+
+</body>
+</html>
