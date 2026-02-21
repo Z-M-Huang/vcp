@@ -193,7 +193,7 @@ Expert root cause analyst combining debugging skills with systematic fault isola
 | **Tools** | Read, Write, Glob, Grep, Bash, LSP |
 | **Disallowed** | Edit |
 | **Recommended Models** | sonnet, opus |
-| **Used By** | `/bug-fix` pipeline (dual RCA phase) |
+| **Used By** | `/dev-buddy-bug-fix` pipeline (dual RCA phase) |
 
 ## Purpose
 

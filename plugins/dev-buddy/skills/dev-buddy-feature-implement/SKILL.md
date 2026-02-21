@@ -1,7 +1,7 @@
 ---
-name: feature-implement
-description: Start the multi-AI pipeline. Plan -> Review -> Implement (loop until reviews approve). Codex final gate.
-plugin-scoped: true
+name: dev-buddy-feature-implement
+description: Dev Buddy multi-AI pipeline. Plan -> Review -> Implement (loop until reviews approve). Codex final gate.
+user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete, SendMessage
 ---
 

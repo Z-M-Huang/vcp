@@ -106,7 +106,7 @@ function showStatus(): void {
   if (!fs.existsSync(TASK_DIR)) {
     logInfo('No .task directory found. Pipeline not started.');
     console.log('');
-    console.log('To start, invoke /feature-implement or /bug-fix with your request.');
+    console.log('To start, invoke /dev-buddy-feature-implement or /dev-buddy-bug-fix with your request.');
     return;
   }
 

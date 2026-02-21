@@ -1,7 +1,7 @@
 ---
-name: bug-fix
-description: Bug-fix pipeline. Dual RCA (Sonnet+Opus) -> Consolidation -> Codex Validation -> Implementation -> Code Review.
-plugin-scoped: true
+name: dev-buddy-bug-fix
+description: Dev Buddy bug-fix pipeline. Dual RCA (Sonnet+Opus) -> Consolidation -> Codex Validation -> Implementation -> Code Review.
+user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete, SendMessage
 ---
 
@@ -27,7 +27,7 @@ This pipeline uses a **task-based approach with hook enforcement**:
 
 **Key insight:** `blockedBy` is *data*, not an instruction. `TaskList()` shows all tasks with their `blockedBy` fields — only claim tasks where blockedBy is empty or all dependencies are completed.
 
-**Bug-fix differentiator:** Unlike `/feature-implement`, this pipeline does NOT use requirements-gatherer, planner, or plan-reviewer agents. The orchestrator itself consolidates dual RCA findings and writes `user-story.json` + `plan-refined.json` directly.
+**Bug-fix differentiator:** Unlike `/dev-buddy-feature-implement`, this pipeline does NOT use requirements-gatherer, planner, or plan-reviewer agents. The orchestrator itself consolidates dual RCA findings and writes `user-story.json` + `plan-refined.json` directly.
 
 ---
 
@@ -247,7 +247,7 @@ After both return, proceed to consolidation.
 
 ## Orchestrator Consolidation (Between T2 Completion and T3 Start)
 
-**This is the key differentiator from `/feature-implement`.** The orchestrator does this work itself — it is NOT a task, NOT delegated to an agent.
+**This is the key differentiator from `/dev-buddy-feature-implement`.** The orchestrator does this work itself — it is NOT a task, NOT delegated to an agent.
 
 When both T1 and T2 are completed (detected via TaskList), the orchestrator:
 

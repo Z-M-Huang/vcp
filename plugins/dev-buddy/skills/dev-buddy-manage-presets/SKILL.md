@@ -1,7 +1,7 @@
 ---
-name: manage-presets
-description: Manage AI provider presets (list, add, update, remove)
-plugin-scoped: true
+name: dev-buddy-manage-presets
+description: Dev Buddy AI provider presets management (list, add, update, remove)
+user-invocable: true
 ---
 
 # Manage AI Provider Presets

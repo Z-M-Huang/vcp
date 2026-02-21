@@ -1,7 +1,7 @@
 ---
-name: config
-description: Launch web configuration portal for managing presets, pipeline config, and session managers
-plugin-scoped: true
+name: dev-buddy-config
+description: Dev Buddy web configuration portal for managing presets, pipeline config, and session managers
+user-invocable: true
 ---
 
 # Dev Buddy Web Configuration Portal

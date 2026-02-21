@@ -26,7 +26,7 @@ This pipeline uses a **Task + Hook architecture** with a persistent pipeline tea
 ## Quick Start
 
 ```
-/feature-implement Add user authentication with JWT tokens
+/dev-buddy-feature-implement Add user authentication with JWT tokens
 ```
 
 This command handles the entire workflow:

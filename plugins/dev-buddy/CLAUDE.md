@@ -68,7 +68,7 @@ Requirements gathering uses Agent Teams (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 ### How It Works
 
 ```
-User provides initial description via /feature-implement
+User provides initial description via /dev-buddy-feature-implement
          |
          v
     Lead (orchestrator/main session)
@@ -171,11 +171,11 @@ This maintains the sequential requirement and ensures the same reviewer validate
 ## Quick Start
 
 ```
-/feature-implement [description of what you want]    # Feature development
-/bug-fix [description of the bug]           # Bug fix
+/dev-buddy-feature-implement [description of what you want]    # Feature development
+/dev-buddy-bug-fix [description of the bug]           # Bug fix
 ```
 
-### Feature Development (`/feature-implement`)
+### Feature Development (`/dev-buddy-feature-implement`)
 
 The pipeline will:
 1. **Reset, create pipeline team & task chain** with dependencies
@@ -188,7 +188,7 @@ The pipeline will:
 
 **No phase skipping:** Every pipeline run executes ALL phases in order. Pre-existing plans or context from plan mode are input to the specialists, not a substitute for the pipeline. Never skip team-based requirements gathering.
 
-### Bug Fix (`/bug-fix`)
+### Bug Fix (`/dev-buddy-bug-fix`)
 
 The bug-fix pipeline uses a different early-phase approach optimized for diagnosing and fixing bugs:
 
@@ -198,7 +198,7 @@ The bug-fix pipeline uses a different early-phase approach optimized for diagnos
 4. **Implementation** — Minimal fix targeting the root cause
 5. **Code Reviews** (task-enforced) — Sequential: Sonnet → Opus → Codex gate
 
-**Key differences from `/feature-implement`:**
+**Key differences from `/dev-buddy-feature-implement`:**
 - No requirements-gatherer, planner, or plan-reviewer agents
 - Orchestrator writes user-story.json and plan-refined.json directly from RCA findings
 - 7 tasks instead of 9 (T1+T2 parallel RCA, T3 Codex validation, T4 implementation, T5-T7 code reviews)
@@ -252,8 +252,8 @@ Codex (independent AI) provides final approval:
 
 | Skill | Purpose | Phase |
 |-------|---------|-------|
-| `/feature-implement` | Start feature development pipeline (entry point) | All |
-| `/bug-fix` | Start bug-fix pipeline — dual RCA, consolidation, Codex validation, fix, code review | All |
+| `/dev-buddy-feature-implement` | Start feature development pipeline (entry point) | All |
+| `/dev-buddy-bug-fix` | Start bug-fix pipeline — dual RCA, consolidation, Codex validation, fix, code review | All |
 
 **Note:** Requirements gathering, planning, review (sonnet/opus), and implementation are handled by custom agents via Task tool. Codex final gate review uses the `codex-reviewer` agent via `Task(subagent_type: "dev-buddy:codex-reviewer", model: "external")`.
 
@@ -359,7 +359,7 @@ If stuck:
 | Code Review #2 | code-reviewer | opus | Deep code analysis |
 | Code Review #3 | **Codex** | external | Independent final gate |
 
-### Bug-Fix Pipeline (`/bug-fix`)
+### Bug-Fix Pipeline (`/dev-buddy-bug-fix`)
 
 | Phase | Agent | Model | Reason |
 |-------|-------|-------|--------|
