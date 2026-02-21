@@ -353,7 +353,7 @@ See [GitHub Issues](https://github.com/Z-M-Huang/vcp/issues) for the full backlo
 ```
 vcp/
 ├── standards/           # 32 AI-optimized principled standards across 9 scopes
-│   ├── manifest.json    # Root v2 manifest — full HTTPS URLs, org-customizable
+│   ├── manifest.json    # Root manifest — full HTTPS URLs, org-customizable
 │   ├── scopes/          # Per-scope manifest files
 │   ├── core-*.md        # Universal: security, architecture, testing, etc.
 │   ├── web-*.md         # Frontend and backend web standards

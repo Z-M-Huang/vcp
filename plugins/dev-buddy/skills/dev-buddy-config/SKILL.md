@@ -2,6 +2,7 @@
 name: dev-buddy-config
 description: Dev Buddy web configuration portal for managing presets, pipeline config, and session managers
 user-invocable: true
+allowed-tools: Bash
 ---
 
 # Dev Buddy Web Configuration Portal
@@ -44,7 +45,6 @@ The server also opens the browser automatically. If the browser does not open (e
 
 The portal stops automatically after 60 minutes of inactivity. To stop it manually:
 - Press `Ctrl+C` in the terminal running the server
-- Or use the shutdown endpoint: `curl -X POST http://localhost:{port}/shutdown`
 
 ## Security Notes
 

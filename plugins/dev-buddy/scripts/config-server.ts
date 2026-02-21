@@ -20,14 +20,16 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { readPresets, writePresets, validatePreset, maskApiKey, maskPresetKeys, CONFIG_DIR } from './preset-utils.ts';
-import { loadPipelineConfig, readSessionMappings, fetchWithTimeout } from './pipeline-config.ts';
+import { loadPipelineConfig, readSessionMappings, fetchWithTimeout, atomicWriteFile, validateConfig, DEFAULT_CONFIG } from './pipeline-config.ts';
 import type { Preset } from '../types/presets.ts';
+import { STAGE_DEFINITIONS } from '../types/stage-definitions.ts';
+import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
 
 // Allowed fields per preset type for field allowlisting (CWE-915)
 const ALLOWED_PRESET_FIELDS: Record<string, Set<string>> = {
   api: new Set(['type', 'name', 'description', 'base_url', 'api_key', 'models']),
   subscription: new Set(['type', 'name', 'description']),
-  cli: new Set(['type', 'name', 'description', 'command', 'args']),
+  cli: new Set(['type', 'name', 'description', 'command', 'args_template', 'resume_args_template', 'supports_resume', 'supports_reasoning_effort', 'reasoning_effort', 'timeout_ms', 'models']),
 };
 
 // Reveal rate limiting: Map<presetName, Array<timestamp>>
@@ -155,7 +157,7 @@ async function startConfigServer(cwd: string, idleTimeoutMinutes: number): Promi
 
       // CORS enforcement for ALL non-preflight requests — CWE-346.
       // Reject any request whose Origin header is present but not the exact server
-      // origin. This covers /api/*, /shutdown, and any future routes. Requests
+      // origin. This covers /api/* and any future routes. Requests
       // without an Origin header (e.g. direct curl, browser address-bar navigation)
       // are not cross-origin browser requests and are allowed through.
       if (origin && origin !== serverOrigin) {
@@ -170,12 +172,6 @@ async function startConfigServer(cwd: string, idleTimeoutMinutes: number): Promi
         console.error('[Config Server] Idle timeout expired — shutting down');
         shutdown();
       }, idleTimeoutMs);
-
-      // Shutdown route (top-level, not under /api/)
-      if (pathname === '/shutdown' && req.method === 'POST') {
-        setTimeout(() => { shutdown(); }, 100);
-        return jsonResponse({ status: 'shutting_down' }, 200, corsHeaders);
-      }
 
       // Route API requests
       if (pathname.startsWith('/api/')) {
@@ -259,13 +255,36 @@ async function handleApiRequest(
       }
     }
 
+    // --- Stage definitions ---
+    if (pathname === '/api/stage-definitions') {
+      if (req.method === 'GET') {
+        return handleGetStageDefinitions(corsHeaders);
+      }
+    }
+
     // --- Pipeline config routes ---
+    // NOTE: /api/pipeline-config/defaults must be matched before /api/pipeline-config
+    // to avoid the less-specific route consuming requests for the sub-path.
+    if (pathname === '/api/pipeline-config/defaults') {
+      if (req.method === 'GET') {
+        return handleGetPipelineConfigDefaults(corsHeaders);
+      }
+    }
+
     if (pathname === '/api/pipeline-config') {
       if (req.method === 'GET') {
         return handleGetPipelineConfig(corsHeaders);
       }
       if (req.method === 'PUT') {
         return await handlePutPipelineConfig(req, corsHeaders);
+      }
+    }
+
+    // --- Preset models ---
+    if (pathname.startsWith('/api/preset-models/')) {
+      const presetName = decodeURIComponent(pathname.slice('/api/preset-models/'.length));
+      if (req.method === 'GET') {
+        return handleGetPresetModels(presetName, corsHeaders);
       }
     }
 
@@ -400,6 +419,12 @@ function handleDeletePreset(presetName: string, corsHeaders: Record<string, stri
   return jsonResponse({ deleted: true }, 200, corsHeaders);
 }
 
+// --- Stage definitions handler ---
+
+function handleGetStageDefinitions(corsHeaders: Record<string, string>): Response {
+  return jsonResponse({ stage_definitions: STAGE_DEFINITIONS }, 200, corsHeaders);
+}
+
 // --- Pipeline config handlers ---
 
 function handleGetPipelineConfig(corsHeaders: Record<string, string>): Response {
@@ -407,148 +432,160 @@ function handleGetPipelineConfig(corsHeaders: Record<string, string>): Response 
   return jsonResponse({ config }, 200, corsHeaders);
 }
 
-// Required stage keys for pipeline config validation (AC47)
-const REQUIRED_STAGE_KEYS = new Set([
-  'requirements', 'planning', 'plan_review_sonnet', 'plan_review_opus', 'plan_review_codex',
-  'implementation', 'code_review_sonnet', 'code_review_opus', 'code_review_codex',
+/**
+ * Return the factory default config (DEFAULT_CONFIG) directly.
+ * Used by the web portal's "Reset to Default" button — always returns the
+ * hard-coded factory template, never the user-saved config from disk.
+ */
+function handleGetPipelineConfigDefaults(corsHeaders: Record<string, string>): Response {
+  return jsonResponse({ config: DEFAULT_CONFIG }, 200, corsHeaders);
+}
+
+// Allowed top-level pipeline config fields (CWE-915)
+const ALLOWED_TOP_LEVEL_FIELDS = new Set([
+  'feature_pipeline', 'bugfix_pipeline', 'max_iterations', 'team_name_pattern',
 ]);
 
-// Allowed top-level pipeline config fields (AC47, NFR9 field allowlisting)
-const ALLOWED_TOP_LEVEL_FIELDS = new Set(['version', 'pipeline']);
+// Allowed stage entry fields
+const ALLOWED_STAGE_ENTRY_FIELDS = new Set(['type', 'provider', 'model']);
 
-// Allowed pipeline object fields
-const ALLOWED_PIPELINE_FIELDS = new Set(['stages', 'max_iterations', 'team_name_pattern']);
+/**
+ * Validate a stage entry object for field allowlisting and structural correctness.
+ * Returns an error message string, or null if valid.
+ */
+function validateStageEntry(entry: unknown, label: string): string | null {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    return `${label}: must be an object`;
+  }
+  const obj = entry as Record<string, unknown>;
+  const unknownFields = Object.keys(obj).filter(k => !ALLOWED_STAGE_ENTRY_FIELDS.has(k));
+  if (unknownFields.length > 0) {
+    return `${label}: unknown fields rejected: ${unknownFields.join(', ')}`;
+  }
+  if (typeof obj.type !== 'string' || obj.type.trim() === '') {
+    return `${label}: type must be a non-empty string`;
+  }
+  if (typeof obj.provider !== 'string' || obj.provider.trim() === '') {
+    return `${label}: provider must be a non-empty string`;
+  }
+  if (typeof obj.model !== 'string' || obj.model.trim() === '') {
+    return `${label}: model must be a non-empty string`;
+  }
+  return null;
+}
 
 async function handlePutPipelineConfig(req: Request, corsHeaders: Record<string, string>): Promise<Response> {
-  // Structural validation matching schemas/dev-buddy.schema.json contract:
-  // - version: must be '2.0' (const)
-  // - pipeline: required object with stages, optional max_iterations (positive int),
-  //             optional team_name_pattern (non-empty string)
-  // - pipeline.stages: required object with exactly 9 named stages, each having a
-  //                    non-empty provider string
-  // - additionalProperties: false at all levels (enforced via allowlisting below)
   const body = await parseJsonBody(req);
 
-  // Validate version
-  if (body.version !== '2.0') {
-    return jsonResponse(
-      { error: { code: 'INVALID_CONFIG', message: "Pipeline config version must be '2.0'" } },
-      400,
-      corsHeaders
-    );
-  }
+  let config: PipelineConfig;
 
-  // Reject unknown top-level fields (CWE-915)
-  const unknownTopLevel = Object.keys(body).filter(k => !ALLOWED_TOP_LEVEL_FIELDS.has(k));
-  if (unknownTopLevel.length > 0) {
-    return jsonResponse(
-      { error: { code: 'INVALID_CONFIG', message: `Unknown top-level fields rejected: ${unknownTopLevel.join(', ')}` } },
-      400,
-      corsHeaders
-    );
-  }
-
-  // Validate pipeline object exists
-  if (!body.pipeline || typeof body.pipeline !== 'object' || Array.isArray(body.pipeline)) {
-    return jsonResponse(
-      { error: { code: 'INVALID_CONFIG', message: "Pipeline config must include a 'pipeline' object" } },
-      400,
-      corsHeaders
-    );
-  }
-  const pipeline = body.pipeline as Record<string, unknown>;
-
-  // Reject unknown pipeline-level fields
-  const unknownPipeline = Object.keys(pipeline).filter(k => !ALLOWED_PIPELINE_FIELDS.has(k));
-  if (unknownPipeline.length > 0) {
-    return jsonResponse(
-      { error: { code: 'INVALID_CONFIG', message: `Unknown pipeline fields rejected: ${unknownPipeline.join(', ')}` } },
-      400,
-      corsHeaders
-    );
-  }
-
-  // Validate stages object exists
-  if (!pipeline.stages || typeof pipeline.stages !== 'object' || Array.isArray(pipeline.stages)) {
-    return jsonResponse(
-      { error: { code: 'INVALID_CONFIG', message: "Pipeline config must include a 'pipeline.stages' object" } },
-      400,
-      corsHeaders
-    );
-  }
-  const stages = pipeline.stages as Record<string, unknown>;
-
-  // Reject unknown stage keys
-  const unknownStages = Object.keys(stages).filter(k => !REQUIRED_STAGE_KEYS.has(k));
-  if (unknownStages.length > 0) {
-    return jsonResponse(
-      { error: { code: 'INVALID_CONFIG', message: `Unknown stage keys rejected: ${unknownStages.join(', ')}` } },
-      400,
-      corsHeaders
-    );
-  }
-
-  // Verify all 9 required stages are present and each has a non-empty provider string
-  const missingStages: string[] = [];
-  const invalidStages: string[] = [];
-  for (const stageKey of REQUIRED_STAGE_KEYS) {
-    if (!(stageKey in stages)) {
-      missingStages.push(stageKey);
-      continue;
-    }
-    const stage = stages[stageKey];
-    if (!stage || typeof stage !== 'object' || Array.isArray(stage)) {
-      invalidStages.push(`${stageKey} (must be an object)`);
-      continue;
-    }
-    const stageObj = stage as Record<string, unknown>;
-    if (typeof stageObj.provider !== 'string' || stageObj.provider.trim() === '') {
-      invalidStages.push(`${stageKey} (provider must be a non-empty string)`);
-    }
-  }
-  if (missingStages.length > 0) {
-    return jsonResponse(
-      { error: { code: 'INVALID_CONFIG', message: `Missing required stages: ${missingStages.join(', ')}` } },
-      400,
-      corsHeaders
-    );
-  }
-  if (invalidStages.length > 0) {
-    return jsonResponse(
-      { error: { code: 'INVALID_CONFIG', message: `Invalid stages: ${invalidStages.join('; ')}` } },
-      400,
-      corsHeaders
-    );
-  }
-
-  // Validate optional pipeline fields — structural validation matching dev-buddy.schema.json contract
-  if ('max_iterations' in pipeline) {
-    const mi = pipeline.max_iterations;
-    if (!Number.isInteger(mi) || (mi as number) <= 0) {
+  {
+    // Field allowlisting (CWE-915)
+    const unknownTopLevel = Object.keys(body).filter(k => !ALLOWED_TOP_LEVEL_FIELDS.has(k));
+    if (unknownTopLevel.length > 0) {
       return jsonResponse(
-        { error: { code: 'INVALID_CONFIG', message: "'max_iterations' must be a positive integer" } },
+        { error: { code: 'INVALID_CONFIG', message: `Unknown top-level fields rejected: ${unknownTopLevel.join(', ')}` } },
         400,
         corsHeaders
       );
     }
-  }
-  if ('team_name_pattern' in pipeline) {
-    const tnp = pipeline.team_name_pattern;
-    if (typeof tnp !== 'string' || tnp.trim() === '') {
+
+    // Validate both pipeline arrays are present
+    if (!Array.isArray(body.feature_pipeline)) {
       return jsonResponse(
-        { error: { code: 'INVALID_CONFIG', message: "'team_name_pattern' must be a non-empty string" } },
+        { error: { code: 'INVALID_CONFIG', message: "Config must include 'feature_pipeline' as an array" } },
         400,
         corsHeaders
       );
     }
+    if (!Array.isArray(body.bugfix_pipeline)) {
+      return jsonResponse(
+        { error: { code: 'INVALID_CONFIG', message: "Config must include 'bugfix_pipeline' as an array" } },
+        400,
+        corsHeaders
+      );
+    }
+
+    // Validate stage entry fields on both arrays
+    const featurePipeline = body.feature_pipeline as unknown[];
+    for (let i = 0; i < featurePipeline.length; i++) {
+      const err = validateStageEntry(featurePipeline[i], `feature_pipeline[${i}]`);
+      if (err) {
+        return jsonResponse({ error: { code: 'INVALID_CONFIG', message: err } }, 400, corsHeaders);
+      }
+    }
+    const bugfixPipeline = body.bugfix_pipeline as unknown[];
+    for (let i = 0; i < bugfixPipeline.length; i++) {
+      const err = validateStageEntry(bugfixPipeline[i], `bugfix_pipeline[${i}]`);
+      if (err) {
+        return jsonResponse({ error: { code: 'INVALID_CONFIG', message: err } }, 400, corsHeaders);
+      }
+    }
+
+    // Validate optional settings fields
+    if ('max_iterations' in body) {
+      const mi = body.max_iterations;
+      if (!Number.isInteger(mi) || (mi as number) <= 0) {
+        return jsonResponse(
+          { error: { code: 'INVALID_CONFIG', message: "'max_iterations' must be a positive integer" } },
+          400,
+          corsHeaders
+        );
+      }
+    }
+    if ('team_name_pattern' in body) {
+      const tnp = body.team_name_pattern;
+      if (typeof tnp !== 'string' || tnp.trim() === '') {
+        return jsonResponse(
+          { error: { code: 'INVALID_CONFIG', message: "'team_name_pattern' must be a non-empty string" } },
+          400,
+          corsHeaders
+        );
+      }
+    }
+
+    config = body as unknown as PipelineConfig;
   }
 
-  // Write to ~/.vcp/dev-buddy.json
+  // Run semantic validation (stage type constraints, singleton, pipeline restrictions, model regex)
+  try {
+    validateConfig(config);
+  } catch (err) {
+    return jsonResponse(
+      { error: { code: 'INVALID_CONFIG', message: err instanceof Error ? err.message : 'Config validation failed' } },
+      400,
+      corsHeaders
+    );
+  }
+
+  // Write atomically to ~/.vcp/dev-buddy.json
   const pipelineConfigPath = path.join(os.homedir(), '.vcp', 'dev-buddy.json');
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(pipelineConfigPath, JSON.stringify(body, null, 2), 'utf-8');
+  atomicWriteFile(pipelineConfigPath, config);
 
   return jsonResponse({ saved: true }, 200, corsHeaders);
+}
+
+// --- Preset models handler ---
+
+function handleGetPresetModels(presetName: string, corsHeaders: Record<string, string>): Response {
+  const config = readPresets();
+  const preset = config.presets[presetName];
+  if (!preset) {
+    return jsonResponse({ error: { code: 'NOT_FOUND', message: 'Preset not found' } }, 404, corsHeaders);
+  }
+
+  let models: string[];
+  if (preset.type === 'subscription') {
+    // Subscription presets expose the standard Claude model short-names
+    models = ['sonnet', 'opus', 'haiku'];
+  } else if (preset.type === 'api') {
+    models = Array.isArray(preset.models) ? preset.models : [];
+  } else {
+    // cli
+    models = Array.isArray(preset.models) ? preset.models : [];
+  }
+
+  return jsonResponse({ models }, 200, corsHeaders);
 }
 
 // --- Session handlers ---

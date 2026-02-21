@@ -89,7 +89,7 @@ VCP enforces standards through three layers:
 ### Repo Structure
 
 - `standards/` — AI-optimized markdown standards (30 files, flat layout with `{scope}-{topic}.md` naming)
-- `standards/manifest.json` — Root v2 manifest indexing per-scope manifests in `standards/scopes/`
+- `standards/manifest.json` — Root manifest indexing per-scope manifests in `standards/scopes/`
 - `standards/scopes/` — Per-scope manifest files (core, web-frontend, web-backend, database, mobile, desktop, cli, devops, compliance-*)
 - `plugins/` — Claude Code plugins (vcp)
 - `.claude-plugin/` — Marketplace manifest

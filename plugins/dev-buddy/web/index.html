@@ -4,7 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dev Buddy Configuration</title>
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+  <script
+    src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"
+    integrity="sha384-HZZ/fukV+9G8gwTNjN7zQDG0Sp7MsZy5DDN6VfY3Be7V9dvQpEpR2jF2HlyFUUjU"
+    crossorigin="anonymous"
+  ></script>
+  <script
+    defer
+    src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"
+    integrity="sha384-9Ax3MmS9AClxJyd5/zafcXXjxmwFhZCdsT6HJoJjarvCaAkJlk5QDzjLJm+Wdx5F"
+    crossorigin="anonymous"
+  ></script>
   <script src="app.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -47,19 +57,27 @@
 
     <!-- Add Preset Form -->
     <div class="card" x-show="showAddPreset">
-      <h3>Add New Preset</h3>
+      <h3 x-text="editingPresetKey ? 'Edit Preset: ' + editingPresetKey : 'Add New Preset'"></h3>
       <form x-on:submit.prevent="addPreset()">
-        <label>
-          Preset Name (key)
-          <input type="text" x-model="newPreset.key" placeholder="e.g. openrouter" required>
-        </label>
+        <template x-if="!editingPresetKey">
+          <label>
+            Preset Name (key)
+            <input type="text" x-model="newPreset.key" placeholder="e.g. openrouter" required>
+          </label>
+        </template>
+        <template x-if="editingPresetKey">
+          <label>
+            Preset Name (key)
+            <input type="text" x-bind:value="editingPresetKey" disabled>
+          </label>
+        </template>
         <label>
           Display Name
           <input type="text" x-model="newPreset.name" placeholder="e.g. OpenRouter API" required>
         </label>
         <label>
           Type
-          <select x-model="newPreset.type">
+          <select x-model="newPreset.type" x-bind:disabled="!!editingPresetKey">
             <option value="subscription">Subscription (Claude Task tool)</option>
             <option value="api">API (Direct API + session manager)</option>
             <option value="cli">CLI (Command-line tool)</option>
@@ -96,14 +114,50 @@
               <input type="text" x-model="newPreset.command" placeholder="e.g. codex" required>
             </label>
             <label>
-              Arguments (comma-separated, optional)
-              <input type="text" x-model="newPreset.args_str" placeholder="e.g. --model,o3">
+              Args Template
+              <div class="placeholder-pills">
+                <span class="pill">{model}</span>
+                <span class="pill">{output_file}</span>
+                <span class="pill">{schema_path}</span>
+                <span class="pill">{prompt}</span>
+                <span class="pill" x-show="newPreset.supports_reasoning_effort">{reasoning_effort}</span>
+              </div>
+              <input type="text" x-model="newPreset.args_template" placeholder="e.g. exec --full-auto -m {model} -o {output_file} --output-schema {schema_path} {prompt}" required>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" x-model="newPreset.supports_resume">
+              Supports Resume
+            </label>
+            <label x-show="newPreset.supports_resume" x-transition>
+              Resume Args Template
+              <input type="text" x-model="newPreset.resume_args_template" placeholder="e.g. exec --full-auto -m {model} -o {output_file} --output-schema {schema_path} resume --last {prompt}">
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" x-model="newPreset.supports_reasoning_effort">
+              Supports Reasoning Effort
+            </label>
+            <label x-show="newPreset.supports_reasoning_effort" x-transition>
+              Default Reasoning Effort
+              <select x-model="newPreset.reasoning_effort">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra High</option>
+              </select>
+            </label>
+            <label>
+              Timeout (minutes, optional)
+              <input type="number" x-model="newPreset.timeout_minutes" placeholder="20" min="1" step="1">
+            </label>
+            <label>
+              Models (comma-separated)
+              <input type="text" x-model="newPreset.cli_models_str" placeholder="e.g. o3,o4-mini" required>
             </label>
           </div>
         </template>
 
         <div class="form-actions">
-          <button type="submit" class="btn-primary">Add Preset</button>
+          <button type="submit" class="btn-primary" x-text="editingPresetKey ? 'Update Preset' : 'Add Preset'"></button>
           <button type="button" class="btn-secondary" x-on:click="showAddPreset = false; resetNewPreset()">Cancel</button>
         </div>
       </form>
@@ -125,7 +179,10 @@
                 <span class="preset-name" x-text="name"></span>
                 <span class="badge" x-bind:class="'badge-' + preset.type" x-text="preset.type"></span>
               </div>
-              <button class="btn-danger btn-sm" x-on:click="deletePreset(name)">Remove</button>
+              <div>
+                <button class="btn-secondary btn-sm" x-on:click="editPreset(name)">Edit</button>
+                <button class="btn-danger btn-sm" x-on:click="deletePreset(name)">Remove</button>
+              </div>
             </div>
 
             <div class="preset-details">
@@ -166,7 +223,26 @@
                   <div class="detail-row">
                     <span class="label">Command:</span>
                     <span x-text="preset.command"></span>
-                    <span x-show="preset.args && preset.args.length > 0" x-text="Array.isArray(preset.args) ? preset.args.join(' ') : ''"></span>
+                  </div>
+                  <div class="detail-row" x-show="preset.args_template">
+                    <span class="label">Args Template:</span>
+                    <span x-text="preset.args_template" class="code-text"></span>
+                  </div>
+                  <div class="detail-row" x-show="preset.supports_resume && preset.resume_args_template">
+                    <span class="label">Resume Template:</span>
+                    <span x-text="preset.resume_args_template" class="code-text"></span>
+                  </div>
+                  <div class="detail-row" x-show="preset.reasoning_effort">
+                    <span class="label">Reasoning Effort:</span>
+                    <span x-text="preset.reasoning_effort"></span>
+                  </div>
+                  <div class="detail-row" x-show="preset.timeout_ms">
+                    <span class="label">Timeout:</span>
+                    <span x-text="preset.timeout_ms ? Math.round(preset.timeout_ms / 60000) + ' min' : ''"></span>
+                  </div>
+                  <div class="detail-row" x-show="preset.models && preset.models.length > 0">
+                    <span class="label">Models:</span>
+                    <span x-text="Array.isArray(preset.models) ? preset.models.join(', ') : ''"></span>
                   </div>
                 </div>
               </template>
@@ -190,34 +266,150 @@
 
     <template x-if="!loading.pipeline && pipelineConfig">
       <div>
-        <div class="card">
-          <h3>Pipeline Stages</h3>
-          <p class="hint">Select which AI preset handles each pipeline stage.</p>
-
-          <template x-for="stage in pipelineStages" x-bind:key="stage.key">
-            <div class="stage-row">
-              <label x-text="stage.label" class="stage-label"></label>
-              <select
-                x-model="pipelineConfig.pipeline.stages[stage.key].provider"
-                class="stage-select"
-              >
-                <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
-                  <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
-                </template>
-              </select>
-            </div>
-          </template>
+        <!-- Pipeline sub-tabs -->
+        <div class="pipeline-sub-tabs">
+          <button
+            x-bind:class="{ active: pipelineSubTab === 'feature' }"
+            x-on:click="pipelineSubTab = 'feature'; $nextTick(() => initSortable('feature-pipeline-list'))"
+          >Feature Pipeline</button>
+          <button
+            x-bind:class="{ active: pipelineSubTab === 'bugfix' }"
+            x-on:click="pipelineSubTab = 'bugfix'; $nextTick(() => initSortable('bugfix-pipeline-list'))"
+          >Bug-Fix Pipeline</button>
         </div>
 
+        <!-- Feature Pipeline -->
+        <div x-show="pipelineSubTab === 'feature'" class="card">
+          <div class="pipeline-builder-header">
+            <h3>Feature Pipeline</h3>
+            <div class="pipeline-builder-actions">
+              <button class="btn-secondary btn-sm" x-on:click="resetToDefault('feature')">Reset to Default</button>
+            </div>
+          </div>
+          <p class="hint">Drag to reorder stages. Each stage uses a provider preset and optional model override.</p>
+
+          <div id="feature-pipeline-list" class="pipeline-list">
+            <template x-for="(stage, idx) in pipelineConfig.feature_pipeline" x-bind:key="idx">
+              <div class="stage-card" x-bind:data-index="idx">
+                <div class="drag-handle" title="Drag to reorder">
+                  <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor">
+                    <circle cx="4" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/>
+                    <circle cx="4" cy="9" r="1.5"/><circle cx="8" cy="9" r="1.5"/>
+                    <circle cx="4" cy="15" r="1.5"/><circle cx="8" cy="15" r="1.5"/>
+                  </svg>
+                </div>
+                <div class="stage-info">
+                  <span class="stage-type-badge" x-bind:class="'stage-type-' + stage.type.replace('-', '_')" x-text="stage.type"></span>
+                </div>
+                <div class="stage-controls">
+                  <select
+                    x-model="stage.provider"
+                    class="stage-select"
+                    x-on:change="onProviderChange(stage)"
+                  >
+                    <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
+                      <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
+                    </template>
+                  </select>
+                  <select x-model="stage.model" class="stage-select model-select" required>
+                    <option value="" disabled>Select model</option>
+                    <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
+                      <option x-bind:value="m" x-text="m"></option>
+                    </template>
+                  </select>
+                </div>
+                <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('feature', idx)">x</button>
+              </div>
+            </template>
+          </div>
+
+          <!-- Add Stage -->
+          <div class="add-stage-row">
+            <select x-model="newStageType.feature" class="stage-select">
+              <option value="">Select stage type to add...</option>
+              <template x-for="st in getAvailableStageTypes('feature')" x-bind:key="st">
+                <option x-bind:value="st" x-text="st"></option>
+              </template>
+            </select>
+            <button
+              class="btn-secondary btn-sm"
+              x-on:click="addStage('feature', newStageType.feature)"
+              x-bind:disabled="!newStageType.feature"
+            >+ Add Stage</button>
+          </div>
+        </div>
+
+        <!-- Bug-Fix Pipeline -->
+        <div x-show="pipelineSubTab === 'bugfix'" class="card">
+          <div class="pipeline-builder-header">
+            <h3>Bug-Fix Pipeline</h3>
+            <div class="pipeline-builder-actions">
+              <button class="btn-secondary btn-sm" x-on:click="resetToDefault('bugfix')">Reset to Default</button>
+            </div>
+          </div>
+          <p class="hint">Drag to reorder stages. RCA stages run sequentially; orchestrator consolidates automatically after the last RCA.</p>
+
+          <div id="bugfix-pipeline-list" class="pipeline-list">
+            <template x-for="(stage, idx) in pipelineConfig.bugfix_pipeline" x-bind:key="idx">
+              <div class="stage-card" x-bind:data-index="idx">
+                <div class="drag-handle" title="Drag to reorder">
+                  <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor">
+                    <circle cx="4" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/>
+                    <circle cx="4" cy="9" r="1.5"/><circle cx="8" cy="9" r="1.5"/>
+                    <circle cx="4" cy="15" r="1.5"/><circle cx="8" cy="15" r="1.5"/>
+                  </svg>
+                </div>
+                <div class="stage-info">
+                  <span class="stage-type-badge" x-bind:class="'stage-type-' + stage.type.replace('-', '_')" x-text="stage.type"></span>
+                </div>
+                <div class="stage-controls">
+                  <select
+                    x-model="stage.provider"
+                    class="stage-select"
+                    x-on:change="onProviderChange(stage)"
+                  >
+                    <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
+                      <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
+                    </template>
+                  </select>
+                  <select x-model="stage.model" class="stage-select model-select" required>
+                    <option value="" disabled>Select model</option>
+                    <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
+                      <option x-bind:value="m" x-text="m"></option>
+                    </template>
+                  </select>
+                </div>
+                <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('bugfix', idx)">x</button>
+              </div>
+            </template>
+          </div>
+
+          <!-- Add Stage -->
+          <div class="add-stage-row">
+            <select x-model="newStageType.bugfix" class="stage-select">
+              <option value="">Select stage type to add...</option>
+              <template x-for="st in getAvailableStageTypes('bugfix')" x-bind:key="st">
+                <option x-bind:value="st" x-text="st"></option>
+              </template>
+            </select>
+            <button
+              class="btn-secondary btn-sm"
+              x-on:click="addStage('bugfix', newStageType.bugfix)"
+              x-bind:disabled="!newStageType.bugfix"
+            >+ Add Stage</button>
+          </div>
+        </div>
+
+        <!-- Pipeline Settings -->
         <div class="card">
           <h3>Pipeline Settings</h3>
           <label>
             Max Iterations per Reviewer
-            <input type="number" min="1" max="50" x-model.number="pipelineConfig.pipeline.max_iterations">
+            <input type="number" min="1" max="50" x-model.number="pipelineConfig.max_iterations">
           </label>
           <label>
             Team Name Pattern
-            <input type="text" x-model="pipelineConfig.pipeline.team_name_pattern">
+            <input type="text" x-model="pipelineConfig.team_name_pattern">
           </label>
         </div>
       </div>

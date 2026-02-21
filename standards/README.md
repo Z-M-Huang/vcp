@@ -18,11 +18,11 @@ All standard files are in the `standards/` root directory with a `{scope}-{topic
 | `devops` | `devops-container-security.md`, `devops-cicd-security.md`, `devops-iac-security.md`, `devops-kubernetes-security.md` | DevOps/infrastructure standards |
 | `compliance` | `compliance-gdpr.md`, `compliance-pci-dss.md`, `compliance-hipaa.md` | Regulatory compliance standards |
 
-### Manifest Architecture (v2)
+### Manifest Architecture
 
 ```
 standards/
-├── manifest.json          # Root v2: indexes scope manifests
+├── manifest.json          # Root manifest: indexes scope manifests
 ├── scopes/
 │   ├── core.json
 │   ├── web-frontend.json
@@ -41,7 +41,7 @@ standards/
 └── README.md
 ```
 
-The root `manifest.json` (v2) maps scope names to scope manifest files via full HTTPS URLs. Each scope manifest lists the standards that belong to that scope, again with full HTTPS URLs to the standard markdown files. This allows organizations to host manifests and standards at different locations (different repos, internal servers, CDNs) — the system only requires that each URL is reachable and follows the schema.
+The root `manifest.json` maps scope names to scope manifest files via full HTTPS URLs. Each scope manifest lists the standards that belong to that scope, again with full HTTPS URLs to the standard markdown files. This allows organizations to host manifests and standards at different locations (different repos, internal servers, CDNs) — the system only requires that each URL is reachable and follows the schema.
 
 The `vcp-context-core.ts` module fetches scope manifests and flattens them into a unified list for downstream consumers. JSON schemas for both manifest formats are available at [`schemas/vcp-manifest.schema.json`](../schemas/vcp-manifest.schema.json) and [`schemas/vcp-scope-manifest.schema.json`](../schemas/vcp-scope-manifest.schema.json).
 

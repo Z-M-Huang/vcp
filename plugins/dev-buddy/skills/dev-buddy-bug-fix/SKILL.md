@@ -1,13 +1,13 @@
 ---
 name: dev-buddy-bug-fix
-description: Dev Buddy bug-fix pipeline. Dual RCA (Sonnet+Opus) -> Consolidation -> Codex Validation -> Implementation -> Code Review.
+description: Dev Buddy bug-fix pipeline. Data-driven sequential RCA -> Consolidation -> Validation -> Implementation -> Code Reviews. Configurable pipeline.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete, SendMessage
 ---
 
 # Bug-Fix Pipeline Orchestrator
 
-You coordinate worker agents using Task tools to diagnose and fix a bug. The pipeline uses dual Root Cause Analysis (Sonnet + Opus in parallel), orchestrator-driven consolidation, Codex validation, implementation, and the standard code review chain.
+You coordinate worker agents using Task tools to diagnose and fix a bug. The pipeline is data-driven from the bugfix_pipeline config: sequential RCA stages, followed by implicit orchestrator consolidation, then plan-review/implementation/code-review stages.
 
 **Task directory:** `${CLAUDE_PROJECT_DIR}/.task/`
 **Agents location:** `${CLAUDE_PLUGIN_ROOT}/agents/`
@@ -16,18 +16,18 @@ You coordinate worker agents using Task tools to diagnose and fix a bug. The pip
 
 ## Architecture: Tasks + Hook Enforcement
 
-This pipeline uses a **task-based approach with hook enforcement**:
-
 | Component | Role |
 |-----------|------|
 | **Tasks** (primary) | Structural enforcement via `blockedBy`, user visibility, audit trail |
 | **UserPromptSubmit Hook** (guidance) | Reads artifact files, injects phase guidance |
 | **SubagentStop Hook** (enforcement) | Validates reviewer outputs, can BLOCK until requirements met |
-| **Main Thread** (orchestrator) | Handles consolidation, user input, creates dynamic tasks |
+| **Main Thread** (orchestrator) | Handles consolidation (inline, not a task), user input, dynamic tasks |
 
-**Key insight:** `blockedBy` is *data*, not an instruction. `TaskList()` shows all tasks with their `blockedBy` fields — only claim tasks where blockedBy is empty or all dependencies are completed.
+**Key insight:** `blockedBy` is *data*, not an instruction. Only claim tasks where blockedBy is empty or all dependencies completed.
 
-**Bug-fix differentiator:** Unlike `/dev-buddy-feature-implement`, this pipeline does NOT use requirements-gatherer, planner, or plan-reviewer agents. The orchestrator itself consolidates dual RCA findings and writes `user-story.json` + `plan-refined.json` directly.
+**Bug-fix differentiator:** This pipeline does NOT use requirements-gatherer or planner agents. The orchestrator itself reads all RCA output files after the last consecutive RCA stage completes, consolidates findings, and writes `user-story.json` + `plan-refined.json` directly. This consolidation is an INLINE ORCHESTRATOR ACTION, not a task.
+
+**All stages execute SEQUENTIALLY.** There is NO parallel execution, even for consecutive RCA stages. Each task has `blockedBy` pointing to the previous task.
 
 ---
 
@@ -41,148 +41,197 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset
 
 ### Step 1.1: Validate Pipeline Config & Spawn Session Managers
 
-Validate the pipeline configuration and spawn session managers for any API providers.
-
 ```bash
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts" validate --cwd "${CLAUDE_PROJECT_DIR}"
-```
-
-If validation passes, spawn session managers:
-
-```bash
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts" spawn --cwd "${CLAUDE_PROJECT_DIR}"
 ```
 
-This writes `.task/session-ports.json` with port/token/pid mappings for each API provider.
+If validation fails, report missing/invalid providers and stop.
 
-**If validation fails:** Report the missing/invalid providers to the user and stop.
+### Step 1.2: Load Config and Resolve Stages
 
-### Step 1.5: Create Pipeline Team (Idempotent)
+Read the pipeline config using Bash:
 
-Create the pipeline team so that TaskCreate/TaskUpdate/TaskList tools become available.
+```bash
+bun -e "
+import { loadPipelineConfig } from '${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts';
+import { STAGE_DEFINITIONS, getOutputFileName } from '${CLAUDE_PLUGIN_ROOT}/types/stage-definitions.ts';
 
-**Derive team name:** Use `pipeline-{BASENAME}-{HASH}` where:
-- `{BASENAME}` = last directory component of project path, sanitized
-- `{HASH}` = first 6 characters of SHA-256 hash of canonicalized project path
+const config = loadPipelineConfig();
+const pipeline = config.bugfix_pipeline;
 
-**Path canonicalization (before hashing):**
-1. Resolve to absolute path
-2. Resolve symlinks to their targets
-3. Normalize path separators to `/` (convert `\` on Windows)
-4. Normalize Windows drive letter to lowercase (e.g., `D:\` → `d:/`)
-5. Remove trailing slash if present
+// Compute per-type instance counters
+const typeCounters = {};
+const resolved = pipeline.map((entry, arrayIndex) => {
+  typeCounters[entry.type] = (typeCounters[entry.type] || 0) + 1;
+  const stageIndex = typeCounters[entry.type];
+  const outputFile = getOutputFileName(entry.type, stageIndex);
+  return { ...entry, stageIndex, outputFile, arrayIndex };
+});
 
-**Sanitization algorithm (for basename):**
-1. Take basename of project directory (e.g., `/home/user/My App!` → `My App!`)
-2. Lowercase all characters
-3. Replace any character NOT in `[a-z0-9-]` with `-`
-4. Collapse consecutive `-` into single `-`
-5. Trim leading/trailing `-`
-6. Truncate to 20 characters max
-7. **If result is empty, use `project` as default**
+console.log(JSON.stringify({ config, resolved }, null, 2));
+"
+```
 
-**Idempotent startup:** Always attempt `TeamDelete` first (ignore errors), then create fresh:
+Store the resulting `resolved` array and full `config` in memory. Each element has:
+- `type` — stage type
+- `provider` — preset name
+- `model` — model identifier (required)
+- `stageIndex` — 1-based index among stages of the same type
+- `outputFile` — computed output file name (e.g., 'rca-1.json', 'plan-review-1.json')
+- `arrayIndex` — 0-based position in the pipeline array
+
+Identify RCA stages: all consecutive `rca` type entries at the beginning of the pipeline.
+
+### Step 1.3: Create Pipeline Team (Idempotent)
+
+**Derive team name:** `pipeline-{BASENAME}-{HASH}` (same algorithm as feature pipeline — see feature SKILL.md)
 
 ```
-TeamDelete(team_name: "pipeline-{BASENAME}-{HASH}")   ← ignore errors (team may not exist)
+TeamDelete(team_name: "pipeline-{BASENAME}-{HASH}")   ← ignore errors
 TeamCreate(team_name: "pipeline-{BASENAME}-{HASH}", description: "Bug-fix pipeline orchestration and task management")
 ```
 
-Store the computed team name in `.task/pipeline-tasks.json` as the `team_name` field.
+Store team name in `.task/pipeline-tasks.json` as `team_name` field.
 
-### Step 1.6: Verify Task Tools Available
-
-After creating the team, call the **TaskList tool** directly (do NOT use Bash or Task agents):
+### Step 1.4: Verify Task Tools Available
 
 ```
 result = TaskList()
 ```
 
-**Success:** TaskList() returns an empty array `[]`. Proceed to Step 2.
-**Stale tasks detected:** TaskList() returns a non-empty list — stop and report to user.
-**Tool error:** TaskList() fails or returns an error. Stop and report to user.
+Success: empty array `[]`. Proceed to Step 2.
+Stale tasks or tool error: Stop and report to user.
 
-### Step 2: Create 7-Task Chain
+### Step 2: Create Task Chain (Data-Driven from bugfix_pipeline)
 
 **The FIRST action after team verification is creating the full task chain. No agents are spawned before the task chain exists.**
 
-**CRITICAL: Call the TaskCreate and TaskUpdate tools directly.** Do NOT use Bash, Task (subagent), Write, or any other tool as a substitute.
+**Task chain creation algorithm:**
 
-**TaskCreate API:**
-- Parameters: `subject` (required string), `description` (optional string), `activeForm` (optional string)
-- Returns: task object with `id` field
-- **TaskCreate does NOT accept `blockedBy`.** Set dependencies via TaskUpdate after creation.
-
-Create all 7 tasks, then chain them with addBlockedBy:
+For each stage in the resolved `bugfix_pipeline` array (in order), create one task. ALL tasks are sequential — each blocked by the previous.
 
 ```
-T1 = TaskCreate(
-  subject: "RCA - Sonnet",
-  activeForm: "Analyzing root cause (Sonnet)...",
-  description: "PHASE: Root Cause Analysis (parallel - Sonnet)\nAGENT: dev-buddy:root-cause-analyst (model: sonnet)\nINPUT: Bug description from conversation context\nOUTPUT: .task/rca-sonnet.json\nPROMPT MUST INCLUDE: Full bug description, 'You are analyzing as Sonnet. Write output to .task/rca-sonnet.json. Set reviewer field to sonnet.'\nCOMPLETION: .task/rca-sonnet.json exists with root_cause.summary and root_cause.root_file populated"
-)
+previousTaskId = null
+taskIds = []
 
-T2 = TaskCreate(
-  subject: "RCA - Opus",
-  activeForm: "Analyzing root cause (Opus)...",
-  description: "PHASE: Root Cause Analysis (parallel - Opus)\nAGENT: dev-buddy:root-cause-analyst (model: opus)\nINPUT: Bug description from conversation context\nOUTPUT: .task/rca-opus.json\nPROMPT MUST INCLUDE: Full bug description, 'You are analyzing as Opus. Write output to .task/rca-opus.json. Set reviewer field to opus.'\nCOMPLETION: .task/rca-opus.json exists with root_cause.summary and root_cause.root_file populated"
-)
+for i = 0 to bugfix_pipeline.length - 1:
+  stage = resolved[i]
+  subject = deriveSubject(stage)        // see Subject Derivation below
+  description = deriveDescription(stage) // see Description Rules below
 
-T3 = TaskCreate(
-  subject: "RCA + Plan Validation - Codex",
-  activeForm: "Validating RCA and plan (Codex)...",
-  description: "PHASE: RCA + Plan Validation (Codex gate)\nAGENT: dev-buddy:codex-reviewer (external — do NOT pass model parameter)\nINPUT: .task/rca-sonnet.json, .task/rca-opus.json, .task/user-story.json, .task/plan-refined.json\nOUTPUT: .task/review-codex.json\nNOTE: Codex validates the consolidated RCA diagnosis and fix plan. Challenges whether root cause is correct, plan is sound, nothing missed.\nRESULT HANDLING: if rejected → ask user to re-examine bug or provide more context\nCOMPLETION: .task/review-codex.json exists with status field"
-)
+  task = TaskCreate(subject: subject, activeForm: activeForm(stage), description: description)
+  taskIds[i] = task.id
 
-T4 = TaskCreate(
-  subject: "Implementation",
-  activeForm: "Implementing fix...",
-  description: "PHASE: Implementation\nAGENT: dev-buddy:implementer (model: sonnet)\nINPUT: .task/user-story.json, .task/plan-refined.json\nOUTPUT: .task/impl-result.json\nPROMPT MUST INCLUDE: Reference to approved plan and all acceptance criteria. This is a bug fix — make the smallest possible change that addresses the root cause.\nNOTE: Implementer creates its own subtasks internally.\nRESULT HANDLING: Read .task/impl-result.json → check status (complete/partial/failed)\nCOMPLETION: .task/impl-result.json exists with status='complete'"
-)
+  if previousTaskId is not null:
+    TaskUpdate(task.id, addBlockedBy: [previousTaskId])
 
-T5 = TaskCreate(
-  subject: "Code Review - Sonnet",
-  activeForm: "Reviewing code (Sonnet)...",
-  description: "PHASE: Code Review (first reviewer)\nAGENT: dev-buddy:code-reviewer (model: sonnet)\nINPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json\nOUTPUT: .task/code-review-sonnet.json\nPROMPT MUST INCLUDE: 'You are reviewing as Sonnet. Write output to .task/code-review-sonnet.json.'\nRESULT HANDLING: Read .task/code-review-sonnet.json → check status → handle per Result Handling rules\nCOMPLETION: .task/code-review-sonnet.json exists with status and acceptance_criteria_verification fields"
-)
-
-T6 = TaskCreate(
-  subject: "Code Review - Opus",
-  activeForm: "Reviewing code (Opus)...",
-  description: "PHASE: Code Review (second reviewer)\nAGENT: dev-buddy:code-reviewer (model: opus)\nINPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json\nOUTPUT: .task/code-review-opus.json\nPROMPT MUST INCLUDE: 'You are reviewing as Opus. Write output to .task/code-review-opus.json.'\nRESULT HANDLING: Read .task/code-review-opus.json → check status → handle per Result Handling rules\nCOMPLETION: .task/code-review-opus.json exists with status and acceptance_criteria_verification fields"
-)
-
-T7 = TaskCreate(
-  subject: "Code Review - Codex",
-  activeForm: "Reviewing code (Codex)...",
-  description: "PHASE: Code Review (final gate)\nAGENT: dev-buddy:codex-reviewer (external — do NOT pass model parameter)\nINPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json\nOUTPUT: .task/code-review-codex.json\nNOTE: Codex reviewer is a thin wrapper — runs codex-review.ts. Do NOT pass model parameter.\nRESULT HANDLING: if rejected → terminal state code_rejected (ask user)\nCOMPLETION: .task/code-review-codex.json exists with status field"
-)
-
-// T1 and T2 are parallel — no blockedBy
-// T3 blocks on BOTH T1 and T2
-TaskUpdate(T3.id, addBlockedBy: [T1.id, T2.id])
-TaskUpdate(T4.id, addBlockedBy: [T3.id])
-TaskUpdate(T5.id, addBlockedBy: [T4.id])
-TaskUpdate(T6.id, addBlockedBy: [T5.id])
-TaskUpdate(T7.id, addBlockedBy: [T6.id])
+  previousTaskId = task.id
 ```
 
-Save to `.task/pipeline-tasks.json` using the **actual returned IDs**:
+**Subject Derivation by stage type:**
+
+| Stage Type | Subject Format |
+|-----------|----------------|
+| rca | "RCA {stageIndex}" + model suffix if set (e.g., "RCA 1 - Sonnet", "RCA 2 - Opus") |
+| plan-review | "Plan Review {stageIndex}" + model suffix if set |
+| implementation | "Implementation" |
+| code-review | "Code Review {stageIndex}" + model suffix if set |
+
+Model suffix: if stage.model is set, append " - {capitalized model}". If CLI preset, append " - Codex".
+
+**Description Rules by stage type:**
+
+For `rca` (stageIndex N, outputFile rca-N.json):
+```
+PHASE: Root Cause Analysis {N}
+AGENT: dev-buddy:root-cause-analyst (model: {stage.model})
+INPUT: Bug description from conversation context
+OUTPUT: .task/rca-{N}.json
+PROMPT MUST INCLUDE: Full bug description, 'Write output to .task/rca-{N}.json. Set reviewer field to {stage.model or "rca-{N}"}.'
+COMPLETION: .task/rca-{N}.json exists with root_cause.summary populated
+```
+
+For `plan-review` (subscription/api, stageIndex N, outputFile plan-review-N.json):
+```
+PHASE: Plan Review {N} (RCA + Plan Validation)
+AGENT: dev-buddy:plan-reviewer (model: {stage.model})
+INPUT: .task/user-story.json, .task/plan-refined.json, + all rca-*.json files
+OUTPUT: .task/plan-review-{N}.json
+PROMPT MUST INCLUDE: 'Write output to .task/plan-review-{N}.json. Validate that the consolidated RCA diagnosis is correct and the fix plan is sound.'
+RESULT HANDLING: Read .task/plan-review-{N}.json → check status → handle per Result Handling rules
+COMPLETION: .task/plan-review-{N}.json exists with status and requirements_coverage fields
+```
+
+For `plan-review` (CLI provider, stageIndex N, outputFile plan-review-N.json):
+```
+PHASE: Plan Review {N} (CLI - RCA Validation gate)
+AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
+INPUT: .task/user-story.json, .task/plan-refined.json, + all rca-*.json files
+OUTPUT: .task/plan-review-{N}.json
+NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
+      --output-file "${CLAUDE_PROJECT_DIR}/.task/plan-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
+RESULT HANDLING: if rejected → ask user to re-examine bug or provide more context
+COMPLETION: .task/plan-review-{N}.json exists with status field
+```
+
+For `implementation`:
+```
+PHASE: Implementation (Bug Fix)
+AGENT: dev-buddy:implementer (model: {stage.model})
+INPUT: .task/user-story.json, .task/plan-refined.json
+OUTPUT: .task/impl-result.json
+PROMPT MUST INCLUDE: This is a bug fix — make the smallest possible change that addresses the root cause.
+COMPLETION: .task/impl-result.json exists with status='complete'
+```
+
+For `code-review` (subscription/api, stageIndex N, outputFile code-review-N.json):
+```
+PHASE: Code Review {N}
+AGENT: dev-buddy:code-reviewer (model: {stage.model})
+INPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json
+OUTPUT: .task/code-review-{N}.json
+PROMPT MUST INCLUDE: 'Write output to .task/code-review-{N}.json.'
+RESULT HANDLING: Read .task/code-review-{N}.json → check status → handle per Result Handling rules
+COMPLETION: .task/code-review-{N}.json exists with status and acceptance_criteria_verification fields
+```
+
+For `code-review` (CLI provider, stageIndex N, outputFile code-review-N.json):
+```
+PHASE: Code Review {N} (CLI - final gate)
+AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
+INPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json
+OUTPUT: .task/code-review-{N}.json
+NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
+      --output-file "${CLAUDE_PROJECT_DIR}/.task/code-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
+RESULT HANDLING: if rejected → terminal state code_rejected (ask user)
+COMPLETION: .task/code-review-{N}.json exists with status field
+```
+
+**Save to `.task/pipeline-tasks.json`**:
 ```json
 {
   "team_name": "pipeline-myproject-a1b2c3",
   "pipeline_type": "bug-fix",
-  "rca_sonnet": "4",
-  "rca_opus": "5",
-  "rca_plan_validation": "6",
-  "implementation": "7",
-  "code_review_sonnet": "8",
-  "code_review_opus": "9",
-  "code_review_codex": "10"
+  "resolved_config": {
+    "feature_pipeline": [],
+    "bugfix_pipeline": [],
+    "max_iterations": 10,
+    "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
+  },
+  "stages": [
+    { "type": "rca", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "rca-1.json", "task_id": "4" },
+    { "type": "rca", "provider": "anthropic-subscription", "model": "opus", "output_file": "rca-2.json", "task_id": "5" },
+    { "type": "plan-review", "provider": "my-codex-preset", "output_file": "plan-review-1.json", "task_id": "6" },
+    { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "7" },
+    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "8" },
+    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "9" },
+    { "type": "code-review", "provider": "my-codex-preset", "output_file": "code-review-3.json", "task_id": "10" }
+  ]
 }
 ```
 
-**Verify:** After creating all tasks, call `TaskList()`. You should see 7 tasks: T1 and T2 with status `pending` and empty `blockedBy`, T3-T7 with `blockedBy` referencing correct predecessors.
+**Verify:** After creating all tasks, call `TaskList()`. You should see N tasks (where N = length of bugfix_pipeline) forming a LINEAR SEQUENTIAL CHAIN. ALL tasks are blocked — no parallel execution.
 
 ---
 
@@ -193,98 +242,76 @@ Execute this data-driven loop until all tasks are completed:
 ```
 while pipeline not complete:
     1. Call TaskList() — returns array of all tasks with current status and blockedBy
-    2. Find the next task(s) where: status == "pending" AND all blockedBy tasks have status == "completed"
-       - SPECIAL: T1 and T2 can BOTH be ready simultaneously (parallel RCA)
-       - If both T1 and T2 are ready, spawn BOTH in parallel using two Task() calls
-       - If no such task exists and tasks remain, check for consolidation step (see below)
-    3. Call TaskGet(task.id) — read full description with AGENT, MODEL, INPUT, OUTPUT
+    2. Find the next task where: status == "pending" AND all blockedBy tasks have status == "completed"
+       (Only one task will be unblocked at a time — all tasks are sequential)
+    3. Call TaskGet(task.id) — read full description
     4. Call TaskUpdate(task.id, status: "in_progress")
-    5. Execute task using description as execution context:
-       - Parse AGENT, MODEL, INPUT, OUTPUT from description
-       - If AGENT contains "external" or "do NOT pass model": spawn via Task() WITHOUT model parameter
-       - Otherwise: spawn via Task() with model from description
-    6. Check output file (from description's OUTPUT field) for result
-    7. Handle result (see Result Handling below)
-    8. SPECIAL CONSOLIDATION CHECK: After marking T1 and T2 completed, BEFORE proceeding to T3:
-       - Execute the Orchestrator Consolidation step (see below)
-       - This writes user-story.json and plan-refined.json
-       - Only then proceed to T3
-    9. Enrich next task (BEFORE marking completed):
-       - Read output file, extract key context per Progressive Enrichment table
-       - Find next task via TaskList(), find the task whose blockedBy includes current task ID
-       - Call TaskUpdate(next_task_id, description: <enriched>) per Enrichment Update Rule
-       - Enrichment is best-effort — failure does not block the pipeline
+    5. Execute task using description as execution context
+    6. Check output file for result
+    7. *** RCA CONSOLIDATION CHECK (inline, before handling result) ***
+       After completing a task, check if:
+         (a) The just-completed task is of type 'rca' (check stages[i].type === 'rca')
+         (b) The NEXT task in the pipeline is NOT of type 'rca' (or there is no next task)
+       If BOTH conditions are true: run the Orchestrator Consolidation step BEFORE dispatching next task.
+       See "Orchestrator Consolidation" section below.
+    8. Handle result (see Result Handling below)
+    9. Enrich next task (before marking completed — best-effort, see Progressive Enrichment)
    10. Call TaskUpdate(task.id, status: "completed")
 ```
 
-**IMPORTANT:** Steps 1, 3, 4, 9, and 10 are **TaskList, TaskGet, and TaskUpdate tool calls**, not file reads or Bash commands.
+### RCA Consolidation Trigger Detection
 
-### Parallel RCA Spawning
-
-When both T1 and T2 are available (both pending, no blockedBy), spawn them simultaneously:
+After each task completion, check the `stages` array in `pipeline-tasks.json`:
 
 ```
-// Mark both in_progress
-TaskUpdate(T1.id, status: "in_progress")
-TaskUpdate(T2.id, status: "in_progress")
+completedStageIndex = find index in stages where task_id matches current task
+completedStage = stages[completedStageIndex]
+nextStage = stages[completedStageIndex + 1]  // may be null if last
 
-// Spawn both in parallel (two Task() calls in the same message)
-Task(
-  subagent_type: "dev-buddy:root-cause-analyst",
-  model: "sonnet",
-  prompt: "[Bug description] You are analyzing as Sonnet. Write output to .task/rca-sonnet.json. Set reviewer to sonnet."
-)
-Task(
-  subagent_type: "dev-buddy:root-cause-analyst",
-  model: "opus",
-  prompt: "[Bug description] You are analyzing as Opus. Write output to .task/rca-opus.json. Set reviewer to opus."
-)
+if completedStage.type === 'rca' AND (nextStage === null OR nextStage.type !== 'rca'):
+    → Run Orchestrator Consolidation NOW (inline, before dispatching next task)
+    → Write user-story.json and plan-refined.json
+    → Then proceed to next task
 ```
 
-After both return, proceed to consolidation.
+This trigger correctly handles any number of consecutive RCA stages (not just 2). It fires after the LAST RCA in a consecutive sequence.
 
 ---
 
-## Orchestrator Consolidation (Between T2 Completion and T3 Start)
+## Orchestrator Consolidation (Inline Action, NOT a Task)
 
-**This is the key differentiator from `/dev-buddy-feature-implement`.** The orchestrator does this work itself — it is NOT a task, NOT delegated to an agent.
+This is an INLINE ORCHESTRATOR ACTION. It is NOT a task, NOT delegated to an agent. The orchestrator reads all RCA output files and writes the consolidated diagnosis directly.
 
-When both T1 and T2 are completed (detected via TaskList), the orchestrator:
+### Step 1: Read All RCA Outputs
 
-### Step 1: Read Both RCA Outputs
-
+Find all rca-*.json files from `stages` array entries with `type === 'rca'`:
 ```
-Read(".task/rca-sonnet.json")
-Read(".task/rca-opus.json")
+rcaFiles = stages.filter(s => s.type === 'rca').map(s => s.output_file)
+// e.g., ['rca-1.json', 'rca-2.json']
+Read each: Read(".task/rca-1.json"), Read(".task/rca-2.json"), ...
 ```
 
 ### Step 2: Consolidate Findings
 
-**If both agree on root cause** (same file, same general diagnosis):
+**If all RCAs agree on root cause** (same file, same general diagnosis):
 - Use the shared diagnosis — high confidence
-- Take the more detailed explanation
-- Merge affected files, fix constraints, and impact analysis from both
+- Take the most detailed explanation
+- Merge affected files, fix constraints, and impact analysis from all RCAs
 
-**If they disagree** (different root files, different categories):
-- Present both diagnoses to the user via AskUserQuestion:
+**If RCAs disagree** (different root files, different categories):
+- Present diagnoses to user via AskUserQuestion:
   ```
-  AskUserQuestion:
-    "The two RCA analyses disagree on the root cause:
-
-    Sonnet says: [summary] in [file]:[line]
-    Opus says: [summary] in [file]:[line]
-
-    Which diagnosis is more likely correct?"
-    Option 1: "Sonnet's diagnosis"
-    Option 2: "Opus's diagnosis"
-    Option 3: "Both may be contributing factors"
+  "The RCA analyses disagree on the root cause:
+   RCA 1 (Sonnet): [summary] in [file]:[line]
+   RCA 2 (Opus): [summary] in [file]:[line]
+   Which diagnosis is more likely correct?"
+  Options: Each RCA's diagnosis, or "All may be contributing factors"
   ```
-- Use the user's chosen diagnosis to proceed
-- If "both contributing", merge both into the fix plan
+- Use user's chosen diagnosis, or merge if "all contributing"
 
 ### Step 3: Write user-story.json
 
-Write `.task/user-story.json` with bug-fix acceptance criteria:
+Write `.task/user-story.json` with bug-fix acceptance criteria. **This file name is FIXED — not configurable:**
 
 ```json
 {
@@ -303,22 +330,20 @@ Write `.task/user-story.json` with bug-fix acceptance criteria:
     { "id": "AC4", "description": "Root cause is addressed, not just symptoms patched" }
   ],
   "scope": {
-    "affected_files": ["[merged from both RCAs]"],
+    "affected_files": ["[merged from all RCAs]"],
     "blast_radius": "[from RCA impact analysis]",
     "fix_constraints": {
-      "must_preserve": ["[merged from both RCAs]"],
-      "safe_to_change": ["[merged from both RCAs]"]
+      "must_preserve": ["[merged from all RCAs]"],
+      "safe_to_change": ["[merged from all RCAs]"]
     }
   },
   "implementation": { "max_iterations": 10 }
 }
 ```
 
-**Additional ACs:** Add specific ACs from the RCA findings if warranted (e.g., "AC5: Input validation added for [specific case]").
-
 ### Step 4: Write plan-refined.json
 
-Write `.task/plan-refined.json` with a minimal fix plan:
+Write `.task/plan-refined.json` with a minimal fix plan. **This file name is FIXED — not configurable:**
 
 ```json
 {
@@ -331,39 +356,30 @@ Write `.task/plan-refined.json` with a minimal fix plan:
     "complexity": "[From estimated_complexity]"
   },
   "steps": [
-    {
-      "description": "Write regression test that reproduces the bug (must fail before fix)",
-      "files": ["path/to/test-file.ts"]
-    },
-    {
-      "description": "Apply minimal fix to [root_file] at line [root_line]: [specific change]",
-      "files": ["path/to/root-file.ts"]
-    },
-    {
-      "description": "Verify regression test passes and all existing tests still pass",
-      "files": []
-    }
+    { "description": "Write regression test that reproduces the bug", "files": ["path/to/test.ts"] },
+    { "description": "Apply minimal fix to [root_file] at line [root_line]", "files": ["path/to/file.ts"] },
+    { "description": "Verify regression test passes, all existing tests pass", "files": [] }
   ],
   "test_plan": {
     "commands": ["npm test", "npm run lint"],
-    "regression_test": "Description of the specific regression test to write",
+    "regression_test": "Specific regression test to write",
     "success_pattern": "All tests pass",
     "failure_pattern": "FAIL|ERROR"
   },
   "risk_assessment": {
     "blast_radius": "[from RCA]",
     "regression_risk": "[from RCA]",
-    "mitigation": "Regression test ensures the exact bug scenario is covered"
+    "mitigation": "Regression test covers the exact bug scenario"
   },
   "completion_promise": "<promise>IMPLEMENTATION_COMPLETE</promise>"
 }
 ```
 
-**Key principle:** The fix plan should be the **smallest possible change** that addresses the root cause. No refactoring, no improvements, no cleanup beyond the fix itself.
+**Key principle:** The fix plan must be the **smallest possible change** that addresses the root cause. No refactoring, no cleanup beyond the fix itself.
 
-### Step 5: Proceed to T3
+### Step 5: Continue Main Loop
 
-After writing both files, the consolidation is complete. T3 (Codex validation) is now unblocked (T1 and T2 are completed). Continue the main loop.
+After writing both files, the consolidation is complete. Continue the main loop — the next task (plan-review or implementation, depending on config) is now unblocked.
 
 ---
 
@@ -371,18 +387,14 @@ After writing both files, the consolidation is complete. T3 (Codex validation) i
 
 Before marking each task completed, read its output file, extract key context (≤ 500 chars), and update the next task's description via TaskUpdate.
 
-**Enrichment Update Rule:** Read the next task's current description via TaskGet(). If it already contains a "CONTEXT FROM PRIOR TASK:" block, *replace* that block. If not, *append*. Each task only ever has one context block.
+**Enrichment Update Rule:** Read next task's description via TaskGet(). If it already contains a "CONTEXT FROM PRIOR TASK:" block, replace it. Otherwise, append. Only one context block per task.
 
-| Completed Task | Enrich | Extract From Output |
-|---------------|--------|---------------------|
-| T1 RCA Sonnet | T3 Codex Validation | root cause summary, confidence, affected files |
-| T2 RCA Opus | T3 Codex Validation | root cause summary, confidence, affected files |
-| T3 Codex Validation | T4 Implementation | validation status, concerns, AC count |
-| T4 Implementation | T5 Code Review Sonnet | files modified/created, test results |
-| T5 Review Sonnet | T6 Review Opus | status, findings, AC verified/total |
-| T6 Review Opus | T7 Review Codex | status, findings, + Sonnet status |
-
-**Note on T1/T2 → T3:** Both T1 and T2 enrich T3. The second enrichment appends to the first (since T3 won't have been started yet). Use separate `CONTEXT FROM RCA SONNET:` and `CONTEXT FROM RCA OPUS:` blocks for clarity.
+| Completed Stage | Enrich Next Stage | Extract From Output |
+|----------------|-------------------|---------------------|
+| rca-N.json | rca-(N+1).json or plan-review-1.json | root cause summary, confidence, affected files |
+| plan-review-N.json | implementation or next plan-review | validation status, concerns, AC count |
+| impl-result.json | code-review-1.json | files modified/created, test results |
+| code-review-N.json | code-review-(N+1).json | status, findings, AC verified/total |
 
 ---
 
@@ -393,176 +405,114 @@ Before marking each task completed, read its output file, extract key context (�
 | Result | Action |
 |--------|--------|
 | `approved` | Continue to next task |
-| `needs_changes` | Create fix task + re-review task for SAME reviewer |
-| `rejected` (Codex RCA validation) | Ask user to provide more context or re-examine the bug |
-| `rejected` (Codex code review) | Terminal state `code_rejected` - ask user |
-| `rejected` (Sonnet/Opus code review) | Create REWORK task + re-review for SAME reviewer |
-| `needs_clarification` | Read `clarification_questions`, answer directly if possible, otherwise use AskUserQuestion. After clarification, re-run SAME reviewer. |
-| Codex error (not installed/auth/timeout) | AskUserQuestion: "Codex CLI unavailable: {error}. Skip Codex gate or install?" |
+| `needs_changes` | Create fix task + re-review task for SAME STAGE INDEX |
+| `rejected` (CLI/Codex plan review) | Ask user to provide more context or re-examine bug |
+| `rejected` (CLI/Codex code review) | Terminal state `code_rejected` — ask user |
+| `rejected` (Sonnet/Opus code review) | Create REWORK task + re-review for SAME STAGE INDEX |
+| `needs_clarification` | Read questions, answer or AskUserQuestion, re-run SAME stage |
+| Codex error | AskUserQuestion to skip or install |
 
 **Implementation results:**
 
 | Result | Action |
 |--------|--------|
 | `complete` | Continue to code review |
-| `partial` | Continue implementation (resume implementer agent) |
+| `partial` | Continue implementation |
 | `partial` + true blocker | Ask user |
-| `failed` | Terminal state `implementation_failed` - ask user |
-
-**Severity:**
-- `needs_changes` = minor issues, fixable
-- `rejected` = fundamental problems, requires rework or user decision
-- `failed` = blocked, requires user intervention
+| `failed` | Terminal state `implementation_failed` — ask user |
 
 ---
 
-## Dynamic Tasks (Same-Reviewer Re-Review)
+## Dynamic Tasks (Same-Stage Re-Review)
 
-When a review returns `needs_changes` or `rejected`, the **same reviewer** must validate before proceeding.
+When a review returns `needs_changes`, the **same stage (same index)** re-reviews the fix.
 
-**Exception:** Codex RCA validation `rejected` is NOT a terminal pipeline state — ask the user for more bug context and potentially re-run RCA. Codex code `rejected` IS terminal.
+**CRITICAL: Re-review returns to the SAME STAGE INDEX, not the next stage.** If code-review-2.json returns `needs_changes`:
+- Fix task targets the code issue
+- Re-review targets stage index 2 (same output file code-review-2.json)
+- Stage index 3 is NOT started until stage index 2 approves
 
 ### needs_changes → Fix Task
 
-**Key rules:**
-- Use `current_task_id` from the main loop (the review that just completed), NOT the base ID from pipeline-tasks.json.
-- Track `iteration_count` per reviewer via TaskList.
-- **Final reviewer (Codex) has no next_reviewer_id** — skip the `TaskUpdate(next_reviewer_id, ...)` call.
-
 ```
-Any reviewer returns needs_changes:
-  issues = read review_file → extract blockers + critical/high findings (≤ 500 chars)
+// stage = the pipeline stage entry that returned needs_changes
+// current_task_id = from main loop
+// next_task_id = next stage in pipeline (if any)
+// iteration = from TaskList: count existing "Fix {stage subject} v*" tasks + 1
 
-  fix = TaskCreate(
-    subject: "Fix [Phase] - [Reviewer] v{iteration}",
-    activeForm: "Fixing [phase] issues...",
-    description: "PHASE: Fix {phase} issues from {reviewer} review\n\
-AGENT: dev-buddy:implementer (model: sonnet)\n\
-INPUT: {review_file} (issues to fix), {source_file} (current artifact)\n\
-OUTPUT: {source_file} (updated)\n\
-ISSUES TO FIX:\n{issues summary}\n\
-COMPLETION: All critical/high issues from {reviewer} review addressed"
-  )
-  TaskUpdate(fix.id, addBlockedBy: [current_task_id])
+fix = TaskCreate(
+  subject: "Fix {stage subject} v{iteration}",
+  description: "...ISSUES TO FIX: {issues}..."
+)
+TaskUpdate(fix.id, addBlockedBy: [current_task_id])
 
-  rerev = TaskCreate(
-    subject: "[Phase] Review - [Reviewer] v{iteration+1}",
-    activeForm: "Re-reviewing [phase]...",
-    description: "PHASE: {Phase} Re-review (iteration {iteration+1})\n\
-AGENT: dev-buddy:{code-reviewer} (model: {model})\n\
-INPUT: {same INPUT files as original review task}\n\
-OUTPUT: {same OUTPUT file as original review — overwrite}\n\
-NOTE: Re-review after fix. Same reviewer, same output file.\n\
-RESULT HANDLING: Same as original review task\n\
-COMPLETION: {output_file} exists with updated status"
-  )
-  TaskUpdate(rerev.id, addBlockedBy: [fix.id])
-  if next_reviewer_id is not null:
-    TaskUpdate(next_reviewer_id, addBlockedBy: [rerev.id])
-```
-
-### rejected → Rework Task (Sonnet/Opus Code Reviews Only)
-
-```
-Sonnet or Opus code reviewer returns rejected:
-  issues = read review file → extract rejection reasons (≤ 500 chars)
-
-  rework = TaskCreate(
-    subject: "Rework Code - [Reviewer] v{iteration}",
-    activeForm: "Reworking code...",
-    description: "PHASE: Rework code — {reviewer} rejected\n\
-AGENT: dev-buddy:implementer (model: sonnet)\n\
-INPUT: {review_file}, .task/user-story.json, .task/plan-refined.json\n\
-OUTPUT: .task/impl-result.json (updated)\n\
-REJECTION REASONS:\n{issues summary}\n\
-COMPLETION: .task/impl-result.json updated with status='complete'"
-  )
-  TaskUpdate(rework.id, addBlockedBy: [current_task_id])
-
-  rerev = TaskCreate(
-    subject: "Code Review - [Reviewer] v{iteration+1}",
-    activeForm: "Re-reviewing code...",
-    description: "PHASE: Code Re-review (iteration {iteration+1})\n\
-AGENT: dev-buddy:code-reviewer (model: {model})\n\
-INPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json\n\
-OUTPUT: .task/code-review-{reviewer}.json\n\
-NOTE: Re-review after rework. Same reviewer validates fixes.\n\
-RESULT HANDLING: Same as original code review task\n\
-COMPLETION: .task/code-review-{reviewer}.json exists with updated status"
-  )
-  TaskUpdate(rerev.id, addBlockedBy: [rework.id])
-  if next_reviewer_id is not null:
-    TaskUpdate(next_reviewer_id, addBlockedBy: [rerev.id])
-```
-
-### rejected → Terminal (Codex Code Review)
-
-```
-Codex code review returns rejected:
-  → Terminal state: code_rejected
-  → Ask user: rework, restart from RCA, or abort
+rerev = TaskCreate(
+  subject: "{stage subject} v{iteration+1}",
+  description: "...SAME OUTPUT FILE: .task/{stage.output_file}
+               {if CLI stage: --output-file .task/{stage.output_file}}..."
+)
+TaskUpdate(rerev.id, addBlockedBy: [fix.id])
+if next_task_id is not null:
+  TaskUpdate(next_task_id, addBlockedBy: [rerev.id])
 ```
 
 ### Iteration Tracking
 
-Derive iteration count from TaskList (count existing matching tasks). After **10 re-reviews** for any single reviewer, escalate to user.
+After **max_iterations** re-reviews total across all pipeline stages (from `resolved_config.max_iterations`), escalate to user.
 
 ---
 
-## Agent Reference
+## CLI Provider Stage Execution
 
-| Task | Agent | Model | Output File |
-|------|-------|-------|-------------|
-| RCA - Sonnet | root-cause-analyst | sonnet | rca-sonnet.json |
-| RCA - Opus | root-cause-analyst | opus | rca-opus.json |
-| RCA + Plan Validation | codex-reviewer | external | review-codex.json |
+When a stage's provider is a `cli` type preset, the cli-executor agent runs `cli-executor.ts` with the preset name, model, and output file:
+
+```
+Task(
+  subagent_type: "dev-buddy:cli-executor",
+  prompt: "Run: bun '${CLAUDE_PLUGIN_ROOT}/scripts/cli-executor.ts' \
+    --type {plan|code} \
+    --plugin-root '${CLAUDE_PLUGIN_ROOT}' \
+    --preset '{stage.provider}' \
+    --model '{stage.model}' \
+    --output-file '${CLAUDE_PROJECT_DIR}/.task/{stage.output_file}'
+  Review the {plan|code} and write output to the specified file."
+)
+```
+
+---
+
+## Agent Reference (Default Bugfix Pipeline)
+
+| Stage | Agent | Model | Output File |
+|-------|-------|-------|-------------|
+| RCA 1 | root-cause-analyst | sonnet | rca-1.json |
+| RCA 2 | root-cause-analyst | opus | rca-2.json |
+| Plan Review 1 | cli-executor | external (CLI) | plan-review-1.json |
 | Implementation | implementer | sonnet | impl-result.json |
-| Code Review - Sonnet | code-reviewer | sonnet | code-review-sonnet.json |
-| Code Review - Opus | code-reviewer | opus | code-review-opus.json |
-| Code Review - Codex | codex-reviewer | external | code-review-codex.json |
+| Code Review 1 | code-reviewer | sonnet | code-review-1.json |
+| Code Review 2 | code-reviewer | opus | code-review-2.json |
+| Code Review 3 | cli-executor | external (CLI) | code-review-3.json |
 
-### Spawning Workers
-
-```
-Task(
-  subagent_type: "dev-buddy:<agent-name>",
-  model: "<model>",
-  prompt: "[Agent instructions] + [Context from .task/ files]"
-)
-```
-
-For Codex reviews:
-```
-Task(
-  subagent_type: "dev-buddy:codex-reviewer",
-  prompt: "[Agent instructions] + Review [plan/code]"
-)
-```
+For custom pipelines, derive agent reference dynamically from `stages` in pipeline-tasks.json.
 
 ---
 
 ## User Interaction
 
-The main thread handles user input throughout the pipeline:
-
 ### User Provides Additional Info
 
-If user adds context mid-pipeline:
-
-1. **During RCA:** Relay additional context to running RCA agents if possible
+1. **During RCA:** Note additional context — each RCA is sequential, so you can relay context to the running analyst
 2. **During consolidation:** Incorporate into diagnosis
 3. **After implementation started:** Ask user if they want to continue or restart from RCA
 
 ### Suggesting Restart
 
-When significant issues arise:
-
 ```
 AskUserQuestion:
   "The bug fix has fundamental issues. Options:"
-  1. "Restart from RCA" - Re-analyze the bug
-  2. "Revise fix plan" - Keep RCA, re-plan fix
-  3. "Continue anyway" - Proceed with current approach
+  1. "Restart from RCA"
+  2. "Revise fix plan"
+  3. "Continue anyway"
 ```
 
 ---
@@ -571,103 +521,27 @@ AskUserQuestion:
 
 ### UserPromptSubmit Hook (Guidance)
 
-The `guidance-hook.ts` runs on every prompt and:
-
-1. **Reads artifact files** — Checks `.task/*.json` to determine current phase
-2. **Injects guidance** — Reminds you what to do next (detects RCA phase via `rca-*.json` files)
-3. **No state tracking** — Phase is implicit from which files exist
+The `guidance-hook.ts` reads `pipeline-tasks.json.resolved_config` to determine current phase. For bug-fix pipelines, it detects RCA progress by checking how many rca-*.json output files exist.
 
 ### SubagentStop Hook (Enforcement)
 
-The `review-validator.ts` runs when reviewer agents finish and:
-
-1. **Validates AC coverage** — Checks `acceptance_criteria_verification` (code reviews)
-2. **Blocks invalid reviews** — Returns `{"decision": "block", "reason": "..."}` if review doesn't verify all ACs
-3. **Allows valid reviews** — Proceeds normally when validation passes
+The `review-validator.ts` derives review file lists dynamically from `resolved_config` in pipeline-tasks.json. Validates reviewer outputs and can block invalid reviews.
 
 ---
 
-## Output File Formats
+## Important Rules
 
-### user-story.json (Bug-Fix)
-```json
-{
-  "id": "story-YYYYMMDD-HHMMSS",
-  "title": "Fix: Bug title",
-  "pipeline_type": "bug-fix",
-  "requirements": {
-    "root_cause": "Consolidated root cause summary",
-    "root_file": "path/to/file.ts",
-    "root_line": 42
-  },
-  "acceptance_criteria": [
-    { "id": "AC1", "description": "Bug is resolved — expected behavior restored" },
-    { "id": "AC2", "description": "Regression test covers the bug scenario" },
-    { "id": "AC3", "description": "No existing tests broken" },
-    { "id": "AC4", "description": "Root cause addressed, not just symptoms" }
-  ],
-  "scope": { "affected_files": [], "blast_radius": "isolated|module|cross-module" },
-  "implementation": { "max_iterations": 10 }
-}
-```
-
-### plan-refined.json (Bug-Fix)
-```json
-{
-  "id": "plan-YYYYMMDD-HHMMSS",
-  "title": "Fix: Bug title",
-  "pipeline_type": "bug-fix",
-  "technical_approach": { "root_cause": "...", "fix_strategy": "...", "complexity": "..." },
-  "steps": [
-    { "description": "Write regression test", "files": [] },
-    { "description": "Apply minimal fix", "files": [] },
-    { "description": "Verify all tests pass", "files": [] }
-  ],
-  "test_plan": { "commands": [], "regression_test": "...", "success_pattern": "...", "failure_pattern": "..." },
-  "risk_assessment": { "blast_radius": "...", "regression_risk": "...", "mitigation": "..." },
-  "completion_promise": "<promise>IMPLEMENTATION_COMPLETE</promise>"
-}
-```
-
-### rca-*.json
-```json
-{
-  "id": "rca-YYYYMMDD-HHMMSS",
-  "reviewer": "sonnet|opus",
-  "bug_report": { "title": "...", "reported_behavior": "...", "expected_behavior": "...", "reproduction_steps": [], "reproduction_result": "pass|fail|inconclusive", "reproduction_output": "..." },
-  "root_cause": { "summary": "...", "detailed_explanation": "...", "category": "...", "root_file": "...", "root_line": 0, "confidence": "high|medium|low" },
-  "impact_analysis": { "affected_files": [], "affected_functions": [], "blast_radius": "...", "regression_risk": "..." },
-  "fix_constraints": { "must_preserve": [], "safe_to_change": [], "existing_tests": [] },
-  "recommended_approach": { "strategy": "...", "estimated_complexity": "..." }
-}
-```
-
-### code-review-*.json
-```json
-{
-  "status": "approved|needs_changes|needs_clarification|rejected",
-  "needs_clarification": false,
-  "clarification_questions": [],
-  "summary": "...",
-  "acceptance_criteria_verification": {
-    "total": 4,
-    "verified": 4,
-    "missing": [],
-    "details": [
-      { "ac_id": "AC1", "status": "IMPLEMENTED", "evidence": "...", "notes": "" }
-    ]
-  }
-}
-```
-
-### impl-result.json
-```json
-{
-  "status": "complete|partial|failed",
-  "files_changed": [],
-  "blocked_reason": "..."
-}
-```
+1. **Pipeline team first, then task chain** — Create team (Step 1.3), verify tools (Step 1.4), then create task chain.
+2. **All stages sequential** — NO parallel execution, even for RCA stages. Every task has `blockedBy` pointing to the previous task.
+3. **Data-driven task chain** — Iterate over `bugfix_pipeline` array, create one task per entry.
+4. **RCA consolidation is inline** — NOT a task, NOT an agent call. The orchestrator reads all rca-*.json files and writes user-story.json + plan-refined.json directly. Fixed file names.
+5. **Consolidation trigger** — After completing an rca stage, check if next stage is non-rca (or no next stage). If yes, run consolidation immediately before dispatching next task.
+6. **Type-indexed file naming** — rca-1.json, rca-2.json, plan-review-1.json, code-review-1.json, etc.
+7. **Same-stage re-review** — After fix, SAME stage index re-reviews (not the next stage).
+8. **resolved_config snapshot** — pipeline-tasks.json includes full PipelineConfig. Hooks read this, never ~/.vcp/dev-buddy.json.
+9. **max_iterations from config** — Use resolved_config.max_iterations for fix/re-review cycle limit.
+10. **CLI stages pass --preset, --model, --output-file** — CLI provider stages MUST pass --preset, --model, and --output-file to cli-executor.ts.
+11. **Minimal fix principle** — Fix is the smallest possible change addressing root cause. No refactoring.
 
 ---
 
@@ -676,85 +550,34 @@ The `review-validator.ts` runs when reviewer agents finish and:
 | State | Meaning | Action |
 |-------|---------|--------|
 | `complete` | All reviews approved | Report success |
-| `max_iterations_reached` | 10+ fix iterations | Escalate to user |
-| `code_rejected` | Codex rejected code | User decision needed |
+| `max_iterations_reached` | max_iterations re-reviews | Escalate to user |
+| `code_rejected` | CLI reviewer rejected code | User decision needed |
 | `implementation_failed` | Implementation blocked | User decision needed |
 
 ---
 
 ## Pipeline Completion
 
-When all reviews are approved (or a terminal state is reached):
-
 1. Report results to the user
 2. Read `team_name` from `.task/pipeline-tasks.json` and use `TeamDelete` to clean up
-3. Pipeline team cleanup is best-effort — if TeamDelete fails, the next pipeline run's idempotent Step 1.5 will handle it
-4. Shutdown session managers:
+3. Shutdown session managers:
    ```bash
    bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts" shutdown --cwd "${CLAUDE_PROJECT_DIR}"
    ```
 
 ## Provider Routing
 
-When spawning agents for each pipeline stage, route based on the provider type.
+**subscription:** `Task(subagent_type: "dev-buddy:<agent>", model: "<model>", prompt: "...")`
 
-**If provider type is `subscription` (default):** Use Task tool as before:
-```
-Task(subagent_type: "dev-buddy:<agent-name>", model: "<sonnet|opus>", prompt: "...")
-```
+**api:** curl to session manager port from `.task/session-ports.json`
 
-**If provider type is `api`:** Use curl to the session manager. Look up port and token from `.task/session-ports.json`:
-```bash
-curl -s --connect-timeout 5 --max-time 300 \
-  -X POST "http://localhost:{PORT}/tasks/send" \
-  -H "Authorization: Bearer {TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"message":{"role":"user","parts":[{"type":"text","text":"...prompt..."}]}}'
-```
-
-- On curl exit code 28 (timeout): Report `API provider at port {PORT} timed out for stage {STAGE}` and fail the stage
-- On curl exit code 7 (connection refused): Report `Session manager at port {PORT} is not running` and fail the stage
-
-**If provider type is `cli`:** Use codex-review.ts wrapper:
-```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/codex-review.ts" --type <plan|code> --plugin-root "${CLAUDE_PLUGIN_ROOT}"
-```
-
-## Error Propagation by Provider Type
-
-| Provider Type | How Errors Arrive | How to Detect |
-|--------------|-------------------|---------------|
-| `subscription` | Task tool output | Check task output for failure indicators |
-| `api` | HTTP response body | Check `task.status === 'failed'`, read `task.error.message` |
-| `cli` | Bash exit code + stderr | Check exit code != 0, read stderr content |
-
----
-
-## Important Rules
-
-1. **Pipeline team first, then task chain** — After reset, create the pipeline team (Step 1.5), verify task tools (Step 1.6), then create the full 7-task chain. No agents are spawned before the task chain exists.
-2. **Tasks are primary** — Create tasks with `blockedBy` for structural enforcement
-3. **Parallel RCA** — T1 and T2 have no blockedBy — spawn both simultaneously
-4. **Orchestrator consolidation** — The orchestrator (main thread) reads both RCA outputs, consolidates, and writes user-story.json + plan-refined.json directly. This is NOT a task.
-5. **No pipeline-tasks.json for task IDs beyond tracking** — This pipeline does NOT use `pipeline-tasks.json` for phase detection. Task IDs are tracked via TaskList().
-6. **SubagentStop enforces** — Hook validates reviewer outputs and can block
-7. **AC verification required** — All code reviews MUST verify acceptance criteria from user-story.json
-8. **Same-reviewer re-review** — After fix/rework, SAME reviewer validates before next
-9. **Codex is mandatory** — Pipeline NOT complete without Codex approval (both RCA validation and code review)
-10. **Max 10 iterations** — Per reviewer, then escalate to user
-11. **Accept all feedback** — No debate with reviewers, just fix
-12. **User can interrupt** — Handle additional input, offer restart/kick back
-13. **Task descriptions are execution context** — Every TaskCreate includes AGENT, MODEL, INPUT, OUTPUT. Main loop calls TaskGet() before spawning. Never derive execution context from hardcoded prose.
-14. **Progressive enrichment before completion** — Before marking a task completed, read output, extract key context (≤ 500 chars), and TaskUpdate the next task. Best-effort.
-15. **Minimal fix principle** — The fix should be the smallest possible change that addresses the root cause. No refactoring, no improvements, no cleanup beyond the fix.
+**cli:** Task description specifies cli-executor.ts invocation with `--preset`, `--model`, and `--output-file`
 
 ---
 
 ## Emergency Controls
 
-If stuck:
-
-1. **Check task state:** `TaskList()` to see blocked tasks (requires pipeline team to be active)
-2. **Check artifacts:** Read `.task/*.json` files to understand progress
-3. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset`
-4. **Check pipeline team:** Read `team_name` from `.task/pipeline-tasks.json`, verify team exists
+1. **Check task state:** `TaskList()`
+2. **Check artifacts:** Read `.task/*.json` files
+3. **Check resolved config:** Read `resolved_config` from `.task/pipeline-tasks.json`
+4. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset`

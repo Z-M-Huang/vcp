@@ -2,6 +2,7 @@
 name: dev-buddy-manage-presets
 description: Dev Buddy AI provider presets management (list, add, update, remove)
 user-invocable: true
+allowed-tools: Read, Bash, AskUserQuestion
 ---
 
 # Manage AI Provider Presets
@@ -31,7 +32,7 @@ Add a new preset by name. The type determines which fields are required:
 
 - **api**: `base_url`, `api_key` (provider credential), `models` (array) are required
 - **subscription**: Only `name` is required (uses Task tool)
-- **cli**: `command` is required, `args` is optional
+- **cli**: `command`, `args_template`, and `models` are required
 
 Example — add an API preset. Replace `YOUR_PROVIDER_KEY` with your actual credential:
 ```bash
@@ -69,7 +70,7 @@ Example — add a CLI preset:
 bun -e "
 const { readPresets, writePresets } = await import('${CLAUDE_PLUGIN_ROOT}/scripts/preset-utils.ts');
 const config = readPresets();
-config.presets['codex-cli'] = { type: 'cli', name: 'OpenAI Codex CLI', command: 'codex', args: ['--model', 'o3'] };
+config.presets['codex-cli'] = { type: 'cli', name: 'OpenAI Codex CLI', command: 'codex', args_template: 'exec --full-auto --model {model} {prompt}', models: ['o3', 'o4-mini'] };
 writePresets(config);
 console.log('Preset added: codex-cli');
 "
@@ -108,13 +109,19 @@ import path from 'path';
 
 const presetName = 'openrouter';
 
+// Check format: feature_pipeline and bugfix_pipeline are arrays of {type, provider, model}
 const pipelineConfigPath = path.join(os.homedir(), '.vcp', 'dev-buddy.json');
 if (fs.existsSync(pipelineConfigPath)) {
   const pipelineConfig = JSON.parse(fs.readFileSync(pipelineConfigPath, 'utf-8'));
-  const stages = pipelineConfig?.pipeline?.stages || {};
-  const usedIn = Object.entries(stages)
-    .filter(([, stage]) => (stage as any)?.provider === presetName)
-    .map(([stageName]) => stageName);
+  const usedIn: string[] = [];
+  const featurePipeline = pipelineConfig?.feature_pipeline || [];
+  featurePipeline.forEach((stage: any, i: number) => {
+    if (stage?.provider === presetName) usedIn.push('feature_pipeline[' + i + '] (' + stage.type + ')');
+  });
+  const bugfixPipeline = pipelineConfig?.bugfix_pipeline || [];
+  bugfixPipeline.forEach((stage: any, i: number) => {
+    if (stage?.provider === presetName) usedIn.push('bugfix_pipeline[' + i + '] (' + stage.type + ')');
+  });
   if (usedIn.length > 0) {
     console.warn('WARNING: Preset is referenced in pipeline stages: ' + usedIn.join(', '));
     console.warn('Update the pipeline config before removing this preset.');
@@ -138,7 +145,7 @@ console.log('Preset removed: ' + presetName);
 |------|----------------|-------|
 | `subscription` | `type`, `name` | Uses Claude Task tool (default) |
 | `api` | `type`, `name`, `base_url`, `api_key`, `models` | Direct API via session manager |
-| `cli` | `type`, `name`, `command` | CLI tool like Codex CLI |
+| `cli` | `type`, `name`, `command`, `args_template`, `models` | CLI tool like Codex CLI |
 
 ## Config Location
 

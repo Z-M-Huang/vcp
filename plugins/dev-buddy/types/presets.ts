@@ -20,12 +20,36 @@ export interface SubscriptionPreset {
   description?: string;
 }
 
+/**
+ * CLI preset with command template placeholders.
+ *
+ * Available placeholders in args_template / resume_args_template:
+ *   {model}            — model name from stage config (validated against models[])
+ *   {output_file}      — derived output file path
+ *   {schema_path}      — path to JSON schema for structured output validation
+ *   {prompt}           — AI-generated review/task prompt
+ *   {reasoning_effort} — reasoning effort level (only when supports_reasoning_effort is true)
+ */
 export interface CliPreset {
   type: 'cli';
   name: string;
   description?: string;
+  /** The CLI command to invoke (e.g., 'codex'). */
   command: string;
-  args?: string[];
+  /** Command template string with placeholders (e.g., 'exec --full-auto --model {model} {prompt}'). */
+  args_template: string;
+  /** Optional resume template string. Used when resuming a session. */
+  resume_args_template?: string;
+  /** Whether this CLI tool supports session resume. */
+  supports_resume?: boolean;
+  /** Whether this CLI tool supports reasoning effort configuration. */
+  supports_reasoning_effort?: boolean;
+  /** Default reasoning effort level. Only used when supports_reasoning_effort is true. */
+  reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /** Custom timeout in milliseconds. Default: 1200000 (20 minutes). */
+  timeout_ms?: number;
+  /** List of model names supported by this CLI tool. Required. Validated against /^[a-z0-9.-]+$/. */
+  models: string[];
 }
 
 export type Preset = ApiPreset | SubscriptionPreset | CliPreset;

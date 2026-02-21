@@ -87,7 +87,7 @@
     },
     "reviewed_by": {
       "type": "string",
-      "enum": ["plan-reviewer", "codex-reviewer"],
+      "enum": ["plan-reviewer", "cli-executor"],
       "description": "Agent that performed the review"
     },
     "reviewed_at": {

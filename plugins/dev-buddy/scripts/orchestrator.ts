@@ -115,106 +115,89 @@ function showStatus(): void {
   logInfo(`Current phase: ${phase}`);
   console.log('');
 
-  switch (phase) {
-    case 'requirements_gathering':
-      console.log('Phase: Requirements Gathering');
-      console.log('Use requirements-gatherer agent (opus) to create user-story.json');
-      console.log('Note: If teams are available, create agent team for specialist exploration first.');
-      break;
-    case 'requirements_team_pending':
-      console.log('Phase: Requirements Gathering (Team Pending)');
-      console.log('Pipeline initialized. Spawn specialist teammates into the pipeline team.');
-      break;
-    case 'requirements_team_exploring':
-      console.log('Phase: Requirements Gathering (Team Exploring)');
-      console.log('Specialist teammates are exploring codebase and domain in parallel.');
-      console.log('Wait for ALL specialists to finish before synthesizing.');
-      break;
-    case 'plan_drafting': {
-      const ptDraft = getPipelineType(progress.pipelineTasks);
-      if (ptDraft === 'bug-fix') {
-        console.log('Phase: Planning');
-        console.log('Consolidation incomplete — write plan-refined.json from RCA findings.');
-      } else {
-        console.log('Phase: Planning');
-        console.log('Use planner agent (opus) to create plan-refined.json');
-      }
-      break;
+  // Static phase tokens (exact match)
+  if (phase === 'requirements_gathering') {
+    console.log('Phase: Requirements Gathering');
+    console.log('Use requirements-gatherer agent (opus) to create user-story.json');
+    console.log('Note: If teams are available, create agent team for specialist exploration first.');
+  } else if (phase === 'requirements_team_pending') {
+    console.log('Phase: Requirements Gathering (Team Pending)');
+    console.log('Pipeline initialized. Spawn specialist teammates into the pipeline team.');
+  } else if (phase === 'requirements_team_exploring') {
+    console.log('Phase: Requirements Gathering (Team Exploring)');
+    console.log('Specialist teammates are exploring codebase and domain in parallel.');
+    console.log('Wait for ALL specialists to finish before synthesizing.');
+  } else if (phase === 'plan_drafting') {
+    const ptDraft = getPipelineType(progress.pipelineTasks);
+    if (ptDraft === 'bug-fix') {
+      console.log('Phase: Planning');
+      console.log('Consolidation incomplete — write plan-refined.json from RCA findings.');
+    } else {
+      console.log('Phase: Planning');
+      console.log('Use planner agent (opus) to create plan-refined.json');
     }
-    case 'plan_review_sonnet':
-    case 'plan_review_opus':
-    case 'plan_review_codex': {
-      const ptReview = getPipelineType(progress.pipelineTasks);
-      if (ptReview === 'bug-fix') {
-        console.log('Phase: RCA + Plan Validation');
-        console.log('Run Codex validation of consolidated RCA and fix plan.');
-      } else {
-        console.log('Phase: Plan Review');
-        console.log('Run sequential plan reviews: sonnet -> opus -> codex');
-      }
-      break;
+  } else if (phase === 'root_cause_analysis') {
+    const rcaEntries = Object.entries(progress.stageOutputs)
+      .filter(([key]) => key.startsWith('rca-'));
+    const rcaDoneCount = rcaEntries.filter(([, v]) => v !== null).length;
+    const rcaTotalCount = rcaEntries.length;
+    if (rcaTotalCount > 0 && rcaDoneCount === rcaTotalCount) {
+      console.log('Phase: RCA Consolidation');
+      console.log('All RCA analyses complete. Consolidate findings into user-story.json + plan-refined.json.');
+    } else if (rcaDoneCount > 0) {
+      console.log('Phase: Root Cause Analysis (In Progress)');
+      const statusParts = rcaEntries.map(([key, v]) => `${key}: ${v !== null ? 'complete' : 'running'}`).join(', ');
+      console.log(statusParts);
+    } else {
+      console.log('Phase: Root Cause Analysis (Pending)');
+      console.log('Spawn root-cause-analyst stages per resolved bugfix_pipeline config.');
     }
-    case 'fix_plan_sonnet':
-    case 'fix_plan_opus':
-    case 'fix_plan_codex':
-      console.log('Phase: Fix Plan');
-      console.log('Address reviewer feedback, create fix + re-review tasks');
-      break;
-    case 'implementation':
-      console.log('Phase: Implementation');
-      console.log('Use implementer agent (sonnet) to implement plan-refined.json');
-      break;
-    case 'code_review_sonnet':
-    case 'code_review_opus':
-    case 'code_review_codex':
-      console.log('Phase: Code Review');
-      console.log('Run sequential code reviews: sonnet -> opus -> codex');
-      break;
-    case 'fix_code_sonnet':
-    case 'fix_code_opus':
-    case 'fix_code_codex':
-      console.log('Phase: Fix Code');
-      console.log('Address reviewer feedback, create fix + re-review tasks');
-      break;
-    case 'clarification_plan_sonnet':
-    case 'clarification_plan_opus':
-    case 'clarification_plan_codex':
-    case 'clarification_code_sonnet':
-    case 'clarification_code_opus':
-    case 'clarification_code_codex':
-      console.log('Phase: Clarification Needed');
-      console.log('Reviewer has questions. Read clarification_questions from review file.');
-      console.log('If you can answer directly, do so. Otherwise use AskUserQuestion.');
-      console.log('After answering, re-run the same reviewer.');
-      break;
-    case 'root_cause_analysis': {
-      const sonnetDone = !!progress.rcaSonnet;
-      const opusDone = !!progress.rcaOpus;
-      if (sonnetDone && opusDone) {
-        console.log('Phase: RCA Consolidation');
-        console.log('Both analyses complete. Consolidate findings into user-story.json + plan-refined.json.');
-      } else if (sonnetDone || opusDone) {
-        console.log('Phase: Root Cause Analysis (In Progress)');
-        console.log(`Sonnet: ${sonnetDone ? 'complete' : 'running'}, Opus: ${opusDone ? 'complete' : 'running'}.`);
-      } else {
-        console.log('Phase: Root Cause Analysis (Pending)');
-        console.log('Spawn root-cause-analyst agents (Sonnet + Opus) in parallel.');
-      }
-      break;
+  } else if (phase === 'implementation') {
+    console.log('Phase: Implementation');
+    console.log('Use implementer agent (sonnet) to implement plan-refined.json');
+  } else if (phase === 'implementation_failed') {
+    logError('Pipeline stopped: implementation_failed');
+    console.log('');
+    console.log('Review impl-result.json for failure details.');
+  } else if (phase === 'plan_rejected' || phase === 'code_rejected') {
+    logError(`Pipeline stopped: ${phase}`);
+    console.log('');
+    console.log('Review the feedback files and decide how to proceed.');
+  } else if (phase === 'complete') {
+    logSuccess('Pipeline complete! All reviews approved.');
+    console.log('');
+    console.log('To reset for next task:');
+    console.log(`  bun "${PLUGIN_ROOT}/scripts/orchestrator.ts" reset`);
+  // Dynamic phase tokens (prefix match for stage-indexed phases)
+  } else if (phase.startsWith('plan_review_')) {
+    const ptReview = getPipelineType(progress.pipelineTasks);
+    if (ptReview === 'bug-fix') {
+      console.log('Phase: RCA + Plan Validation');
+      console.log('Run plan review stage for consolidated RCA and fix plan.');
+    } else {
+      console.log('Phase: Plan Review');
+      console.log('Run plan review stage per pipeline config.');
     }
-    case 'complete':
-      logSuccess('Pipeline complete! All reviews approved.');
-      console.log('');
-      console.log('To reset for next task:');
-      console.log(`  bun "${PLUGIN_ROOT}/scripts/orchestrator.ts" reset`);
-      break;
-    case 'plan_rejected':
-    case 'implementation_failed':
-    case 'code_rejected':
-      logError(`Pipeline stopped: ${phase}`);
-      console.log('');
-      console.log('Review the feedback files and decide how to proceed.');
-      break;
+  } else if (phase.startsWith('code_review_')) {
+    console.log('Phase: Code Review');
+    console.log('Run code review stage per pipeline config.');
+  } else if (phase.startsWith('fix_plan_review_')) {
+    console.log('Phase: Fix Plan');
+    console.log('Address reviewer feedback, create fix + re-review tasks');
+  } else if (phase.startsWith('fix_code_review_')) {
+    console.log('Phase: Fix Code');
+    console.log('Address reviewer feedback, create fix + re-review tasks');
+  } else if (phase.startsWith('clarification_')) {
+    console.log('Phase: Clarification Needed');
+    console.log('Reviewer has questions. Read clarification_questions from review file.');
+    console.log('If you can answer directly, do so. Otherwise use AskUserQuestion.');
+    console.log('After answering, re-run the same reviewer.');
+  } else if (phase === 'idle') {
+    console.log('Phase: Unknown (old pipeline format)');
+    console.log('Pipeline tasks file has no resolved_config. Reset pipeline to continue.');
+  } else {
+    console.log(`Phase: ${phase}`);
+    console.log('Unknown phase. Check .task/ files for pipeline state.');
   }
 }
 
@@ -249,7 +232,7 @@ function runDryRun(): void {
 
   // 3. Check skills
   const skillsDir = path.join(PLUGIN_ROOT, 'skills');
-  const requiredSkills = ['feature-implement/SKILL.md', 'bug-fix/SKILL.md'];
+  const requiredSkills = ['dev-buddy-feature-implement/SKILL.md', 'dev-buddy-bug-fix/SKILL.md'];
   let skillsOk = true;
   if (fs.existsSync(skillsDir)) {
     for (const skill of requiredSkills) {
@@ -273,7 +256,7 @@ function runDryRun(): void {
     'plan-reviewer.md',
     'implementer.md',
     'code-reviewer.md',
-    'codex-reviewer.md',
+    'cli-executor.md',
     'root-cause-analyst.md',
   ];
   let agentsOk = true;

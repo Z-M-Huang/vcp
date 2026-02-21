@@ -13,7 +13,69 @@ import {
   determinePhase,
 } from './guidance-hook.ts';
 
-import type { PipelineProgress } from '../scripts/pipeline-utils.ts';
+import type { PipelineProgress, StageOutputEntry } from '../scripts/pipeline-utils.ts';
+
+// ── Helpers for building test PipelineProgress objects ─────────────────
+
+/** Build a minimal feature-implement pipeline-tasks snapshot with a resolved_config.
+ *  Stages are the pipeline entries including output_file for each. */
+function makeFeaturePipelineTasks(stages: Array<{ type: string; output_file: string; provider?: string }> = []) {
+  return {
+    pipeline_type: 'feature-implement',
+    team_name: 'pipeline-test-abc123',
+    resolved_config: {
+      feature_pipeline: stages.map(s => ({ type: s.type, provider: s.provider ?? 'anthropic-subscription', output_file: s.output_file })),
+      bugfix_pipeline: [],
+      max_iterations: 10,
+      team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
+    },
+  };
+}
+
+/** Build a minimal bug-fix pipeline-tasks snapshot with a resolved_config. */
+function makeBugFixPipelineTasks(stages: Array<{ type: string; output_file: string; provider?: string }> = []) {
+  return {
+    pipeline_type: 'bug-fix',
+    team_name: 'pipeline-test-abc123',
+    resolved_config: {
+      feature_pipeline: [],
+      bugfix_pipeline: stages.map(s => ({ type: s.type, provider: s.provider ?? 'anthropic-subscription', output_file: s.output_file })),
+      max_iterations: 10,
+      team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
+    },
+  };
+}
+
+/** Default feature pipeline stages (matching DEFAULT_CONFIG) */
+const DEFAULT_FEATURE_STAGES = [
+  { type: 'requirements', output_file: 'user-story.json' },
+  { type: 'planning', output_file: 'plan-refined.json' },
+  { type: 'plan-review', output_file: 'plan-review-1.json' },
+  { type: 'plan-review', output_file: 'plan-review-2.json' },
+  { type: 'plan-review', output_file: 'plan-review-3.json' },
+  { type: 'implementation', output_file: 'impl-result.json' },
+  { type: 'code-review', output_file: 'code-review-1.json' },
+  { type: 'code-review', output_file: 'code-review-2.json' },
+  { type: 'code-review', output_file: 'code-review-3.json' },
+];
+
+/** Default bug-fix pipeline stages (matching DEFAULT_CONFIG) */
+const DEFAULT_BUGFIX_STAGES = [
+  { type: 'rca', output_file: 'rca-1.json' },
+  { type: 'rca', output_file: 'rca-2.json' },
+  { type: 'plan-review', output_file: 'plan-review-1.json' },
+  { type: 'implementation', output_file: 'impl-result.json' },
+  { type: 'code-review', output_file: 'code-review-1.json' },
+  { type: 'code-review', output_file: 'code-review-2.json' },
+  { type: 'code-review', output_file: 'code-review-3.json' },
+];
+
+/** Build an empty stageOutputs record from a stages array */
+function emptyStageOutputs(stages: Array<{ output_file: string }>): Record<string, StageOutputEntry> {
+  const out: Record<string, StageOutputEntry> = {};
+  for (const s of stages) out[s.output_file] = null;
+  return out;
+}
 
 describe('guidance-hook', () => {
   beforeEach(() => {
@@ -97,15 +159,8 @@ describe('guidance-hook', () => {
         plan: null,
         pipelineTasks: null,
         analysisFiles: [],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs: {},
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('requirements_gathering');
@@ -115,17 +170,10 @@ describe('guidance-hook', () => {
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
-        pipelineTasks: { requirements: 'T1' },
+        pipelineTasks: makeFeaturePipelineTasks(DEFAULT_FEATURE_STAGES),
         analysisFiles: [],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs: emptyStageOutputs(DEFAULT_FEATURE_STAGES),
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('requirements_team_pending');
@@ -136,19 +184,12 @@ describe('guidance-hook', () => {
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
-        pipelineTasks: { requirements: 'T1' },
+        pipelineTasks: makeFeaturePipelineTasks(DEFAULT_FEATURE_STAGES),
         analysisFiles: [
           { name: 'technical', file: 'analysis-technical.json', data: {} },
         ],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs: emptyStageOutputs(DEFAULT_FEATURE_STAGES),
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('requirements_team_exploring');
@@ -160,7 +201,7 @@ describe('guidance-hook', () => {
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
-        pipelineTasks: { requirements: 'T1' },
+        pipelineTasks: makeFeaturePipelineTasks(DEFAULT_FEATURE_STAGES),
         analysisFiles: [
           { name: 'technical', file: 'analysis-technical.json', data: {} },
           { name: 'ux-domain', file: 'analysis-ux-domain.json', data: {} },
@@ -168,15 +209,8 @@ describe('guidance-hook', () => {
           { name: 'performance', file: 'analysis-performance.json', data: {} },
           { name: 'architecture', file: 'analysis-architecture.json', data: {} },
         ],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs: emptyStageOutputs(DEFAULT_FEATURE_STAGES),
       };
       const result = determinePhase(progress);
       // Should still be exploring, never synthesizing
@@ -186,20 +220,16 @@ describe('guidance-hook', () => {
     });
 
     test('returns plan_drafting when user story exists but no plan', () => {
+      const stageOutputs = emptyStageOutputs(DEFAULT_FEATURE_STAGES);
+      // user-story.json exists (requirements stage done)
+      stageOutputs['user-story.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: { title: 'test' },
         plan: null,
-        pipelineTasks: { requirements: 'T1' },
+        pipelineTasks: makeFeaturePipelineTasks(DEFAULT_FEATURE_STAGES),
         analysisFiles: [],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs,
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('plan_drafting');
@@ -211,15 +241,8 @@ describe('guidance-hook', () => {
         plan: null,
         pipelineTasks: null,
         analysisFiles: [],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs: {},
       };
       const result = determinePhase(progress);
       expect(result.message).toContain('requirements-gatherer');
@@ -229,17 +252,10 @@ describe('guidance-hook', () => {
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
-        pipelineTasks: { requirements: 'T1' },
+        pipelineTasks: makeFeaturePipelineTasks(DEFAULT_FEATURE_STAGES),
         analysisFiles: [],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs: emptyStageOutputs(DEFAULT_FEATURE_STAGES),
       };
       const result = determinePhase(progress);
       expect(result.message).toContain('spawning fails');
@@ -251,17 +267,10 @@ describe('guidance-hook', () => {
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
-        pipelineTasks: { pipeline_type: 'bug-fix', team_name: 'test' },
+        pipelineTasks: makeBugFixPipelineTasks(DEFAULT_BUGFIX_STAGES),
         analysisFiles: [],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs: emptyStageOutputs(DEFAULT_BUGFIX_STAGES),
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('root_cause_analysis');
@@ -269,42 +278,33 @@ describe('guidance-hook', () => {
     });
 
     test('bug-fix: returns root_cause_analysis (in progress) when one RCA done', () => {
+      const stageOutputs = emptyStageOutputs(DEFAULT_BUGFIX_STAGES);
+      stageOutputs['rca-1.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
-        pipelineTasks: { pipeline_type: 'bug-fix', team_name: 'test' },
+        pipelineTasks: makeBugFixPipelineTasks(DEFAULT_BUGFIX_STAGES),
         analysisFiles: [],
-        rcaSonnet: { root_cause: { summary: 'test' } },
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs,
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('root_cause_analysis');
-      expect(result.message).toContain('Sonnet: done');
-      expect(result.message).toContain('Opus: running');
+      expect(result.message).toContain('rca-1.json: done');
+      expect(result.message).toContain('rca-2.json: running');
     });
 
     test('bug-fix: returns root_cause_analysis (consolidation) when both RCAs done', () => {
+      const stageOutputs = emptyStageOutputs(DEFAULT_BUGFIX_STAGES);
+      stageOutputs['rca-1.json'] = { status: 'complete' };
+      stageOutputs['rca-2.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
-        pipelineTasks: { pipeline_type: 'bug-fix', team_name: 'test' },
+        pipelineTasks: makeBugFixPipelineTasks(DEFAULT_BUGFIX_STAGES),
         analysisFiles: [],
-        rcaSonnet: { root_cause: { summary: 'test' } },
-        rcaOpus: { root_cause: { summary: 'test' } },
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs,
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('root_cause_analysis');
@@ -312,42 +312,36 @@ describe('guidance-hook', () => {
     });
 
     test('bug-fix: skips Sonnet/Opus plan reviews, goes to Codex validation', () => {
+      const stageOutputs = emptyStageOutputs(DEFAULT_BUGFIX_STAGES);
+      stageOutputs['rca-1.json'] = { status: 'complete' };
+      stageOutputs['rca-2.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: { title: 'Fix: test bug' },
         plan: { steps: [] },
-        pipelineTasks: { pipeline_type: 'bug-fix', team_name: 'test' },
+        pipelineTasks: makeBugFixPipelineTasks(DEFAULT_BUGFIX_STAGES),
         analysisFiles: [],
-        rcaSonnet: { root_cause: { summary: 'test' } },
-        rcaOpus: { root_cause: { summary: 'test' } },
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs,
       };
       const result = determinePhase(progress);
-      // Must NOT be plan_review_sonnet — bug-fix skips to Codex
-      expect(result.phase).toBe('plan_review_codex');
+      // Bug-fix pipeline has plan-review-1.json as the first non-layer-1 stage after rca
+      // It should go to plan_review phase (the bug-fix plan validation stage)
+      expect(result.phase).toContain('plan_review');
       expect(result.message).toContain('RCA + Plan Validation');
     });
 
     test('bug-fix: proceeds to implementation after Codex plan validation approved', () => {
+      const stageOutputs = emptyStageOutputs(DEFAULT_BUGFIX_STAGES);
+      stageOutputs['rca-1.json'] = { status: 'complete' };
+      stageOutputs['rca-2.json'] = { status: 'complete' };
+      stageOutputs['plan-review-1.json'] = { status: 'approved' };
       const progress: PipelineProgress = {
         userStory: { title: 'Fix: test bug' },
         plan: { steps: [] },
-        pipelineTasks: { pipeline_type: 'bug-fix', team_name: 'test' },
+        pipelineTasks: makeBugFixPipelineTasks(DEFAULT_BUGFIX_STAGES),
         analysisFiles: [],
-        rcaSonnet: { root_cause: { summary: 'test' } },
-        rcaOpus: { root_cause: { summary: 'test' } },
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: { status: 'approved' },
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs,
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('implementation');
@@ -357,17 +351,10 @@ describe('guidance-hook', () => {
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
-        pipelineTasks: { pipeline_type: 'bug-fix', team_name: 'test' },
+        pipelineTasks: makeBugFixPipelineTasks(DEFAULT_BUGFIX_STAGES),
         analysisFiles: [],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs: emptyStageOutputs(DEFAULT_BUGFIX_STAGES),
       };
       const result = determinePhase(progress);
       expect(result.phase).not.toBe('requirements_team_pending');
@@ -378,40 +365,92 @@ describe('guidance-hook', () => {
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
-        pipelineTasks: { requirements: 'T1' },
+        pipelineTasks: makeFeaturePipelineTasks(DEFAULT_FEATURE_STAGES),
         analysisFiles: [],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs: emptyStageOutputs(DEFAULT_FEATURE_STAGES),
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('requirements_team_pending');
     });
 
-    test('feature-implement: still requires Sonnet plan review before Codex (regression check)', () => {
+    test('feature-implement: still requires plan review before code review (regression check)', () => {
+      const stageOutputs = emptyStageOutputs(DEFAULT_FEATURE_STAGES);
+      stageOutputs['user-story.json'] = { status: 'complete' };
+      stageOutputs['plan-refined.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: { title: 'test' },
         plan: { steps: [] },
-        pipelineTasks: { requirements: 'T1' },
+        pipelineTasks: makeFeaturePipelineTasks(DEFAULT_FEATURE_STAGES),
         analysisFiles: [],
-        rcaSonnet: null,
-        rcaOpus: null,
-        planReviewSonnet: null,
-        planReviewOpus: null,
-        planReviewCodex: null,
         implResult: null,
-        codeReviewSonnet: null,
-        codeReviewOpus: null,
-        codeReviewCodex: null,
+        stageOutputs,
       };
       const result = determinePhase(progress);
-      expect(result.phase).toBe('plan_review_sonnet');
+      // Should be in plan review phase (first plan-review stage)
+      expect(result.phase).toContain('plan_review');
+    });
+
+    test('returns idle when pipeline-tasks.json has no resolved_config', () => {
+      const progress: PipelineProgress = {
+        userStory: { title: 'test' },
+        plan: { steps: [] },
+        pipelineTasks: { requirements: 'T1', plan: 'T2' }, // no resolved_config
+        analysisFiles: [],
+        implResult: null,
+        stageOutputs: {}, // no stageOutputs when no resolved_config
+      };
+      const result = determinePhase(progress);
+      expect(result.phase).toBe('idle');
+    });
+
+    test('feature-implement: returns complete when all stages approved', () => {
+      const stageOutputs: Record<string, StageOutputEntry> = {
+        'user-story.json': { status: 'complete' },
+        'plan-refined.json': { status: 'complete' },
+        'plan-review-1.json': { status: 'approved' },
+        'plan-review-2.json': { status: 'approved' },
+        'plan-review-3.json': { status: 'approved' },
+        'impl-result.json': { status: 'complete' },
+        'code-review-1.json': { status: 'approved' },
+        'code-review-2.json': { status: 'approved' },
+        'code-review-3.json': { status: 'approved' },
+      };
+      const progress: PipelineProgress = {
+        userStory: { title: 'test' },
+        plan: { steps: [] },
+        pipelineTasks: makeFeaturePipelineTasks(DEFAULT_FEATURE_STAGES),
+        analysisFiles: [],
+        implResult: { status: 'complete' },
+        stageOutputs,
+      };
+      const result = determinePhase(progress);
+      expect(result.phase).toBe('complete');
+    });
+
+    test('feature-implement: returns fix phase when a plan review needs_changes', () => {
+      const stageOutputs: Record<string, StageOutputEntry> = {
+        'user-story.json': { status: 'complete' },
+        'plan-refined.json': { status: 'complete' },
+        'plan-review-1.json': { status: 'needs_changes' },
+        'plan-review-2.json': null,
+        'plan-review-3.json': null,
+        'impl-result.json': null,
+        'code-review-1.json': null,
+        'code-review-2.json': null,
+        'code-review-3.json': null,
+      };
+      const progress: PipelineProgress = {
+        userStory: { title: 'test' },
+        plan: { steps: [] },
+        pipelineTasks: makeFeaturePipelineTasks(DEFAULT_FEATURE_STAGES),
+        analysisFiles: [],
+        implResult: null,
+        stageOutputs,
+      };
+      const result = determinePhase(progress);
+      expect(result.phase).toContain('fix_plan_review');
+      expect(result.message).toContain('Fix Plan');
     });
   });
 });

@@ -1,8 +1,10 @@
 /**
  * Pipeline configuration management.
  *
- * Loads and validates ~/.vcp/dev-buddy.json, spawns session managers for
- * API providers, and manages their lifecycle.
+ * Loads and validates ~/.vcp/dev-buddy.json and manages session manager lifecycle.
+ *
+ * Config format: ordered arrays of {type, provider, model} stage entries.
+ * Both provider and model are required on every stage — no defaults.
  *
  * Usage (CLI mode):
  *   bun pipeline-config.ts validate --cwd <dir>
@@ -14,7 +16,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { readPresets, maskApiKey } from './preset-utils.ts';
-import type { PipelineConfig, PipelineStages, ResolvedStage, SessionPortMapping } from '../types/pipeline.ts';
+import type { SessionPortMapping, PipelineConfig, StageEntry } from '../types/pipeline.ts';
+import { STAGE_DEFINITIONS, MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
+import type { StageType } from '../types/stage-definitions.ts';
 
 // Config path: ~/.vcp/dev-buddy.json (C11)
 export const CONFIG_PATH = path.join(os.homedir(), '.vcp', 'dev-buddy.json');
@@ -22,68 +26,194 @@ export const CONFIG_PATH = path.join(os.homedir(), '.vcp', 'dev-buddy.json');
 // Session ports file (stored in .task/ relative to cwd)
 const SESSION_PORTS_FILENAME = 'session-ports.json';
 
-/**
- * Default pipeline config — all stages use 'anthropic-subscription'.
- * Backward compatible: behaves like pre-v2 single-provider pipeline (AC40).
- */
-export const DEFAULT_CONFIG: PipelineConfig = {
-  version: '2.0',
-  pipeline: {
-    stages: {
-      requirements: { provider: 'anthropic-subscription' },
-      planning: { provider: 'anthropic-subscription' },
-      plan_review_sonnet: { provider: 'anthropic-subscription' },
-      plan_review_opus: { provider: 'anthropic-subscription' },
-      plan_review_codex: { provider: 'anthropic-subscription' },
-      implementation: { provider: 'anthropic-subscription' },
-      code_review_sonnet: { provider: 'anthropic-subscription' },
-      code_review_opus: { provider: 'anthropic-subscription' },
-      code_review_codex: { provider: 'anthropic-subscription' },
-    },
-    max_iterations: 10,
-    team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
-  },
-};
+// ─── Default Config ──────────────────────────────────────────────────────────
 
 /**
- * Load pipeline config from disk, merged with defaults (C22 — simple object spread).
- * Returns defaults if file does not exist.
+ * Default pipeline config — all stages use 'anthropic-subscription'.
+ * Every stage has an explicit model — no defaults.
+ *
+ * Feature pipeline: 9 stages (requirements, planning, 3x plan-review, implementation, 3x code-review)
+ * Bug-fix pipeline: 7 stages (2x rca, 1x plan-review, implementation, 3x code-review)
+ */
+export const DEFAULT_CONFIG: PipelineConfig = {
+  feature_pipeline: [
+    { type: 'requirements', provider: 'anthropic-subscription', model: 'opus' },
+    { type: 'planning', provider: 'anthropic-subscription', model: 'opus' },
+    { type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet' },
+    { type: 'plan-review', provider: 'anthropic-subscription', model: 'opus' },
+    { type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet' },
+    { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
+    { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
+    { type: 'code-review', provider: 'anthropic-subscription', model: 'opus' },
+    { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
+  ],
+  bugfix_pipeline: [
+    { type: 'rca', provider: 'anthropic-subscription', model: 'sonnet' },
+    { type: 'rca', provider: 'anthropic-subscription', model: 'opus' },
+    { type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet' },
+    { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
+    { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
+    { type: 'code-review', provider: 'anthropic-subscription', model: 'opus' },
+    { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
+  ],
+  max_iterations: 10,
+  team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
+};
+
+// ─── Atomic Writes ───────────────────────────────────────────────────────────
+
+/**
+ * Write data to filePath atomically using a temp file + rename pattern.
+ * Prevents partial writes if the process crashes mid-write.
+ * Exported for reuse in config-server.ts.
+ */
+export function atomicWriteFile(filePath: string, data: unknown): void {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+    fs.renameSync(tempPath, filePath);
+  } catch (err) {
+    // Clean up temp file on failure
+    try { fs.unlinkSync(tempPath); } catch { /* ignore cleanup failure */ }
+    throw err;
+  }
+}
+
+// ─── Config Validation ───────────────────────────────────────────────────────
+
+/**
+ * Validate a pipeline config.
+ * Throws descriptive errors on constraint violations.
+ * Both provider and model are required on every stage.
+ *
+ * @param config - The config to validate.
+ * @param pipelineType - If provided, only validate the specified pipeline array.
+ */
+export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' | 'bugfix'): void {
+  const pipelinesToCheck: Array<{ name: string; stages: StageEntry[]; type: 'feature' | 'bugfix' }> = [];
+
+  if (!pipelineType || pipelineType === 'feature') {
+    if (!Array.isArray(config.feature_pipeline)) {
+      throw new Error('Config must have feature_pipeline as an array');
+    }
+    pipelinesToCheck.push({ name: 'feature_pipeline', stages: config.feature_pipeline, type: 'feature' });
+  }
+  if (!pipelineType || pipelineType === 'bugfix') {
+    if (!Array.isArray(config.bugfix_pipeline)) {
+      throw new Error('Config must have bugfix_pipeline as an array');
+    }
+    pipelinesToCheck.push({ name: 'bugfix_pipeline', stages: config.bugfix_pipeline, type: 'bugfix' });
+  }
+
+  for (const { name, stages, type } of pipelinesToCheck) {
+    const validTypes = new Set<string>(Object.keys(STAGE_DEFINITIONS));
+    const singletonCounts: Record<string, number> = {};
+    let implementationCount = 0;
+
+    for (let i = 0; i < stages.length; i++) {
+      const entry = stages[i];
+
+      // Validate stage type
+      if (!entry || typeof entry.type !== 'string' || !validTypes.has(entry.type)) {
+        throw new Error(
+          `${name}[${i}]: invalid stage type '${entry?.type}'. Must be one of: ${[...validTypes].join(', ')}`
+        );
+      }
+
+      const stageDef = STAGE_DEFINITIONS[entry.type as StageType];
+
+      // Pipeline type restriction (requirements/planning only in feature)
+      if (!stageDef.allowed_pipelines.includes(type)) {
+        throw new Error(
+          `${name}[${i}]: stage type '${entry.type}' is not allowed in ${type} pipeline. ` +
+          `Allowed in: ${stageDef.allowed_pipelines.join(', ')}`
+        );
+      }
+
+      // Singleton constraint
+      if (stageDef.singleton) {
+        singletonCounts[entry.type] = (singletonCounts[entry.type] || 0) + 1;
+        if (singletonCounts[entry.type] > 1) {
+          throw new Error(
+            `${name}: '${entry.type}' is a singleton stage and may appear at most once per pipeline`
+          );
+        }
+      }
+
+      // Count implementation stages
+      if (entry.type === 'implementation') {
+        implementationCount++;
+      }
+
+      // Validate provider (non-empty string)
+      if (typeof entry.provider !== 'string' || entry.provider.trim() === '') {
+        throw new Error(`${name}[${i}]: provider must be a non-empty string`);
+      }
+
+      // Validate model (required, non-empty string matching regex)
+      if (typeof entry.model !== 'string' || entry.model.trim() === '') {
+        throw new Error(`${name}[${i}]: model is required and must be a non-empty string`);
+      }
+      if (!MODEL_NAME_REGEX.test(entry.model)) {
+        throw new Error(
+          `${name}[${i}]: invalid model name '${entry.model}'. Must match /^[a-z0-9.-]+$/`
+        );
+      }
+    }
+
+    // Minimum constraint: every pipeline must have at least one implementation stage
+    if (implementationCount === 0) {
+      throw new Error(
+        `${name}: every pipeline must have at least one implementation stage`
+      );
+    }
+  }
+}
+
+// ─── Config Loading ───────────────────────────────────────────────────────────
+
+/**
+ * Load and validate the pipeline config from disk.
+ *
+ * Behavior:
+ * - No file: returns DEFAULT_CONFIG
+ * - Valid JSON: validates and returns
+ * - Invalid: throws (fail fast, no fallbacks)
  */
 export function loadPipelineConfig(): PipelineConfig {
   if (!fs.existsSync(CONFIG_PATH)) {
     return DEFAULT_CONFIG;
   }
-  const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
-  const userConfig = JSON.parse(raw) as Partial<PipelineConfig>;
 
-  // Simple object spread for defaults (C22)
-  return {
-    ...DEFAULT_CONFIG,
-    ...userConfig,
-    pipeline: {
-      ...DEFAULT_CONFIG.pipeline,
-      ...(userConfig.pipeline || {}),
-      stages: {
-        ...DEFAULT_CONFIG.pipeline.stages,
-        ...(userConfig.pipeline?.stages || {}),
-      },
-    },
-  };
+  const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Pipeline config at ${CONFIG_PATH} is not valid JSON`);
+  }
+
+  const config = parsed as unknown as PipelineConfig;
+  validateConfig(config);
+  return config;
 }
+
+// ─── Provider Validation ──────────────────────────────────────────────────────
 
 /**
  * Validate all provider references in the pipeline config.
  * Checks: (1) preset exists, (2) API presets have base_url and api_key.
- * Fails fast with human-readable errors listing ALL invalid providers.
  */
 export function validateProviderReferences(config: PipelineConfig): void {
   const presets = readPresets();
-  const stages = config.pipeline.stages;
 
-  // Collect all unique provider names from stages
-  const providerNames = new Set<string>(
-    Object.values(stages).map(stage => stage.provider)
-  );
+  // Collect all unique provider names from both pipelines
+  const providerNames = new Set<string>();
+  for (const entry of [...config.feature_pipeline, ...config.bugfix_pipeline]) {
+    providerNames.add(entry.provider);
+  }
 
   const errors: string[] = [];
 
@@ -124,19 +254,17 @@ export function getProviderType(presetName: string): 'subscription' | 'api' | 'c
 }
 
 /**
- * Resolve a pipeline stage to its provider name and type.
+ * Resolve a stage entry to its provider type.
  */
-export function resolveStage(stageName: keyof PipelineStages, config: PipelineConfig): ResolvedStage {
-  const stage = config.pipeline.stages[stageName];
-  if (!stage) {
-    throw new Error(`Unknown pipeline stage: ${stageName}`);
-  }
-  const providerType = getProviderType(stage.provider);
+export function resolveStageEntry(entry: StageEntry): { provider_name: string; provider_type: 'subscription' | 'api' | 'cli' } {
+  const providerType = getProviderType(entry.provider);
   return {
-    provider_name: stage.provider,
+    provider_name: entry.provider,
     provider_type: providerType,
   };
 }
+
+// ─── HTTP Helpers ─────────────────────────────────────────────────────────────
 
 /**
  * HTTP fetch with explicit timeout using AbortController.
@@ -157,24 +285,24 @@ export async function fetchWithTimeout(
   }
 }
 
+// ─── Session Managers ─────────────────────────────────────────────────────────
+
 /**
  * Spawn session managers for unique API providers in the pipeline config.
- * Returns an array of port/token/pid mappings.
- * Writes mappings to .task/session-ports.json.
+ * Iterates both feature_pipeline and bugfix_pipeline for unique API providers.
  */
 export async function spawnSessionManagers(
   config: PipelineConfig,
   cwd: string
 ): Promise<SessionPortMapping[]> {
   const presets = readPresets();
-  const stages = config.pipeline.stages;
 
-  // Find unique API provider names
+  // Find unique API provider names across both pipelines
   const apiProviders = new Set<string>();
-  for (const stage of Object.values(stages)) {
-    const preset = presets.presets[stage.provider];
+  for (const entry of [...config.feature_pipeline, ...config.bugfix_pipeline]) {
+    const preset = presets.presets[entry.provider];
     if (preset?.type === 'api') {
-      apiProviders.add(stage.provider);
+      apiProviders.add(entry.provider);
     }
   }
 
@@ -200,10 +328,8 @@ export async function spawnSessionManagers(
 
     // Read startup output (port + token)
     const reader = proc.stdout.getReader();
-    let startupLine = '';
     const decoder = new TextDecoder();
 
-    // Read until we get the JSON startup line
     let startupTimeout: ReturnType<typeof setTimeout> | null = null;
     const startupPromise = new Promise<string>((resolve, reject) => {
       startupTimeout = setTimeout(() => reject(new Error(`Session manager for '${presetName}' did not start within 30s`)), 30_000);
@@ -229,7 +355,7 @@ export async function spawnSessionManagers(
 
     let startupJson: { status: string; port: number; token: string };
     try {
-      startupLine = await startupPromise;
+      const startupLine = await startupPromise;
       if (startupTimeout) clearTimeout(startupTimeout);
       startupJson = JSON.parse(startupLine);
     } catch (err) {
@@ -277,7 +403,7 @@ export async function shutdownSessionManagers(mappings: SessionPortMapping[]): P
             'Content-Type': 'application/json',
           },
         },
-        10_000 // 10s timeout for shutdown (must wait for in-progress task drain)
+        10_000
       );
       if (response.ok) {
         console.error(`[Pipeline] Session manager at port ${mapping.port} shutting down`);
@@ -301,9 +427,6 @@ export async function shutdownSessionManagers(mappings: SessionPortMapping[]): P
   }
 }
 
-/**
- * Send SIGTERM to a session manager process.
- */
 function sendSigterm(mapping: SessionPortMapping): void {
   try {
     process.kill(mapping.pid, 'SIGTERM');

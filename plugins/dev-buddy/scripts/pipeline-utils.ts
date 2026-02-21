@@ -7,6 +7,8 @@
 
 import fs from 'fs';
 import path from 'path';
+import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
+import { getOutputFileName, type StageType } from '../types/stage-definitions.ts';
 
 // ─── Phase Token Contract ───────────────────────────────────────────
 
@@ -14,37 +16,12 @@ import path from 'path';
  *  - lowercase snake_case only
  *  - no spaces, parentheses, or embedded counts
  *  - used for routing/matching, never for display
+ *  - Dynamic: layer-2 phases generated as {stage_type}_{index} (e.g., 'plan_review_1')
+ *  - Static within-stage sub-phases: 'idle', 'complete', 'requirements_gathering',
+ *    'requirements_team_pending', 'requirements_team_exploring', 'root_cause_analysis',
+ *    'plan_drafting', 'implementation_failed', 'plan_rejected', 'code_rejected'
  */
-export type PhaseToken =
-  | 'idle'
-  | 'root_cause_analysis'
-  | 'requirements_gathering'
-  | 'requirements_team_pending'
-  | 'requirements_team_exploring'
-  | 'plan_drafting'
-  | 'plan_review_sonnet'
-  | 'clarification_plan_sonnet'
-  | 'fix_plan_sonnet'
-  | 'plan_review_opus'
-  | 'clarification_plan_opus'
-  | 'fix_plan_opus'
-  | 'plan_review_codex'
-  | 'clarification_plan_codex'
-  | 'fix_plan_codex'
-  | 'plan_rejected'
-  | 'implementation'
-  | 'implementation_failed'
-  | 'code_review_sonnet'
-  | 'clarification_code_sonnet'
-  | 'fix_code_sonnet'
-  | 'code_review_opus'
-  | 'clarification_code_opus'
-  | 'fix_code_opus'
-  | 'code_review_codex'
-  | 'clarification_code_codex'
-  | 'fix_code_codex'
-  | 'code_rejected'
-  | 'complete';
+export type PhaseToken = string;
 
 /** Result from determinePhase — phase is machine token, message is human display text */
 export interface PhaseResult {
@@ -58,20 +35,19 @@ export interface AnalysisFile {
   data: unknown;
 }
 
+/** Stage output entry: null = not yet produced, non-null = has data (check status field) */
+export type StageOutputEntry = { status: string; clarification_questions?: string[] } | null;
+
 export interface PipelineProgress {
   userStory: Record<string, unknown> | null;
   plan: unknown | null;
   pipelineTasks: unknown | null;
   analysisFiles: AnalysisFile[];
-  rcaSonnet: Record<string, unknown> | null;
-  rcaOpus: Record<string, unknown> | null;
-  planReviewSonnet: { status: string; clarification_questions?: string[] } | null;
-  planReviewOpus: { status: string; clarification_questions?: string[] } | null;
-  planReviewCodex: { status: string; clarification_questions?: string[] } | null;
   implResult: { status: string } | null;
-  codeReviewSonnet: { status: string; clarification_questions?: string[] } | null;
-  codeReviewOpus: { status: string; clarification_questions?: string[] } | null;
-  codeReviewCodex: { status: string; clarification_questions?: string[] } | null;
+  /** Dynamic stage output map keyed by output file name (e.g., 'plan-review-1.json').
+   *  Populated by iterating resolved_config from pipeline-tasks.json.
+   *  Empty object when no resolved_config present (fallback to idle). */
+  stageOutputs: Record<string, StageOutputEntry>;
 }
 
 // ─── Path Helpers ───────────────────────────────────────────────────
@@ -145,19 +121,49 @@ export function discoverAnalysisFiles(taskDir: string): AnalysisFile[] {
 
 /** Get progress from artifact files */
 export function getProgress(taskDir: string): PipelineProgress {
+  const pipelineTasks = readJson(path.join(taskDir, 'pipeline-tasks.json'));
+  const stageOutputs: Record<string, StageOutputEntry> = {};
+
+  // Populate stageOutputs dynamically from resolved_config in pipeline-tasks.json.
+  // Output file names are derived from stage definitions + per-type index.
+  if (pipelineTasks && typeof pipelineTasks === 'object') {
+    const pt = pipelineTasks as Record<string, unknown>;
+    const resolvedConfig = pt.resolved_config as PipelineConfig | undefined;
+
+    if (resolvedConfig) {
+      const pipelineType = typeof pt.pipeline_type === 'string' ? pt.pipeline_type : 'feature-implement';
+      const pipeline = pipelineType === 'bug-fix'
+        ? resolvedConfig.bugfix_pipeline
+        : resolvedConfig.feature_pipeline;
+
+      if (Array.isArray(pipeline)) {
+        const typeCounters: Partial<Record<StageType, number>> = {};
+        for (const stage of pipeline) {
+          const stageType = stage.type as StageType;
+          typeCounters[stageType] = (typeCounters[stageType] || 0) + 1;
+          const outputFile = getOutputFileName(stageType, typeCounters[stageType]);
+          const data = readJson(path.join(taskDir, outputFile)) as Record<string, unknown> | null;
+          if (data && typeof data.status === 'string') {
+            stageOutputs[outputFile] = {
+              status: data.status,
+              clarification_questions: Array.isArray(data.clarification_questions)
+                ? data.clarification_questions as string[]
+                : undefined,
+            };
+          } else {
+            stageOutputs[outputFile] = null;
+          }
+        }
+      }
+    }
+  }
+
   return {
     userStory: readJson(path.join(taskDir, 'user-story.json')) as Record<string, unknown> | null,
     plan: readJson(path.join(taskDir, 'plan-refined.json')),
-    pipelineTasks: readJson(path.join(taskDir, 'pipeline-tasks.json')),
-    rcaSonnet: readJson(path.join(taskDir, 'rca-sonnet.json')) as Record<string, unknown> | null,
-    rcaOpus: readJson(path.join(taskDir, 'rca-opus.json')) as Record<string, unknown> | null,
+    pipelineTasks,
     implResult: readJson(path.join(taskDir, 'impl-result.json')) as { status: string } | null,
-    planReviewSonnet: readJson(path.join(taskDir, 'review-sonnet.json')) as PipelineProgress['planReviewSonnet'],
-    planReviewOpus: readJson(path.join(taskDir, 'review-opus.json')) as PipelineProgress['planReviewOpus'],
-    planReviewCodex: readJson(path.join(taskDir, 'review-codex.json')) as PipelineProgress['planReviewCodex'],
-    codeReviewSonnet: readJson(path.join(taskDir, 'code-review-sonnet.json')) as PipelineProgress['codeReviewSonnet'],
-    codeReviewOpus: readJson(path.join(taskDir, 'code-review-opus.json')) as PipelineProgress['codeReviewOpus'],
-    codeReviewCodex: readJson(path.join(taskDir, 'code-review-codex.json')) as PipelineProgress['codeReviewCodex'],
+    stageOutputs,
     analysisFiles: discoverAnalysisFiles(taskDir),
   };
 }
@@ -173,38 +179,73 @@ export function getPipelineType(pipelineTasks: unknown): PipelineType {
   return pt === 'bug-fix' ? 'bug-fix' : 'feature-implement';
 }
 
+/** Extract the active pipeline array from resolved_config based on pipeline type. */
+function getActivePipeline(resolvedConfig: PipelineConfig, pipelineType: PipelineType): StageEntry[] {
+  if (pipelineType === 'bug-fix') {
+    return resolvedConfig.bugfix_pipeline || [];
+  }
+  return resolvedConfig.feature_pipeline || [];
+}
+
 // ─── Phase Detection ────────────────────────────────────────────────
 
-/** Determine current phase from pipeline progress */
+/** Determine current phase from pipeline progress using two-layer approach.
+ *
+ * LAYER 1: Within-stage sub-phases (checked first, before any output file checks).
+ *   These detect progress WITHIN a stage before its output file exists.
+ *   Static phase tokens: requirements_gathering, requirements_team_pending,
+ *   requirements_team_exploring, root_cause_analysis, plan_drafting.
+ *
+ * LAYER 2: Generic stage iteration from resolved_config.
+ *   Iterates the active pipeline stages checking stageOutputs by output file name.
+ *   Dynamic phase tokens: {stage_type}_{index} (e.g., plan_review_1, code_review_2).
+ */
 export function determinePhase(progress: PipelineProgress): PhaseResult {
   const pipelineType = getPipelineType(progress.pipelineTasks);
 
-  // No user story yet
-  if (!progress.userStory) {
-    // Bug-fix pipeline: RCA phases
-    if (pipelineType === 'bug-fix') {
-      const sonnetDone = !!progress.rcaSonnet;
-      const opusDone = !!progress.rcaOpus;
-      if (sonnetDone && opusDone) {
-        return {
-          phase: 'root_cause_analysis',
-          message: '**Phase: RCA Consolidation**\nBoth RCA analyses complete. Consolidate findings, write user-story.json + plan-refined.json.'
-        };
-      }
-      if (sonnetDone || opusDone) {
-        return {
-          phase: 'root_cause_analysis',
-          message: `**Phase: Root Cause Analysis**\nRCA in progress. Sonnet: ${sonnetDone ? 'done' : 'running'}, Opus: ${opusDone ? 'done' : 'running'}.`
-        };
-      }
-      // No RCA files yet — pipeline just started
+  // ── LAYER 1: Within-stage sub-phases ──────────────────────────────
+
+  // No pipeline-tasks.json at all — pipeline hasn't started
+  if (!progress.pipelineTasks) {
+    return {
+      phase: 'requirements_gathering',
+      message: '**Phase: Requirements Gathering**\nUse requirements-gatherer agent (opus) to create user-story.json.\nIf teams are available, create agent team for specialist exploration first; otherwise use requirements-gatherer directly.'
+    };
+  }
+
+  // Bug-fix: RCA sub-phases (only when user story not yet written)
+  if (pipelineType === 'bug-fix' && !progress.userStory) {
+    // Count RCA output files from stageOutputs
+    const rcaEntries = Object.entries(progress.stageOutputs)
+      .filter(([key]) => key.startsWith('rca-'));
+    const rcaDoneCount = rcaEntries.filter(([, v]) => v !== null).length;
+    const rcaTotalCount = rcaEntries.length;
+
+    if (rcaTotalCount > 0 && rcaDoneCount === rcaTotalCount) {
       return {
         phase: 'root_cause_analysis',
-        message: '**Phase: Root Cause Analysis**\nRCA pending. Spawn root-cause-analyst (Sonnet + Opus) in parallel.'
+        message: '**Phase: RCA Consolidation**\nBoth RCA analyses complete. Consolidate findings, write user-story.json + plan-refined.json.'
       };
     }
+    if (rcaDoneCount > 0) {
+      // Show individual status
+      const statusParts = rcaEntries
+        .map(([key, v]) => `${key}: ${v !== null ? 'done' : 'running'}`)
+        .join(', ');
+      return {
+        phase: 'root_cause_analysis',
+        message: `**Phase: Root Cause Analysis**\nRCA in progress. ${statusParts}.`
+      };
+    }
+    // No RCA files yet — pipeline just started
+    return {
+      phase: 'root_cause_analysis',
+      message: '**Phase: Root Cause Analysis**\nRCA pending. Spawn root-cause-analyst stages per resolved bugfix_pipeline config.'
+    };
+  }
 
-    // Multi-ai pipeline: team-based requirements sub-phases
+  // Feature pipeline: requirements sub-phases (only when user story not yet written)
+  if (pipelineType === 'feature-implement' && !progress.userStory) {
     const hasAnyAnalysis = progress.analysisFiles.length > 0;
 
     if (hasAnyAnalysis) {
@@ -217,21 +258,14 @@ export function determinePhase(progress: PipelineProgress): PhaseResult {
       };
     }
 
-    // Check if pipeline-tasks.json exists (pipeline started) but no analyses yet
-    if (progress.pipelineTasks) {
-      return {
-        phase: 'requirements_team_pending',
-        message: '**Phase: Requirements Gathering (Team Pending)**\nPipeline initialized. Spawn specialist teammates into the pipeline team.\nIf spawning fails, fall back to spawning requirements-gatherer directly in Standard Mode.'
-      };
-    }
-
+    // pipeline-tasks.json exists but no analyses yet
     return {
-      phase: 'requirements_gathering',
-      message: '**Phase: Requirements Gathering**\nUse requirements-gatherer agent (opus) to create user-story.json.\nIf teams are available, create agent team for specialist exploration first; otherwise use requirements-gatherer directly.'
+      phase: 'requirements_team_pending',
+      message: '**Phase: Requirements Gathering (Team Pending)**\nPipeline initialized. Spawn specialist teammates into the pipeline team.\nIf spawning fails, fall back to spawning requirements-gatherer directly in Standard Mode.'
     };
   }
 
-  // No plan yet
+  // No plan yet (for both pipeline types)
   if (!progress.plan) {
     if (pipelineType === 'bug-fix') {
       return {
@@ -245,160 +279,100 @@ export function determinePhase(progress: PipelineProgress): PhaseResult {
     };
   }
 
-  // Plan review chain — bug-fix skips Sonnet/Opus, goes straight to Codex
-  if (pipelineType !== 'bug-fix') {
-    if (!progress.planReviewSonnet?.status) {
+  // ── LAYER 2: Generic stage iteration from resolved_config ──────────
+
+  // Extract resolved_config from pipeline-tasks.json
+  const pt = progress.pipelineTasks as Record<string, unknown>;
+  const resolvedConfig = pt.resolved_config as PipelineConfig | undefined;
+
+  // No resolved_config — fall back to idle
+  if (!resolvedConfig) {
+    return {
+      phase: 'idle',
+      message: '**Phase: Unknown**\nPipeline tasks file has no resolved_config (old format). Reset pipeline to continue.'
+    };
+  }
+
+  const activePipeline = getActivePipeline(resolvedConfig, pipelineType);
+
+  // Iterate stages in order, skipping layer-1 stages (requirements, planning, rca)
+  // that are already handled above. Start from the first non-layer-1 stage.
+  // Per-type counters derive output file names and phase tokens.
+  const typeCounters: Partial<Record<StageType, number>> = {};
+  for (let i = 0; i < activePipeline.length; i++) {
+    const stage = activePipeline[i];
+    const stageType = stage.type as StageType;
+
+    // Track per-type index for ALL stages (including skipped ones) so counters stay correct
+    typeCounters[stageType] = (typeCounters[stageType] || 0) + 1;
+    const typeIndex = typeCounters[stageType]!;
+    const outputFile = getOutputFileName(stageType, typeIndex);
+
+    // Skip layer-1 stage types (handled above)
+    if (stageType === 'requirements' || stageType === 'planning' || stageType === 'rca') {
+      continue;
+    }
+
+    const entry = progress.stageOutputs[outputFile];
+
+    // Implementation stage: check impl-result separately
+    if (stageType === 'implementation') {
+      const implStatus = progress.implResult?.status;
+      if (!implStatus || implStatus === 'partial') {
+        return {
+          phase: 'implementation',
+          message: '**Phase: Implementation**\nUse implementer agent to implement plan-refined.json'
+        };
+      }
+      if (implStatus === 'failed') {
+        return {
+          phase: 'implementation_failed',
+          message: '**Phase: Implementation Failed**\nCheck impl-result.json for failure details.'
+        };
+      }
+      // 'complete' — continue to next stage
+      continue;
+    }
+
+    // Review stages (plan-review, code-review): check stageOutputs
+    if (entry === null || entry === undefined) {
+      // Stage output not yet produced — this is the active stage
+      const stageLabel = stageType === 'plan-review' ? 'Plan Review' : 'Code Review';
+      const isBugFixPlanReview = pipelineType === 'bug-fix' && stageType === 'plan-review';
       return {
-        phase: 'plan_review_sonnet',
-        message: '**Phase: Plan Review**\n→ Run Sonnet plan review (plan-reviewer agent, sonnet)'
+        phase: `${stageType.replace('-', '_')}_${typeIndex}`,
+        message: isBugFixPlanReview
+          ? `**Phase: RCA + Plan Validation**\n→ Run stage ${typeIndex} ${stageLabel} (${outputFile})`
+          : `**Phase: ${stageLabel}**\n→ Run stage ${typeIndex} ${stageLabel} (${outputFile})`
       };
     }
-    if (progress.planReviewSonnet.status === 'needs_clarification') {
-      const questions = progress.planReviewSonnet.clarification_questions || [];
+
+    const status = entry.status;
+
+    if (status === 'needs_clarification') {
+      const questions = entry.clarification_questions || [];
       return {
-        phase: 'clarification_plan_sonnet',
-        message: `**Phase: Clarification Needed**\nSonnet needs clarification. Answer questions or use AskUserQuestion:\n${questions.map(q => `- ${q}`).join('\n')}`
+        phase: `clarification_${stageType.replace('-', '_')}_${typeIndex}`,
+        message: `**Phase: Clarification Needed**\nStage ${stageType} ${typeIndex} needs clarification. Answer questions or use AskUserQuestion:\n${questions.map(q => `- ${q}`).join('\n')}`
       };
     }
-    if (progress.planReviewSonnet.status === 'needs_changes') {
+    if (status === 'needs_changes') {
       return {
-        phase: 'fix_plan_sonnet',
-        message: '**Phase: Fix Plan**\nSonnet needs changes. Create fix + re-review tasks.'
+        phase: `fix_${stageType.replace('-', '_')}_${typeIndex}`,
+        message: `**Phase: Fix ${stageType === 'plan-review' ? 'Plan' : 'Code'}**\nStage ${stageType} ${typeIndex} needs changes. Create fix + re-review tasks.`
       };
     }
-
-    if (!progress.planReviewOpus?.status) {
+    if (status === 'rejected') {
+      const rejectedPhase = stageType === 'plan-review' ? 'plan_rejected' : 'code_rejected';
       return {
-        phase: 'plan_review_opus',
-        message: '**Phase: Plan Review**\n→ Run Opus plan review (plan-reviewer agent, opus)'
+        phase: rejectedPhase,
+        message: `**Phase: ${stageType === 'plan-review' ? 'Plan' : 'Code'} Rejected**\nStage ${stageType} ${typeIndex} rejected. Major rework required.`
       };
     }
-    if (progress.planReviewOpus.status === 'needs_clarification') {
-      const questions = progress.planReviewOpus.clarification_questions || [];
-      return {
-        phase: 'clarification_plan_opus',
-        message: `**Phase: Clarification Needed**\nOpus needs clarification. Answer questions or use AskUserQuestion:\n${questions.map(q => `- ${q}`).join('\n')}`
-      };
-    }
-    if (progress.planReviewOpus.status === 'needs_changes') {
-      return {
-        phase: 'fix_plan_opus',
-        message: '**Phase: Fix Plan**\nOpus needs changes. Create fix + re-review tasks.'
-      };
-    }
+    // 'approved' — continue to next stage
   }
 
-  // Codex plan validation (both pipelines, different messages)
-  if (!progress.planReviewCodex?.status) {
-    return {
-      phase: 'plan_review_codex',
-      message: pipelineType === 'bug-fix'
-        ? '**Phase: RCA + Plan Validation**\n→ Run Codex validation of consolidated RCA and fix plan (codex-reviewer agent)'
-        : '**Phase: Plan Review**\n→ Run Codex plan review (FINAL GATE - codex-reviewer agent)'
-    };
-  }
-  if (progress.planReviewCodex.status === 'needs_clarification') {
-    const questions = progress.planReviewCodex.clarification_questions || [];
-    return {
-      phase: 'clarification_plan_codex',
-      message: `**Phase: Clarification Needed**\nCodex needs clarification. Answer questions or use AskUserQuestion:\n${questions.map(q => `- ${q}`).join('\n')}`
-    };
-  }
-  if (progress.planReviewCodex.status === 'needs_changes') {
-    return {
-      phase: 'fix_plan_codex',
-      message: '**Phase: Fix Plan**\nCodex needs changes. Create fix + re-review tasks.'
-    };
-  }
-  if (progress.planReviewCodex.status === 'rejected') {
-    return {
-      phase: 'plan_rejected',
-      message: '**Phase: Plan Rejected**\nCodex rejected the plan. Significant rework required.'
-    };
-  }
-
-  // Implementation
-  if (!progress.implResult?.status || progress.implResult.status === 'partial') {
-    return {
-      phase: 'implementation',
-      message: '**Phase: Implementation**\nUse implementer agent (sonnet) to implement plan-refined.json'
-    };
-  }
-  if (progress.implResult.status === 'failed') {
-    return {
-      phase: 'implementation_failed',
-      message: '**Phase: Implementation Failed**\nCheck impl-result.json for failure details.'
-    };
-  }
-
-  // Code review chain
-  if (!progress.codeReviewSonnet?.status) {
-    return {
-      phase: 'code_review_sonnet',
-      message: '**Phase: Code Review**\n→ Run Sonnet code review (code-reviewer agent, sonnet)'
-    };
-  }
-  if (progress.codeReviewSonnet.status === 'needs_clarification') {
-    const questions = progress.codeReviewSonnet.clarification_questions || [];
-    return {
-      phase: 'clarification_code_sonnet',
-      message: `**Phase: Clarification Needed**\nSonnet needs clarification. Answer questions or use AskUserQuestion:\n${questions.map(q => `- ${q}`).join('\n')}`
-    };
-  }
-  if (progress.codeReviewSonnet.status === 'needs_changes') {
-    return {
-      phase: 'fix_code_sonnet',
-      message: '**Phase: Fix Code**\nSonnet needs changes. Create fix + re-review tasks.'
-    };
-  }
-
-  if (!progress.codeReviewOpus?.status) {
-    return {
-      phase: 'code_review_opus',
-      message: '**Phase: Code Review**\n→ Run Opus code review (code-reviewer agent, opus)'
-    };
-  }
-  if (progress.codeReviewOpus.status === 'needs_clarification') {
-    const questions = progress.codeReviewOpus.clarification_questions || [];
-    return {
-      phase: 'clarification_code_opus',
-      message: `**Phase: Clarification Needed**\nOpus needs clarification. Answer questions or use AskUserQuestion:\n${questions.map(q => `- ${q}`).join('\n')}`
-    };
-  }
-  if (progress.codeReviewOpus.status === 'needs_changes') {
-    return {
-      phase: 'fix_code_opus',
-      message: '**Phase: Fix Code**\nOpus needs changes. Create fix + re-review tasks.'
-    };
-  }
-
-  if (!progress.codeReviewCodex?.status) {
-    return {
-      phase: 'code_review_codex',
-      message: '**Phase: Code Review**\n→ Run Codex code review (FINAL GATE - codex-reviewer agent)'
-    };
-  }
-  if (progress.codeReviewCodex.status === 'needs_clarification') {
-    const questions = progress.codeReviewCodex.clarification_questions || [];
-    return {
-      phase: 'clarification_code_codex',
-      message: `**Phase: Clarification Needed**\nCodex needs clarification. Answer questions or use AskUserQuestion:\n${questions.map(q => `- ${q}`).join('\n')}`
-    };
-  }
-  if (progress.codeReviewCodex.status === 'needs_changes') {
-    return {
-      phase: 'fix_code_codex',
-      message: '**Phase: Fix Code**\nCodex needs changes. Create fix + re-review tasks.'
-    };
-  }
-  if (progress.codeReviewCodex.status === 'rejected') {
-    return {
-      phase: 'code_rejected',
-      message: '**Phase: Code Rejected**\nCodex rejected implementation. Major rework required.'
-    };
-  }
-
-  // All reviews approved
+  // All stages have approved status
   return {
     phase: 'complete',
     message: '**Phase: Complete**\nAll reviews approved. Pipeline finished.'

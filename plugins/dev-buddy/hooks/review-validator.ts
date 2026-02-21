@@ -25,6 +25,7 @@
 import fs from 'fs';
 import path from 'path';
 import { readJson, computeTaskDir } from '../scripts/pipeline-utils.ts';
+import { getOutputFileName, type StageType } from '../types/stage-definitions.ts';
 
 // ================== Codex Execution Proof Helpers ==================
 
@@ -83,9 +84,9 @@ function normalizePath(p: string): string {
 const EXPECTED_PLUGIN_ROOT = normalizePath(path.resolve(path.join(import.meta.dir, '..')));
 
 /**
- * Check if tokenized command is a codex-review.ts invocation:
+ * Check if tokenized command is a cli-executor.ts invocation:
  *   1. First token is bun executable
- *   2. First positional token is ${EXPECTED_PLUGIN_ROOT}/scripts/codex-review.ts
+ *   2. First positional token is ${EXPECTED_PLUGIN_ROOT}/scripts/cli-executor.ts
  *   3. --type flag is present after the script
  *   4. --plugin-root value equals EXPECTED_PLUGIN_ROOT
  */
@@ -105,9 +106,9 @@ function isCodexScriptCall(tokens: string[]): boolean {
   }
   if (!scriptToken) return false;
 
-  // Script path must be exactly ${pluginRoot}/scripts/codex-review.ts
+  // Script path must be exactly ${pluginRoot}/scripts/cli-executor.ts
   const normScript = normalizePath(scriptToken);
-  if (normScript !== EXPECTED_PLUGIN_ROOT + '/scripts/codex-review.ts') return false;
+  if (normScript !== EXPECTED_PLUGIN_ROOT + '/scripts/cli-executor.ts') return false;
 
   // Extract --type and --plugin-root from script args
   let foundType = false;
@@ -128,7 +129,7 @@ function isCodexScriptCall(tokens: string[]): boolean {
 }
 
 /**
- * Scan transcript JSONL for a Bash tool_use that invokes codex-review.ts.
+ * Scan transcript JSONL for a Bash tool_use that invokes cli-executor.ts.
  * Splits commands on shell separators (&&, ||, ;, |, &, \n) and checks each
  * segment independently. Only matches actual tool_use entries, not static text
  * in agent definitions or conversation content.
@@ -160,9 +161,43 @@ function verifyCodexScriptExecution(transcriptPath: string): boolean {
 
 const TASK_DIR = computeTaskDir();
 
-// Actual file names used by the pipeline (per SKILL.md Agent Reference)
-const PLAN_REVIEW_FILES = ['review-sonnet.json', 'review-opus.json', 'review-codex.json'];
-const CODE_REVIEW_FILES = ['code-review-sonnet.json', 'code-review-opus.json', 'code-review-codex.json'];
+/** Derive review file lists from resolved_config in pipeline-tasks.json.
+ * Output file names are derived from stage definitions + per-type index.
+ * Returns null when no resolved_config is present. */
+export function deriveReviewFiles(taskDir: string): { planReviewFiles: string[]; codeReviewFiles: string[]; pipelineType: string } | null {
+  try {
+    const pipelineTasksPath = path.join(taskDir, 'pipeline-tasks.json');
+    if (!fs.existsSync(pipelineTasksPath)) return null;
+    const raw = fs.readFileSync(pipelineTasksPath, 'utf-8');
+    const pt = JSON.parse(raw) as Record<string, unknown>;
+    const resolvedConfig = pt.resolved_config as Record<string, unknown> | undefined;
+    if (!resolvedConfig) return null;
+
+    const pipelineType = typeof pt.pipeline_type === 'string' ? pt.pipeline_type : 'feature-implement';
+    const pipeline = pipelineType === 'bug-fix'
+      ? resolvedConfig.bugfix_pipeline as Array<Record<string, unknown>>
+      : resolvedConfig.feature_pipeline as Array<Record<string, unknown>>;
+
+    if (!Array.isArray(pipeline)) return null;
+
+    const planReviewFiles: string[] = [];
+    const codeReviewFiles: string[] = [];
+    const typeCounters: Partial<Record<string, number>> = {};
+    for (const stage of pipeline) {
+      const stageType = stage.type as string;
+      typeCounters[stageType] = (typeCounters[stageType] || 0) + 1;
+      if (stageType === 'plan-review') {
+        planReviewFiles.push(getOutputFileName(stageType as StageType, typeCounters[stageType]!));
+      } else if (stageType === 'code-review') {
+        codeReviewFiles.push(getOutputFileName(stageType as StageType, typeCounters[stageType]!));
+      }
+    }
+
+    return { planReviewFiles, codeReviewFiles, pipelineType };
+  } catch {
+    return null; // Fail open — errors must not block
+  }
+}
 
 interface ReviewBlockResult {
   decision: 'block';
@@ -328,35 +363,35 @@ async function main(): Promise<void> {
   // Only validate our reviewer agents
   const isPlanReviewer = agentType === 'dev-buddy:plan-reviewer';
   const isCodeReviewer = agentType === 'dev-buddy:code-reviewer';
-  const isCodexReviewer = agentType === 'dev-buddy:codex-reviewer';
+  const isCodexReviewer = agentType === 'dev-buddy:cli-executor';
 
   if (!isPlanReviewer && !isCodeReviewer && !isCodexReviewer) {
     process.exit(0); // Not a reviewer, allow
   }
+
+  // Derive review file lists dynamically from resolved_config
+  const derived = deriveReviewFiles(TASK_DIR);
+  if (!derived) {
+    // No resolved_config — cannot determine review files. Allow through.
+    process.exit(0);
+  }
+  const { planReviewFiles, codeReviewFiles } = derived;
 
   // Determine which files to check based on agent type
   let reviewFiles: string[];
   let isPlanReview: boolean;
 
   if (isPlanReviewer) {
-    // plan-reviewer handles sonnet/opus plan reviews
-    reviewFiles = PLAN_REVIEW_FILES.filter(f => f !== 'review-codex.json');
+    reviewFiles = planReviewFiles;
     isPlanReview = true;
   } else if (isCodeReviewer) {
-    // code-reviewer handles sonnet/opus code reviews
-    reviewFiles = CODE_REVIEW_FILES.filter(f => f !== 'code-review-codex.json');
+    reviewFiles = codeReviewFiles;
     isPlanReview = false;
   } else {
-    // codex-reviewer handles both plan and code final reviews
-    // Check which phase we're in by looking at what files exist
-    const hasImplResult = fs.existsSync(path.join(TASK_DIR, 'impl-result.json'));
-    if (hasImplResult) {
-      reviewFiles = ['code-review-codex.json'];
-      isPlanReview = false;
-    } else {
-      reviewFiles = ['review-codex.json'];
-      isPlanReview = true;
-    }
+    // cli-executor handles both plan and code reviews.
+    // Check all review files; isPlanReview determined from which list the recent file belongs to.
+    reviewFiles = [...planReviewFiles, ...codeReviewFiles];
+    isPlanReview = false; // placeholder; recalculated after findMostRecentFile below
   }
 
   // Find the most recently modified review file (just written by agent)
@@ -364,6 +399,11 @@ async function main(): Promise<void> {
   if (!recentFile) {
     console.log(JSON.stringify({ decision: 'block', reason: 'No review output file found. Reviewer must write output.' }));
     process.exit(0);
+  }
+
+  // For cli-executor: determine isPlanReview from the found file's list membership
+  if (isCodexReviewer) {
+    isPlanReview = planReviewFiles.includes(recentFile.filename);
   }
 
   const review = readJson(recentFile.path) as PlanReview | CodeReview | null;
@@ -376,11 +416,11 @@ async function main(): Promise<void> {
 
   // Codex-specific enforcement: execution proof, error passthrough, verification stamp
   if (isCodexReviewer) {
-    // 1. Execution proof — verify the agent actually ran codex-review.ts
+    // 1. Execution proof — verify the agent actually ran cli-executor.ts
     if (!verifyCodexScriptExecution(transcriptPath)) {
       console.log(JSON.stringify({
         decision: 'block',
-        reason: 'Codex reviewer did not execute codex-review.ts. Transcript shows no Bash invocation of the script. Agent must run the script, not fabricate output.'
+        reason: 'Codex reviewer did not execute cli-executor.ts. Transcript shows no Bash invocation of the script. Agent must run the script, not fabricate output.'
       }));
       process.exit(0);
     }
@@ -395,7 +435,7 @@ async function main(): Promise<void> {
     if (!verification || typeof verification !== 'object') {
       console.log(JSON.stringify({
         decision: 'block',
-        reason: 'Codex review output missing _codex_verification stamp. Output was not produced by codex-review.ts.'
+        reason: 'Codex review output missing _codex_verification stamp. Output was not produced by cli-executor.ts.'
       }));
       process.exit(0);
     }

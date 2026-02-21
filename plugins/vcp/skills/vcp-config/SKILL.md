@@ -114,7 +114,7 @@ The entry must match the regex: `^(CWE-\d+|[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*(\/ru
 
 **Validate against the manifest:** Read `~/.vcp/config.json` to get `standards_url`. If the file doesn't exist, fall back to the default VCP manifest URL: `https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/manifest.json`. Use WebFetch to fetch the root standards manifest from that URL.
 
-The manifest is v2 format — `scopes` is an object where each key maps to `{ "manifest": "<full-url>", "applies": "<scope>" }`. To get the list of standard IDs, fetch each scope manifest from the full URL in the `manifest` field — each contains a `standards` array with `id` and `url` fields.
+The manifest `scopes` is an object where each key maps to `{ "manifest": "<full-url>", "applies": "<scope>" }`. To get the list of standard IDs, fetch each scope manifest from the full URL in the `manifest` field — each contains a `standards` array with `id` and `url` fields.
 
 - For standard IDs: check that the `id` exists in any scope manifest's `standards` array. If not found, warn the user: "Standard '[id]' not found in the manifest. Available standards: [list ids]." Use AskUserQuestion to confirm whether to add it anyway.
 - For rule references: check that the standard part exists. The rule number cannot be validated against the manifest (rules are in the standard content), so accept it if the standard exists.

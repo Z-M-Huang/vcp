@@ -1,25 +1,27 @@
-# Pipeline Workflow (Task + Hook Architecture)
+# Pipeline Workflow (Task + Hook Architecture, Configurable)
 
 ## Architecture Overview
 
-This pipeline uses a **Task + Hook architecture** with a persistent pipeline team:
+This pipeline uses a **Task + Hook architecture** with a persistent pipeline team and a **configurable stage array**:
 
+- **Config** - Ordered arrays of `{type, provider, model}` stage entries (replaces fixed 9-stage map)
 - **Team (Lifecycle)** - Persistent pipeline team provides TaskCreate/TaskUpdate/TaskList access
 - **Tasks (Primary)** - Structural enforcement via `blockedBy` dependencies
 - **Hook (Guidance)** - Validates output, transitions state, injects reminders
 - **Main Thread** - Orchestrator that handles user input and creates dynamic tasks
-- **Codex** - Final review gate via `codex-reviewer` agent
+- **Stage Registry** - 6 fixed stage types with constraints (singleton, allowed_pipelines, output file patterns)
 
 ### Custom Agents
 
-| Agent | Model | Purpose | Phase |
+| Agent | Default Model | Purpose | Stage Type |
 |-------|-------|---------|-------|
-| `requirements-gatherer` | opus | Business Analyst + PM hybrid | Requirements |
-| `planner` | opus | Architect + Fullstack hybrid | Planning |
-| `plan-reviewer` | sonnet/opus | Architecture + Security + QA | Plan Review |
-| `implementer` | sonnet | Fullstack + TDD + Quality | Implementation |
-| `code-reviewer` | sonnet/opus | Security + Performance + QA | Code Review |
-| `codex-reviewer` | external | Final gate (invokes Codex CLI) | Final Review |
+| `requirements-gatherer` | opus | Business Analyst + PM hybrid | requirements |
+| `planner` | opus | Architect + Fullstack hybrid | planning |
+| `plan-reviewer` | sonnet/opus | Architecture + Security + QA | plan-review |
+| `implementer` | sonnet | Fullstack + TDD + Quality | implementation |
+| `code-reviewer` | sonnet/opus | Security + Performance + QA | code-review |
+| `root-cause-analyst` | sonnet/opus | Autonomous bug diagnosis | rca |
+| `cli-executor` | external | CLI tool wrapper (invokes any configured CLI tool) | (any CLI preset stage) |
 
 ---
 
@@ -27,97 +29,114 @@ This pipeline uses a **Task + Hook architecture** with a persistent pipeline tea
 
 ```
 /dev-buddy-feature-implement Add user authentication with JWT tokens
+/dev-buddy-bug-fix Login fails with 500 after password reset
 ```
 
-This command handles the entire workflow:
+### Feature Development
 
-1. **Requirements gathering** (interactive) - requirements-gatherer agent
-2. **Planning** (semi-interactive) - planner agent
-3. **Plan reviews** (sequential) - plan-reviewer agents + Codex gate
-4. **Implementation** - implementer agent
-5. **Code reviews** (sequential) - code-reviewer agents + Codex gate
-6. **Completion** - Report results
+1. **Load config** - Read `~/.vcp/dev-buddy.json`, resolve `feature_pipeline` stages
+2. **Requirements** - requirements-gatherer agent (team-based exploration)
+3. **Planning** - planner agent
+4. **Plan reviews** - Sequential, one per `plan-review` stage in config
+5. **Implementation** - implementer agent
+6. **Code reviews** - Sequential, one per `code-review` stage in config
+7. **Completion** - Report results
+
+### Bug Fix
+
+1. **Load config** - Read `~/.vcp/dev-buddy.json`, resolve `bugfix_pipeline` stages
+2. **RCA stages** - Sequential root-cause-analyst agents (one per `rca` stage)
+3. **Inline consolidation** - Orchestrator consolidates RCA findings, writes `user-story.json` + `plan-refined.json`
+4. **Plan validation** - Optional `plan-review` stages (e.g., Codex RCA+plan gate)
+5. **Implementation** - implementer agent
+6. **Code reviews** - Sequential, one per `code-review` stage
+7. **Completion** - Report results
 
 ---
 
-## State Flow
+## State Flow (Dynamic Phases)
 
+**Feature pipeline:**
 ```
-idle → requirements_gathering → plan_drafting
-  → plan_review_sonnet ↔ fix_plan_sonnet
-  → plan_review_opus ↔ fix_plan_opus
-  → plan_review_codex ↔ fix_plan_codex
-  → implementation
-  → code_review_sonnet ↔ fix_code_sonnet
-  → code_review_opus ↔ fix_code_opus
-  → code_review_codex ↔ fix_code_codex
-  → complete
+idle
+→ requirements_gathering (or requirements_team_pending / requirements_team_exploring)
+→ plan_drafting
+→ plan_review_1 ↔ fix_plan_review_1
+→ plan_review_2 ↔ fix_plan_review_2
+→ plan_review_N ↔ fix_plan_review_N   (N = count of plan-review stages in config)
+→ implementation
+→ code_review_1 ↔ fix_code_review_1
+→ code_review_2 ↔ fix_code_review_2
+→ code_review_M ↔ fix_code_review_M   (M = count of code-review stages in config)
+→ complete
 ```
 
-Max 10 re-reviews per reviewer before escalating to user.
+**Bug-fix pipeline:**
+```
+idle
+→ root_cause_analysis (pending / in progress / consolidation)
+→ plan_review_1  (Codex RCA+plan validation gate)
+→ implementation
+→ code_review_1 ↔ fix_code_review_1
+→ code_review_M ↔ fix_code_review_M
+→ complete
+```
+
+Phase tokens are **dynamic** — the index suffix matches the stage position in the pipeline config array (1-based, counting within the stage type). Max `max_iterations` re-reviews per reviewer before escalating to user.
 
 ---
 
-## Task Chain
+## Task Chain (Dynamic)
 
-After creating the pipeline team (Step 1.5) and verifying task tools (Step 1.6), create 9 tasks via `TaskCreate`, then chain via `TaskUpdate(addBlockedBy)`:
+After loading the config, tasks are created by iterating the resolved pipeline array:
 
 ```
-T1 = TaskCreate(subject: "Gather requirements")
-T2 = TaskCreate(subject: "Create implementation plan")    → TaskUpdate(T2.id, addBlockedBy: [T1.id])
-T3 = TaskCreate(subject: "Plan Review - Sonnet")          → TaskUpdate(T3.id, addBlockedBy: [T2.id])
-T4 = TaskCreate(subject: "Plan Review - Opus")            → TaskUpdate(T4.id, addBlockedBy: [T3.id])
-T5 = TaskCreate(subject: "Plan Review - Codex")           → TaskUpdate(T5.id, addBlockedBy: [T4.id])  <- GATE
-T6 = TaskCreate(subject: "Implementation")                → TaskUpdate(T6.id, addBlockedBy: [T5.id])
-T7 = TaskCreate(subject: "Code Review - Sonnet")          → TaskUpdate(T7.id, addBlockedBy: [T6.id])
-T8 = TaskCreate(subject: "Code Review - Opus")            → TaskUpdate(T8.id, addBlockedBy: [T7.id])
-T9 = TaskCreate(subject: "Code Review - Codex")           → TaskUpdate(T9.id, addBlockedBy: [T8.id])  <- GATE
+// Feature pipeline with default 9 stages:
+T1 = TaskCreate(subject: "Requirements 1")
+T2 = TaskCreate(subject: "Planning 1")         → addBlockedBy: [T1]
+T3 = TaskCreate(subject: "Plan Review 1")      → addBlockedBy: [T2]
+T4 = TaskCreate(subject: "Plan Review 2")      → addBlockedBy: [T3]
+T5 = TaskCreate(subject: "Plan Review 3")      → addBlockedBy: [T4]  <- last plan-review gate
+T6 = TaskCreate(subject: "Implementation 1")   → addBlockedBy: [T5]
+T7 = TaskCreate(subject: "Code Review 1")      → addBlockedBy: [T6]
+T8 = TaskCreate(subject: "Code Review 2")      → addBlockedBy: [T7]
+T9 = TaskCreate(subject: "Code Review 3")      → addBlockedBy: [T8]  <- final gate
 ```
 
-Store returned IDs in `.task/pipeline-tasks.json`. See SKILL.md Step 2 for full details.
+Store returned IDs + `resolved_config` snapshot in `.task/pipeline-tasks.json`. See SKILL.md for full details.
 
 ### Dynamic Fix Tasks
 
 When a review returns `needs_changes`:
 
-1. `fix = TaskCreate(...)` then `TaskUpdate(fix.id, addBlockedBy: [review_id])`
-2. `rerev = TaskCreate(...)` then `TaskUpdate(rerev.id, addBlockedBy: [fix.id])`
-3. `if next_reviewer_id is not null: TaskUpdate(next_reviewer_id, addBlockedBy: [rerev.id])` — skip for Codex (final reviewer)
-
-**Note:** Codex has no next reviewer. When Codex needs_changes, fix + re-review tasks are created, but no downstream blocker is updated.
+1. `fix = TaskCreate(subject: "Fix Plan Review 2 v1", ...)` then `TaskUpdate(fix.id, addBlockedBy: [review_id])`
+2. `rerev = TaskCreate(subject: "Plan Review 2 v2", ...)` then `TaskUpdate(rerev.id, addBlockedBy: [fix.id])`
+3. `if next_stage_task_id is not null: TaskUpdate(next_stage_task_id, addBlockedBy: [rerev.id])`
+   - Re-review returns to **same stage index** — not next stage
 
 ---
 
-## Output Files
+## Output Files (Type-Indexed Naming)
 
-| File | Description |
-|------|-------------|
-| `.task/user-story.json` | Approved requirements |
-| `.task/plan-refined.json` | Implementation plan |
-| `.task/review-sonnet.json` | Sonnet plan review |
-| `.task/review-opus.json` | Opus plan review |
-| `.task/review-codex.json` | Codex plan review |
-| `.task/impl-result.json` | Implementation result |
-| `.task/code-review-sonnet.json` | Sonnet code review |
-| `.task/code-review-opus.json` | Opus code review |
-| `.task/code-review-codex.json` | Codex code review |
-| `.task/pipeline-tasks.json` | Team name + Task ID mapping |
+| File Pattern | Stage Type | Description |
+|------|-------------|-------------|
+| `.task/user-story.json` | requirements | Approved requirements (singleton) |
+| `.task/plan-refined.json` | planning | Implementation plan (singleton) |
+| `.task/plan-review-{N}.json` | plan-review | Plan review N (e.g., plan-review-1.json, plan-review-3.json) |
+| `.task/impl-result.json` | implementation | Implementation result (singleton) |
+| `.task/code-review-{N}.json` | code-review | Code review N (e.g., code-review-1.json, code-review-2.json) |
+| `.task/rca-{N}.json` | rca | Root cause analysis N (e.g., rca-1.json, rca-2.json) |
+| `.task/pipeline-tasks.json` | (meta) | Team name + Task IDs + `resolved_config` snapshot |
 
 ---
 
 ## Review Statuses
 
-**Plan reviews:**
-- `approved` - Proceed to next reviewer
-- `needs_changes` - Fix and re-review (same reviewer)
-- `needs_clarification` - Ask user
-
-**Code reviews:**
-- `approved` - Proceed to next reviewer
-- `needs_changes` - Fix and re-review (same reviewer)
-- `rejected` - Major rework required
-
-**Codex plan `rejected`** is terminal - escalate to user.
+**All review types:**
+- `approved` - Proceed to next stage
+- `needs_changes` - Fix and re-review (same stage index)
+- `needs_clarification` - Ask user, then re-run same reviewer
+- `rejected` - Major issue (terminal for some stages — escalate to user)
 
 ---
 
@@ -146,8 +165,13 @@ If stuck:
 
 ## Default Settings
 
-| Setting | Value |
+| Setting | Default Value |
 |---------|-------|
-| Max iterations per reviewer | 10 |
-| Plan review limit | 10 |
-| Code review limit | 15 |
+| Feature pipeline stages | 9 (requirements, planning, 3x plan-review, implementation, 3x code-review) |
+| Bug-fix pipeline stages | 7 (2x rca, 1x plan-review, implementation, 3x code-review) |
+| Default provider | anthropic-subscription |
+| max_iterations | 10 |
+| team_name_pattern | pipeline-{BASENAME}-{HASH} |
+
+Configure via web portal (`/dev-buddy-config`) or edit `~/.vcp/dev-buddy.json` directly.
+Model is required on every stage entry.

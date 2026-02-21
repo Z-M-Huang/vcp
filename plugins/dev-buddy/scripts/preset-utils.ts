@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import type { Preset, PresetConfig, ApiPreset, SubscriptionPreset, CliPreset } from '../types/presets.ts';
+import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 
 // Cross-platform config directory: ~/.vcp/
 export const CONFIG_DIR = path.join(os.homedir(), '.vcp');
@@ -72,6 +73,17 @@ export function writePresets(config: PresetConfig): void {
 }
 
 /**
+ * Validate model names in an array. Throws on invalid entries.
+ */
+function validateModelNames(models: unknown[], label: string): void {
+  for (const model of models) {
+    if (typeof model !== 'string' || !MODEL_NAME_REGEX.test(model)) {
+      throw new Error(`${label} model '${model}' is invalid. Must match /^[a-z0-9.-]+$/`);
+    }
+  }
+}
+
+/**
  * Validate a single preset object at runtime.
  * Returns the typed Preset if valid, throws on invalid input.
  */
@@ -99,6 +111,7 @@ export function validatePreset(preset: unknown): Preset {
       if (!Array.isArray(p.models) || p.models.length === 0) {
         throw new Error('API preset must have a non-empty models array');
       }
+      validateModelNames(p.models as unknown[], 'API preset');
       return p as unknown as ApiPreset;
     }
     case 'subscription': {
@@ -108,6 +121,40 @@ export function validatePreset(preset: unknown): Preset {
       if (typeof p.command !== 'string' || p.command.trim() === '') {
         throw new Error('CLI preset must have a command string');
       }
+      // args_template is required
+      if (typeof p.args_template !== 'string' || p.args_template.trim() === '') {
+        throw new Error('CLI preset must have a non-empty args_template string');
+      }
+      // resume_args_template is optional but must be string if present
+      if (p.resume_args_template !== undefined && typeof p.resume_args_template !== 'string') {
+        throw new Error('CLI preset resume_args_template must be a string');
+      }
+      // supports_resume is optional but must be boolean if present
+      if (p.supports_resume !== undefined && typeof p.supports_resume !== 'boolean') {
+        throw new Error('CLI preset supports_resume must be a boolean');
+      }
+      // supports_reasoning_effort is optional but must be boolean if present
+      if (p.supports_reasoning_effort !== undefined && typeof p.supports_reasoning_effort !== 'boolean') {
+        throw new Error('CLI preset supports_reasoning_effort must be a boolean');
+      }
+      // reasoning_effort is optional but must be one of low/medium/high if present
+      if (p.reasoning_effort !== undefined) {
+        const validEfforts = ['low', 'medium', 'high', 'xhigh'];
+        if (typeof p.reasoning_effort !== 'string' || !validEfforts.includes(p.reasoning_effort)) {
+          throw new Error(`CLI preset reasoning_effort must be one of: ${validEfforts.join(', ')}`);
+        }
+      }
+      // timeout_ms is optional but must be positive integer if present
+      if (p.timeout_ms !== undefined) {
+        if (!Number.isInteger(p.timeout_ms) || (p.timeout_ms as number) <= 0) {
+          throw new Error('CLI preset timeout_ms must be a positive integer');
+        }
+      }
+      // models is required for CLI presets
+      if (!Array.isArray(p.models) || p.models.length === 0) {
+        throw new Error('CLI preset must have a non-empty models array');
+      }
+      validateModelNames(p.models as unknown[], 'CLI preset');
       return p as unknown as CliPreset;
     }
     default:
