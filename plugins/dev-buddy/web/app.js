@@ -334,16 +334,23 @@ function devBuddyApp() {
         }
 
         const data = await configResp.json();
-        // Store config — feature_pipeline and bugfix_pipeline are arrays
-        this.pipelineConfig = data.config;
 
         if (presetsResp) {
           const presetsData = await presetsResp.json();
           this.presets = presetsData.presets || {};
         }
 
-        // Pre-load model options for all providers in the pipeline
-        await this._preloadModelOptions();
+        // Pre-load model options BEFORE assigning config — otherwise Alpine
+        // renders <select> with empty options, x-model clears the saved value.
+        const pipelines = [
+          ...(data.config.feature_pipeline || []),
+          ...(data.config.bugfix_pipeline || []),
+        ];
+        const uniqueProviders = [...new Set(pipelines.map(s => s.provider).filter(Boolean))];
+        await Promise.allSettled(uniqueProviders.map(p => this._fetchModelOptions(p)));
+
+        // Now assign config — Alpine renders selects with options already present
+        this.pipelineConfig = data.config;
 
         // Init sortable after DOM renders
         this.$nextTick(() => {
@@ -354,19 +361,6 @@ function devBuddyApp() {
       } finally {
         this.loading.pipeline = false;
       }
-    },
-
-    /**
-     * Pre-load model options for all unique providers in both pipelines.
-     */
-    async _preloadModelOptions() {
-      if (!this.pipelineConfig) return;
-      const pipelines = [
-        ...(this.pipelineConfig.feature_pipeline || []),
-        ...(this.pipelineConfig.bugfix_pipeline || []),
-      ];
-      const uniqueProviders = [...new Set(pipelines.map(s => s.provider).filter(Boolean))];
-      await Promise.allSettled(uniqueProviders.map(p => this._fetchModelOptions(p)));
     },
 
     /**
