@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Dev Buddy Pipeline Config",
+  "description": "Configuration format for the configurable pipeline architecture. Ordered arrays of stage entries for feature and bug-fix pipelines.",
+  "type": "object",
+  "required": ["feature_pipeline", "bugfix_pipeline"],
+  "properties": {
+    "feature_pipeline": {
+      "type": "array",
+      "description": "Ordered list of stages for the feature development pipeline.",
+      "items": { "$ref": "#/definitions/StageEntry" },
+      "minItems": 1
+    },
+    "bugfix_pipeline": {
+      "type": "array",
+      "description": "Ordered list of stages for the bug-fix pipeline.",
+      "items": { "$ref": "#/definitions/StageEntry" },
+      "minItems": 1
+    },
+    "max_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 10,
+      "description": "Maximum number of fix/re-review iterations per reviewer stage before escalating to user."
+    },
+    "team_name_pattern": {
+      "type": "string",
+      "minLength": 1,
+      "default": "pipeline-{BASENAME}-{HASH}",
+      "description": "Pattern for generating unique pipeline team names. Supports {BASENAME} and {HASH} placeholders."
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "StageEntry": {
+      "type": "object",
+      "description": "A single pipeline stage entry specifying its type, provider preset, and model.",
+      "required": ["type", "provider", "model"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["requirements", "planning", "plan-review", "implementation", "code-review", "rca"],
+          "description": "Stage type from the fixed registry of 6 supported types."
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider preset name (key from ~/.vcp/ai-presets.json). Must reference a configured preset."
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^[a-z0-9.-]+$",
+          "description": "Model name. Required. Must match /^[a-z0-9.-]+$/ to prevent shell metacharacter injection (CWE-78)."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

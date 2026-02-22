@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Plan Review Result",
+  "type": "object",
+  "required": ["status", "needs_clarification", "clarification_questions", "summary", "concerns", "requirements_coverage", "reviewed_by", "reviewed_at"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["approved", "needs_changes", "needs_clarification", "rejected"],
+      "description": "Overall plan review decision"
+    },
+    "requirements_coverage": {
+      "type": "object",
+      "description": "Maps each acceptance criterion from user-story.json to plan steps that address it",
+      "required": ["mapping", "missing"],
+      "properties": {
+        "mapping": {
+          "type": "array",
+          "description": "Array of AC-to-steps mappings",
+          "items": {
+            "type": "object",
+            "required": ["ac_id", "steps"],
+            "properties": {
+              "ac_id": {
+                "type": "string",
+                "description": "Acceptance criterion ID (e.g., 'AC1')"
+              },
+              "steps": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Plan step(s) that address this AC"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "missing": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of AC IDs not covered by the plan"
+        }
+      },
+      "additionalProperties": false
+    },
+    "needs_clarification": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, pauses autonomous pipeline to ask user for clarification on ambiguous requirements"
+    },
+    "clarification_questions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Questions to ask user when needs_clarification is true"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Brief overall assessment of the plan"
+    },
+    "concerns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "area", "message", "suggestion"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["error", "warning", "suggestion"],
+            "description": "How serious the concern is"
+          },
+          "area": {
+            "type": "string",
+            "enum": ["requirements", "approach", "complexity", "risks", "feasibility", "security"],
+            "description": "Which aspect of the plan the concern relates to"
+          },
+          "message": {
+            "type": "string",
+            "description": "Description of the concern"
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "How to address this concern"
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "List of concerns found during review"
+    },
+    "reviewed_by": {
+      "type": "string",
+      "enum": ["plan-reviewer", "cli-executor"],
+      "description": "Agent that performed the review"
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO8601 timestamp of when review was completed"
+    }
+  },
+  "additionalProperties": false
+}

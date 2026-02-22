@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/schemas/dev-buddy.schema.json",
+  "title": "Dev Buddy Pipeline Configuration",
+  "type": "object",
+  "required": ["version", "pipeline"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": "2.0",
+      "description": "Schema version — must be '2.0'"
+    },
+    "pipeline": {
+      "type": "object",
+      "required": ["stages"],
+      "additionalProperties": false,
+      "properties": {
+        "stages": {
+          "type": "object",
+          "description": "Pipeline stage definitions. Each stage references a preset by name.",
+          "required": [
+            "requirements",
+            "planning",
+            "plan_review_sonnet",
+            "plan_review_opus",
+            "plan_review_codex",
+            "implementation",
+            "code_review_sonnet",
+            "code_review_opus",
+            "code_review_codex"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "requirements": {
+              "$ref": "#/$defs/stageConfig"
+            },
+            "planning": {
+              "$ref": "#/$defs/stageConfig"
+            },
+            "plan_review_sonnet": {
+              "$ref": "#/$defs/stageConfig"
+            },
+            "plan_review_opus": {
+              "$ref": "#/$defs/stageConfig"
+            },
+            "plan_review_codex": {
+              "$ref": "#/$defs/stageConfig"
+            },
+            "implementation": {
+              "$ref": "#/$defs/stageConfig"
+            },
+            "code_review_sonnet": {
+              "$ref": "#/$defs/stageConfig"
+            },
+            "code_review_opus": {
+              "$ref": "#/$defs/stageConfig"
+            },
+            "code_review_codex": {
+              "$ref": "#/$defs/stageConfig"
+            }
+          }
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 10,
+          "description": "Maximum review iterations before escalating to user"
+        },
+        "team_name_pattern": {
+          "type": "string",
+          "default": "pipeline-{BASENAME}-{HASH}",
+          "description": "Pattern for pipeline team names. Supports {BASENAME} and {HASH} placeholders."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stageConfig": {
+      "type": "object",
+      "required": ["provider"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "Name of the preset to use for this stage (references ai-presets.json)"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "description": "Claude Codex hooks for pipeline enforcement",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun ${CLAUDE_PLUGIN_ROOT}/hooks/guidance-hook.ts"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun ${CLAUDE_PLUGIN_ROOT}/hooks/review-validator.ts"
+          }
+        ]
+      }
+    ]
+  }
+}

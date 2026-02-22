@@ -1,4 +1,4 @@
-import { appendFile } from "fs/promises";
+import { appendFile, mkdir } from "fs/promises";
 import { isAbsolute, join } from "path";
 
 interface LogEntry {
@@ -16,7 +16,9 @@ export async function vcpLog(
   if (!debug) return;
   if (!projectRoot || !isAbsolute(projectRoot)) return;
   try {
-    const logFile = join(projectRoot, ".vcp-log");
+    const logDir = join(projectRoot, ".vcp");
+    await mkdir(logDir, { recursive: true });
+    const logFile = join(logDir, "vcp.log");
     const ts = new Date().toISOString();
     const det = entry.details ? ` — ${entry.details}` : "";
     const line = `${ts} [${entry.event}] ${entry.source}: ${entry.decision}${det}\n`;

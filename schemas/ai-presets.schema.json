@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/schemas/ai-presets.schema.json",
+  "title": "AI Presets Configuration",
+  "type": "object",
+  "required": ["version", "presets"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": "2.0",
+      "description": "Schema version — must be '2.0'"
+    },
+    "presets": {
+      "type": "object",
+      "description": "Named presets keyed by preset name",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "title": "API Preset",
+            "type": "object",
+            "required": ["type", "name", "base_url", "api_key", "models"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "api" },
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "base_url": { "type": "string", "format": "uri" },
+              "api_key": { "type": "string" },
+              "models": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1
+              }
+            }
+          },
+          {
+            "title": "Subscription Preset",
+            "type": "object",
+            "required": ["type", "name"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "subscription" },
+              "name": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          },
+          {
+            "title": "CLI Preset",
+            "type": "object",
+            "required": ["type", "name", "command"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "cli" },
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "command": { "type": "string" },
+              "args": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
