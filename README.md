@@ -17,8 +17,11 @@
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 
 ![32 Standards](https://img.shields.io/badge/Standards-32-blue?style=flat-square)
-![9 Scopes](https://img.shields.io/badge/Scopes-9-green?style=flat-square)
+![11 Scopes](https://img.shields.io/badge/Scopes-11-green?style=flat-square)
 ![OWASP Top 10](https://img.shields.io/badge/OWASP_Top_10-Covered-critical?style=flat-square)
+![14 Skills](https://img.shields.io/badge/Skills-14-blue?style=flat-square)
+![8 Agents](https://img.shields.io/badge/Agents-8-green?style=flat-square)
+![6 Hooks](https://img.shields.io/badge/Hooks-6-orange?style=flat-square)
 
 </div>
 
@@ -65,7 +68,7 @@ Other tools scan code *after* your AI writes it. VCP prevents bad code *before* 
 /vcp-init
 ```
 
-That's it. Standards are injected at session start, dangerous patterns are blocked on every write, and 7 scanning skills are available on demand.
+That's it. Standards are injected at session start, dangerous patterns are blocked on every write, and 10 scanning skills are available on demand.
 
 ---
 
@@ -75,7 +78,7 @@ VCP ships two complementary plugins:
 
 | Plugin | What It Does | Install |
 |--------|-------------|---------|
-| **VCP** | Standards enforcement — 32 standards, real-time blocking, 7 scanning skills | `/plugin install vcp@vcp` |
+| **VCP** | Standards enforcement — 32 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
 | **Dev Buddy** | Multi-AI pipeline — configurable stages, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
 
 Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.
@@ -120,7 +123,7 @@ Run `/vcp-context` to re-inject rules at any time (useful after context compacti
 
 ### Layer 2: On-Demand Scanning — Deep Analysis
 
-Skills scan code against 32 standards across 9 scopes using AI-driven analysis:
+Skills scan code against 32 standards across 11 scopes using AI-driven analysis:
 
 | Skill | What It Does |
 |-------|-------------|
@@ -137,7 +140,7 @@ Skills scan code against 32 standards across 9 scopes using AI-driven analysis:
 A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking dangerous patterns before they reach disk:
 
 <details>
-<summary><strong>19 patterns across 9 CWEs</strong> — click to expand</summary>
+<summary><strong>19 patterns across 8 CWEs</strong> — click to expand</summary>
 
 | CWE | What It Catches |
 |-----|----------------|
@@ -263,7 +266,7 @@ The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. 
 
 ## Standards Coverage
 
-32 standards across 9 scopes:
+32 standards across 11 scopes:
 
 | Scope | Standards | What They Cover |
 |-------|-----------|----------------|
@@ -275,7 +278,9 @@ The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. 
 | **Desktop** | 1 | Electron context isolation, Tauri capabilities, IPC validation, code signing |
 | **CLI** | 1 | Shell injection, argument injection, exit codes, signal handling |
 | **DevOps** | 4 | Containers, CI/CD, Infrastructure as Code, Kubernetes |
-| **Compliance** | 3 | GDPR/CCPA, PCI DSS v4.0, HIPAA |
+| **Compliance — GDPR** | 1 | Data deletion, retention, consent, PII handling |
+| **Compliance — PCI DSS** | 1 | Tokenization, card masking, CDE isolation |
+| **Compliance — HIPAA** | 1 | PHI encryption, audit logging, retention, minimum necessary |
 
 All standards follow a consistent format: **WHY** (the principle), **WHAT** (numbered actionable rules), **HOW** (code examples and anti-patterns). See [`standards/README.md`](standards/README.md) for the format specification.
 
@@ -432,7 +437,7 @@ Full documentation is on the **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)
 
 ```
 vcp/
-├── standards/           # 32 AI-optimized principled standards across 9 scopes
+├── standards/           # 32 AI-optimized principled standards across 11 scopes
 │   ├── manifest.json    # Root manifest — full HTTPS URLs, org-customizable
 │   ├── scopes/          # Per-scope manifest files
 │   ├── core-*.md        # Universal: security, architecture, testing, etc.

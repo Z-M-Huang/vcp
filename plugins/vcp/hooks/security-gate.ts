@@ -2,7 +2,7 @@
  * VCP Security Gate — PreToolUse hook for Write|Edit|Bash
  *
  * Blocks tool calls that contain known dangerous code patterns.
- * Reads JSON from stdin, checks content against 19 regex patterns across 9 CWEs.
+ * Reads JSON from stdin, checks content against 19 regex patterns across 8 CWEs.
  *
  * For Write|Edit: checks new_string/content fields. Documentation files (.md, .mdx,
  * .txt, .rst) are exempt — they are never executed and routinely contain anti-pattern

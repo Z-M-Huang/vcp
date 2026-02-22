@@ -75,7 +75,7 @@ If `.vcp/config.json` is not found, skills stop and tell the user to run `/vcp-i
 
 ### Security Gate Hook
 
-The `security-gate.ts` hook runs on every `Write`, `Edit`, or `Bash` tool call. It parses the tool input JSON from stdin and checks the content against 19 regex patterns across 9 CWEs:
+The `security-gate.ts` hook runs on every `Write`, `Edit`, or `Bash` tool call. It parses the tool input JSON from stdin and checks the content against 19 regex patterns across 8 CWEs:
 
 - **CWE-798** — Hardcoded secrets (passwords, API keys), AWS access keys (AKIA/ASIA/etc.), private keys (all PEM formats), JWT tokens, database connection strings with embedded credentials, hardcoded Bearer tokens, Google/GitHub API key prefixes
 - **CWE-89** — SQL string concatenation and template literal injection in query calls, covering Prisma (`$queryRawUnsafe`, `$executeRawUnsafe`) and Knex (`whereRaw`, `havingRaw`, `orderByRaw`, `joinRaw`)
