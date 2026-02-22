@@ -345,15 +345,15 @@ Format includes a `resolved_config` snapshot and a `stages` array with task IDs:
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "anthropic-subscription", "model": "opus", "output_file": "user-story.json", "task_id": "task-id-1" },
-    { "type": "planning", "provider": "anthropic-subscription", "model": "opus", "output_file": "plan-refined.json", "task_id": "task-id-2" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "plan-review-1.json", "task_id": "task-id-3" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus", "output_file": "plan-review-2.json", "task_id": "task-id-4" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "plan-review-3.json", "task_id": "task-id-5" },
-    { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "task-id-6" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "task-id-7" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "task-id-8" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "code-review-3.json", "task_id": "task-id-9" }
+    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "task_id": "task-id-1" },
+    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-refined.json", "task_id": "task-id-2" },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-1.json", "task_id": "task-id-3" },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-2.json", "task_id": "task-id-4" },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-3.json", "task_id": "task-id-5" },
+    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "task-id-6" },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "task-id-7" },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "task-id-8" },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-3.json", "task_id": "task-id-9" }
   ]
 }
 ```

@@ -74,17 +74,20 @@ Read the pipeline config using Bash:
 bun -e "
 import { loadPipelineConfig } from '${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts';
 import { STAGE_DEFINITIONS, getOutputFileName } from '${CLAUDE_PLUGIN_ROOT}/types/stage-definitions.ts';
+import { readPresets } from '${CLAUDE_PLUGIN_ROOT}/scripts/preset-utils.ts';
 
 const config = loadPipelineConfig();
+const presets = readPresets();
 const pipeline = config.feature_pipeline;
 
-// Compute per-type instance counters
+// Compute per-type instance counters and resolve provider types
 const typeCounters = {};
 const resolved = pipeline.map((entry, arrayIndex) => {
   typeCounters[entry.type] = (typeCounters[entry.type] || 0) + 1;
   const stageIndex = typeCounters[entry.type];
   const outputFile = getOutputFileName(entry.type, stageIndex);
-  return { ...entry, stageIndex, outputFile, arrayIndex };
+  const providerType = presets.presets[entry.provider]?.type ?? 'subscription';
+  return { ...entry, stageIndex, outputFile, arrayIndex, providerType };
 });
 
 console.log(JSON.stringify({ config, resolved }, null, 2));
@@ -98,6 +101,7 @@ Store the resulting `resolved` array and full `config` in memory. Each element h
 - `stageIndex` — 1-based index among stages of the same type
 - `outputFile` — computed output file name (e.g., 'plan-review-1.json', 'impl-result.json')
 - `arrayIndex` — 0-based position in the pipeline array
+- `providerType` — resolved provider type: `'subscription'`, `'api'`, or `'cli'`
 
 ### Step 1.3: Create Pipeline Team (Idempotent)
 
@@ -287,15 +291,15 @@ COMPLETION: .vcp/task/code-review-{N}.json exists with status field
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "anthropic-subscription", "output_file": "user-story.json", "task_id": "4" },
-    { "type": "planning", "provider": "anthropic-subscription", "output_file": "plan-refined.json", "task_id": "5" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "plan-review-1.json", "task_id": "6" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus", "output_file": "plan-review-2.json", "task_id": "7" },
-    { "type": "plan-review", "provider": "my-codex-preset", "output_file": "plan-review-3.json", "task_id": "8" },
-    { "type": "implementation", "provider": "anthropic-subscription", "output_file": "impl-result.json", "task_id": "9" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "10" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "11" },
-    { "type": "code-review", "provider": "my-codex-preset", "output_file": "code-review-3.json", "task_id": "12" }
+    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "output_file": "user-story.json", "task_id": "4" },
+    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "output_file": "plan-refined.json", "task_id": "5" },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-1.json", "task_id": "6" },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-2.json", "task_id": "7" },
+    { "type": "plan-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "plan-review-3.json", "task_id": "8" },
+    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "output_file": "impl-result.json", "task_id": "9" },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "10" },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "11" },
+    { "type": "code-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "code-review-3.json", "task_id": "12" }
   ]
 }
 ```
@@ -319,11 +323,29 @@ while pipeline not complete:
        (If no such task exists and tasks remain, the pipeline is stuck — report to user)
     3. Call TaskGet(task.id) — read full description with AGENT, MODEL, INPUT, OUTPUT
     4. Call TaskUpdate(task.id, status: "in_progress")
-    5. Execute task using description as execution context:
-       - Parse AGENT, MODEL, INPUT, OUTPUT from description
-       - If AGENT contains "external" or "do NOT pass model": spawn via Task() WITHOUT model parameter
-       - Otherwise: spawn via Task() with model from description
-       - For CLI provider stages: the description will specify the --preset, --model, and --output-file flags to pass to cli-executor.ts
+    5. Execute task — ROUTE BY PROVIDER TYPE (from resolved stages, NOT from description alone):
+       a. Look up current task in pipeline-tasks.json stages array (match by task_id)
+       b. Read the stage's `providerType` field to determine routing:
+
+       **If providerType is 'subscription':**
+         Task(subagent_type: "dev-buddy:<agent>", model: "<model>", prompt: "...")
+         // NO team_name. One-shot subagent.
+
+       **If providerType is 'api':**
+         Read .vcp/task/session-ports.json → find entry where preset_name matches stage.provider
+         curl -s --connect-timeout 5 --max-time 300 \
+           -X POST "http://localhost:{PORT}/tasks/send" \
+           -H "Authorization: Bearer {TOKEN}" \
+           -H "Content-Type: application/json" \
+           -d '{"message":{"role":"user","parts":[{"type":"text","text":"<prompt>"}]}}'
+         // The session manager runs a V2 Agent SDK session with Read/Write/Edit/Bash — it CAN modify files.
+
+       **If providerType is 'cli':**
+         Task(subagent_type: "dev-buddy:cli-executor", prompt: "Run cli-executor.ts with --preset, --model, --output-file")
+         // Do NOT pass model parameter to Task tool. Model is passed via --model flag to cli-executor.ts.
+
+       - Parse AGENT, MODEL, INPUT, OUTPUT from task description for the prompt content
+       - **NEVER use team_name when spawning agents** (except requirements gathering specialists)
     6. Check output file (from description's OUTPUT field) for result
     7. Handle result (see Result Handling below)
     8. Enrich next task (BEFORE marking completed):
@@ -497,6 +519,7 @@ Task(
     --model '{stage.model}' \
     --output-file '${CLAUDE_PROJECT_DIR}/.vcp/task/{stage.output_file}'
   Review the {plan|code} and write output to the specified file."
+  // Do NOT add team_name or name. One-shot subagent, NOT a teammate.
 )
 ```
 
@@ -522,13 +545,14 @@ The pipeline is now data-driven. The agent reference depends on the resolved pip
 
 For custom pipelines, the agent reference is dynamically derived from the `stages` array in pipeline-tasks.json.
 
-### Spawning Workers
+### Spawning Workers (One-Shot Subagents — NO team_name)
 
 ```
 Task(
   subagent_type: "dev-buddy:<agent-name>",
   model: "<model>",
   prompt: "[Agent instructions] + [Context from .vcp/task/ files]"
+  // Do NOT add team_name or name. These are one-shot subagents, NOT teammates.
 )
 ```
 
@@ -537,8 +561,11 @@ For CLI reviews:
 Task(
   subagent_type: "dev-buddy:cli-executor",
   prompt: "[Agent instructions] + pass --preset, --model, and --output-file"
+  // Do NOT add team_name or name. These are one-shot subagents, NOT teammates.
 )
 ```
+
+**IMPORTANT:** Do NOT use `team_name` when spawning worker agents for pipeline stages. Only the requirements gathering phase uses `Task(team_name: ...)` for specialist teammates. All other phases (planning, reviews, implementation, fixes) spawn one-shot sequential subagents without `team_name`.
 
 ---
 
@@ -588,7 +615,7 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "...", "output_file": "user-story.json", "task_id": "4" }
+    { "type": "requirements", "provider": "...", "providerType": "subscription", "output_file": "user-story.json", "task_id": "4" }
   ]
 }
 ```
@@ -658,9 +685,10 @@ When all reviews are approved (or a terminal state is reached):
 
 ## Provider Routing
 
-**If provider type is `subscription`:** Use Task tool:
+**If provider type is `subscription`:** Use Task tool (NO `team_name` — one-shot subagent):
 ```
 Task(subagent_type: "dev-buddy:<agent-name>", model: "<model>", prompt: "...")
+// Do NOT add team_name or name parameters. This is a one-shot subagent, NOT a teammate.
 ```
 
 **If provider type is `api`:** Use curl to the session manager port from `.vcp/task/session-ports.json`:
@@ -691,6 +719,7 @@ curl -s --connect-timeout 5 --max-time 300 \
 11. **AC verification required** — All reviews MUST verify acceptance criteria from user-story.json
 12. **Task descriptions are execution context** — Every TaskCreate includes AGENT, MODEL, INPUT, OUTPUT. Main loop calls TaskGet() before spawning.
 13. **Progressive enrichment before completion** — Before marking a task completed, extract key context and TaskUpdate the next task's description.
+14. **Team-based execution is ONLY for requirements gathering** — Spawn specialist teammates (via `Task(team_name: ...)` and `SendMessage`) ONLY during the requirements gathering phase. ALL other phases (planning, plan-review, implementation, code-review, fix tasks, re-reviews) use sequential one-shot `Task()` calls WITHOUT `team_name`. Never spawn teammates outside requirements gathering. The pipeline team exists for task tool availability — not for spawning workers in every phase.
 
 ---
 

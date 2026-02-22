@@ -2,7 +2,7 @@
 name: dev-buddy-bug-fix
 description: Dev Buddy bug-fix pipeline. Data-driven sequential RCA -> Consolidation -> Validation -> Implementation -> Code Reviews. Configurable pipeline.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete, SendMessage
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete
 ---
 
 # Bug-Fix Pipeline Orchestrator
@@ -56,17 +56,20 @@ Read the pipeline config using Bash:
 bun -e "
 import { loadPipelineConfig } from '${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts';
 import { STAGE_DEFINITIONS, getOutputFileName } from '${CLAUDE_PLUGIN_ROOT}/types/stage-definitions.ts';
+import { readPresets } from '${CLAUDE_PLUGIN_ROOT}/scripts/preset-utils.ts';
 
 const config = loadPipelineConfig();
+const presets = readPresets();
 const pipeline = config.bugfix_pipeline;
 
-// Compute per-type instance counters
+// Compute per-type instance counters and resolve provider types
 const typeCounters = {};
 const resolved = pipeline.map((entry, arrayIndex) => {
   typeCounters[entry.type] = (typeCounters[entry.type] || 0) + 1;
   const stageIndex = typeCounters[entry.type];
   const outputFile = getOutputFileName(entry.type, stageIndex);
-  return { ...entry, stageIndex, outputFile, arrayIndex };
+  const providerType = presets.presets[entry.provider]?.type ?? 'subscription';
+  return { ...entry, stageIndex, outputFile, arrayIndex, providerType };
 });
 
 console.log(JSON.stringify({ config, resolved }, null, 2));
@@ -80,6 +83,7 @@ Store the resulting `resolved` array and full `config` in memory. Each element h
 - `stageIndex` — 1-based index among stages of the same type
 - `outputFile` — computed output file name (e.g., 'rca-1.json', 'plan-review-1.json')
 - `arrayIndex` — 0-based position in the pipeline array
+- `providerType` — resolved provider type: `'subscription'`, `'api'`, or `'cli'`
 
 Identify RCA stages: all consecutive `rca` type entries at the beginning of the pipeline.
 
@@ -220,13 +224,13 @@ COMPLETION: .vcp/task/code-review-{N}.json exists with status field
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "rca", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "rca-1.json", "task_id": "4" },
-    { "type": "rca", "provider": "anthropic-subscription", "model": "opus", "output_file": "rca-2.json", "task_id": "5" },
-    { "type": "plan-review", "provider": "my-codex-preset", "output_file": "plan-review-1.json", "task_id": "6" },
-    { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "7" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "8" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "9" },
-    { "type": "code-review", "provider": "my-codex-preset", "output_file": "code-review-3.json", "task_id": "10" }
+    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "rca-1.json", "task_id": "4" },
+    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "rca-2.json", "task_id": "5" },
+    { "type": "plan-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "plan-review-1.json", "task_id": "6" },
+    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "7" },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "8" },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "9" },
+    { "type": "code-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "code-review-3.json", "task_id": "10" }
   ]
 }
 ```
@@ -246,7 +250,29 @@ while pipeline not complete:
        (Only one task will be unblocked at a time — all tasks are sequential)
     3. Call TaskGet(task.id) — read full description
     4. Call TaskUpdate(task.id, status: "in_progress")
-    5. Execute task using description as execution context
+    5. Execute task — ROUTE BY PROVIDER TYPE (from resolved stages, NOT from description alone):
+       a. Look up current task in pipeline-tasks.json stages array (match by task_id)
+       b. Read the stage's `providerType` field to determine routing:
+
+       **If providerType is 'subscription':**
+         Task(subagent_type: "dev-buddy:<agent>", model: "<model>", prompt: "...")
+         // NO team_name. One-shot subagent.
+
+       **If providerType is 'api':**
+         Read .vcp/task/session-ports.json → find entry where preset_name matches stage.provider
+         curl -s --connect-timeout 5 --max-time 300 \
+           -X POST "http://localhost:{PORT}/tasks/send" \
+           -H "Authorization: Bearer {TOKEN}" \
+           -H "Content-Type: application/json" \
+           -d '{"message":{"role":"user","parts":[{"type":"text","text":"<prompt>"}]}}'
+         // The session manager runs a V2 Agent SDK session with Read/Write/Edit/Bash — it CAN modify files.
+
+       **If providerType is 'cli':**
+         Task(subagent_type: "dev-buddy:cli-executor", prompt: "Run cli-executor.ts with --preset, --model, --output-file")
+         // Do NOT pass model parameter to Task tool. Model is passed via --model flag to cli-executor.ts.
+
+       - Parse AGENT, MODEL, INPUT, OUTPUT from task description for the prompt content
+       - **NEVER use team_name when spawning agents.** All stages are one-shot sequential subagents, NOT teammates.
     6. Check output file for result
     7. *** RCA CONSOLIDATION CHECK (inline, before handling result) ***
        After completing a task, check if:
@@ -476,6 +502,7 @@ Task(
     --model '{stage.model}' \
     --output-file '${CLAUDE_PROJECT_DIR}/.vcp/task/{stage.output_file}'
   Review the {plan|code} and write output to the specified file."
+  // Do NOT add team_name or name. One-shot subagent, NOT a teammate.
 )
 ```
 
@@ -542,6 +569,7 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
 9. **max_iterations from config** — Use resolved_config.max_iterations for fix/re-review cycle limit.
 10. **CLI stages pass --preset, --model, --output-file** — CLI provider stages MUST pass --preset, --model, and --output-file to cli-executor.ts.
 11. **Minimal fix principle** — Fix is the smallest possible change addressing root cause. No refactoring.
+12. **No teammate spawning** — The bug-fix pipeline does NOT use team-based parallel execution. ALL stages use sequential one-shot `Task()` calls WITHOUT `team_name`. Never spawn teammates with `Task(team_name: ...)`. The pipeline team exists solely for task tool availability (TaskCreate/TaskUpdate/TaskList), not for spawning workers.
 
 ---
 
@@ -567,11 +595,23 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
 
 ## Provider Routing
 
-**subscription:** `Task(subagent_type: "dev-buddy:<agent>", model: "<model>", prompt: "...")`
+**If providerType is `subscription`:** Use Task tool (NO `team_name` — one-shot subagent):
+```
+Task(subagent_type: "dev-buddy:<agent-name>", model: "<model>", prompt: "...")
+// Do NOT add team_name or name parameters. This is a one-shot subagent, NOT a teammate.
+```
 
-**api:** curl to session manager port from `.vcp/task/session-ports.json`
+**If providerType is `api`:** Use curl to the session manager port from `.vcp/task/session-ports.json`:
+```bash
+curl -s --connect-timeout 5 --max-time 300 \
+  -X POST "http://localhost:{PORT}/tasks/send" \
+  -H "Authorization: Bearer {TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"message":{"role":"user","parts":[{"type":"text","text":"...prompt..."}]}}'
+```
+The session manager runs a V2 Agent SDK session with Read/Write/Edit/Bash — it CAN modify files on disk. API providers support ALL stage types including implementation and RCA.
 
-**cli:** Task description specifies cli-executor.ts invocation with `--preset`, `--model`, and `--output-file`
+**If providerType is `cli`:** The task description specifies the exact cli-executor.ts invocation with `--output-file` and optional `--model` flags.
 
 ---
 
