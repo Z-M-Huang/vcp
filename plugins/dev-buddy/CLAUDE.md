@@ -445,12 +445,75 @@ The config server (`scripts/config-server.ts`) exposes these REST endpoints:
 
 ---
 
+## Session Manager Architecture
+
+Session managers wrap persistent V2 Agent SDK sessions behind HTTP servers.
+For API presets, the Claude SDK is configured via environment variables to route
+to the external provider's Claude-compatible endpoint.
+
+### Env Var Mapping
+
+The subprocess env is built from an allowlist of safe host vars
+(PATH, HOME, proxy, TLS certs, Windows essentials) plus provider overrides.
+Not `...process.env` (avoids leaking full host env), not Linux-hardcoded
+(handles Windows via USERPROFILE/APPDATA allowlist).
+
+| Env Var | Source | Purpose |
+|---------|--------|---------|
+| `ANTHROPIC_BASE_URL` | `preset.base_url` | Route SDK to external provider |
+| `ANTHROPIC_API_KEY` | `preset.api_key` | Authenticate with provider |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `preset.models[0]` | Map haiku alias |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `preset.models[0]` | Map sonnet alias |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `preset.models[0]` | Map opus alias |
+| `CLAUDE_CODE_SUBAGENT_MODEL` | `preset.models[0]` | Model for nested subagents |
+
+All aliases set to the same provider model name (case-sensitive).
+Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers.
+
+### Session Lifecycle
+
+1. Session manager spawned per unique API provider at pipeline start
+2. V2 session created with provider env vars (~5s warmup)
+3. Startup JSON emitted AFTER warmup (no race condition)
+4. Tasks dispatched via `session.send()` (~1.5-2.5s each, context retained)
+5. Per-task `Promise.race` timeout prevents queue deadlock (default 5min, configurable via `--task-timeout`)
+6. Health gate: `/tasks/send` returns 503 when session is not `ready`
+7. On failure: `session.close()`, create new session (auto-recovery via `attemptRespawn`)
+8. On pipeline end: graceful shutdown with `session.close()`
+
+### Key Design Decisions
+
+- **`permissionMode: 'default'`** (not `bypassPermissions`) — security-first; explicit `allowedTools` list
+- **Startup blocks until warmup completes** — caller never receives port+token until session is live
+- **Warmup failure exits with non-zero** — prevents serving on a broken session
+- **Timeout via `Promise.race`** — wall-clock timeout fires even if `session.stream()` yields nothing; on timeout, `session.close()` kills the orphaned stream consumer
+- **Platform-aware env allowlist** — handles Windows (USERPROFILE, APPDATA, SystemRoot), proxy (HTTP_PROXY, HTTPS_PROXY), and TLS certs (NODE_EXTRA_CA_CERTS)
+
+Reference: `spike/test-session-server.ts`, GitHub issue #71
+
+---
+
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `orchestrator.ts` | Initialize/reset pipeline, show status (`bun orchestrator.ts [cmd]`) |
 | `json-tool.ts` | Cross-platform JSON operations (`bun json-tool.ts [cmd]`) |
+| `session-manager.ts` | Persistent V2 Agent SDK HTTP server for API presets |
+
+### Session Manager CLI
+
+```
+bun session-manager.ts --preset <name> [options]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--preset` | string | *required* | Preset name from `~/.vcp/presets.json` |
+| `--cwd` | string | `process.cwd()` | Working directory for the session |
+| `--idle-timeout` | minutes | `60` | Idle timeout before auto-shutdown |
+| `--allowed-tools` | CSV | `Read,Write,Edit,Grep,Glob,Bash` | Tools the V2 session may use |
+| `--task-timeout` | ms | `300000` (5 min) | Per-task wall-clock timeout (from `ApiPreset.timeout_ms` via `spawnSessionManagers`) |
 
 ---
 

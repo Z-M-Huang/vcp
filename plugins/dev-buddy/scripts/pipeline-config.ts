@@ -320,7 +320,11 @@ export async function spawnSessionManagers(
     }
 
     // Spawn session manager — list form, no shell (C8, CWE-78)
-    const proc = Bun.spawn(['bun', scriptPath, '--preset', presetName, '--cwd', cwd], {
+    const spawnArgs = ['bun', scriptPath, '--preset', presetName, '--cwd', cwd];
+    if (preset?.type === 'api' && preset.timeout_ms) {
+      spawnArgs.push('--task-timeout', String(preset.timeout_ms));
+    }
+    const proc = Bun.spawn(spawnArgs, {
       cwd,
       stdout: 'pipe',
       stderr: 'inherit',

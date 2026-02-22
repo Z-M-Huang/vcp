@@ -27,7 +27,7 @@ import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
 
 // Allowed fields per preset type for field allowlisting (CWE-915)
 const ALLOWED_PRESET_FIELDS: Record<string, Set<string>> = {
-  api: new Set(['type', 'name', 'base_url', 'api_key', 'models']),
+  api: new Set(['type', 'name', 'base_url', 'api_key', 'models', 'timeout_ms']),
   subscription: new Set(['type', 'name']),
   cli: new Set(['type', 'name', 'command', 'args_template', 'resume_args_template', 'supports_resume', 'supports_reasoning_effort', 'reasoning_effort', 'timeout_ms', 'models']),
 };

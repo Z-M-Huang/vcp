@@ -8,7 +8,7 @@
  *
  * Usage:
  *   bun session-manager.ts --preset <name> [--cwd <dir>] [--idle-timeout <min>]
- *                          [--allowed-tools <tools>] [--max-turns <n>]
+ *                          [--allowed-tools <tools>] [--task-timeout <ms>]
  */
 
 import os from 'os';
@@ -16,6 +16,107 @@ import path from 'path';
 import type { Task, TaskStatus, Message, TaskError, TaskSendRequest } from '../types/a2a-lite.ts';
 import type { SessionState, SessionConfig, SessionHealth, SessionStartupOutput } from '../types/session.ts';
 import { maskApiKey, readPresets } from './preset-utils.ts';
+import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk';
+import type { ApiPreset } from '../types/presets.ts';
+import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
+
+// ============================================================
+// --- V2 Session Env ---
+// ============================================================
+
+/** Default per-task timeout: 5 minutes (300s). */
+export const DEFAULT_TASK_TIMEOUT_MS = 300_000;
+
+/** Env vars safe to inherit into the Agent SDK subprocess. */
+export const ENV_ALLOWLIST = [
+  // Cross-platform essentials
+  'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
+  'TMPDIR', 'TEMP', 'TMP',
+  // Windows
+  'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'HOMEDRIVE', 'HOMEPATH',
+  // Network/proxy (enterprise environments)
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+  // TLS/certs
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+];
+
+/**
+ * Build the env object for a V2 Agent SDK session from an API preset.
+ * Inherits allowlisted host vars + sets provider credentials and model aliases.
+ * The env option replaces the entire subprocess env (clean isolation).
+ */
+export function buildSessionEnv(preset: ApiPreset): Record<string, string> {
+  const model = preset.models[0]; // Case-sensitive — passed unmodified
+  const env: Record<string, string> = {};
+
+  for (const key of ENV_ALLOWLIST) {
+    if (process.env[key]) {
+      env[key] = process.env[key]!;
+    }
+  }
+
+  // Provider credentials + model aliases (override any inherited values)
+  env.ANTHROPIC_BASE_URL = preset.base_url;
+  env.ANTHROPIC_API_KEY = preset.api_key;
+  env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model;
+  env.ANTHROPIC_DEFAULT_SONNET_MODEL = model;
+  env.ANTHROPIC_DEFAULT_OPUS_MODEL = model;
+  env.CLAUDE_CODE_SUBAGENT_MODEL = model;
+
+  return env;
+}
+
+/**
+ * Mutable reference to the V2 Agent SDK session.
+ * Shared between startServer, executeAgentTask, attemptRespawn, and shutdown.
+ */
+export interface SessionRef {
+  session: any;
+}
+
+/**
+ * Collect the result from a V2 session stream with wall-clock timeout.
+ *
+ * Uses Promise.race so timeout fires even if stream() yields nothing.
+ * On timeout, session.close() kills the orphaned stream consumer.
+ */
+export async function collectSessionResult(
+  session: any,
+  timeoutMs: number = DEFAULT_TASK_TIMEOUT_MS,
+): Promise<{ result: string | null; error: string | null; timedOut?: boolean }> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  type CollectResult = { result: string | null; error: string | null; timedOut?: boolean };
+
+  async function inner(): Promise<CollectResult> {
+    for await (const msg of session.stream()) {
+      if (msg.type === 'result') {
+        if (msg.subtype === 'success') {
+          return { result: msg.result, error: null };
+        } else {
+          return { result: null, error: `${msg.subtype}: ${(msg as any).errors?.join(', ') || 'unknown'}` };
+        }
+      }
+    }
+    return { result: null, error: 'stream ended without result message' };
+  }
+
+  const timeout = new Promise<CollectResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({ result: null, error: `task timed out after ${timeoutMs / 1000}s`, timedOut: true });
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([inner(), timeout]);
+    if (result.timedOut) {
+      try { session.close(); } catch { /* already closed or errored */ }
+    }
+    return result;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
 
 // ============================================================
 // --- Auth ---
@@ -152,8 +253,18 @@ export async function handleTaskSend(
   state: SessionState,
   queue: TaskQueue,
   config: SessionConfig,
-  drainRef?: DrainRef
+  drainRef?: DrainRef,
+  sessionRef?: SessionRef,
+  debugEnabled: boolean = false,
 ): Promise<Response> {
+  // Health gate: reject when session is not ready
+  if (state.health !== 'ready') {
+    return jsonResponse(
+      { error: { code: 'SERVICE_UNAVAILABLE', message: `Session is ${state.health}` } },
+      503
+    );
+  }
+
   // Validate request body size (10MB max)
   const contentLength = req.headers.get('content-length');
   if (contentLength && parseInt(contentLength, 10) > 10 * 1024 * 1024) {
@@ -230,6 +341,15 @@ export async function handleTaskSend(
     return jsonResponse({ task }, 408);
   }
 
+  // Re-check health after queue acquisition — session may have died while we waited
+  if (state.health !== 'ready') {
+    queue.release();
+    task.status = 'failed';
+    task.error = { code: 'SERVICE_UNAVAILABLE', message: `Session became ${state.health} while queued` };
+    task.updated_at = new Date().toISOString();
+    return jsonResponse({ task }, 503);
+  }
+
   // Track the execution promise in drainRef so shutdown() can wait for it (AC25, AC29)
   const executionPromise = (async () => {
     try {
@@ -237,8 +357,8 @@ export async function handleTaskSend(
       task.updated_at = new Date().toISOString();
       state.task_count += 1;
 
-      // Execute via V2 Agent SDK subprocess
-      const result = await executeAgentTask(body.message, config);
+      // Execute via V2 Agent SDK session
+      const result = await executeAgentTask(body.message, config, sessionRef!, debugEnabled);
 
       // AC23: Only update status if task wasn't canceled while executing.
       // Canceled is a terminal state — don't overwrite it.
@@ -251,7 +371,12 @@ export async function handleTaskSend(
       }
     } catch (err) {
       const errorId = crypto.randomUUID();
+      const errorMessage = err instanceof Error ? err.message : 'unknown error';
       console.error(`[ERROR] Task ${taskId} failed (error_id: ${errorId}):`, err);
+      await vcpLog(config.cwd || process.cwd(), {
+        source: 'session-manager', event: 'task_failed', decision: 'error',
+        details: `task=${taskId} error_id=${errorId} error=${errorMessage}`,
+      }, debugEnabled);
       // AC23: Don't overwrite canceled status on error either
       const errStatus = task.status as string;
       if (errStatus !== 'canceled') {
@@ -262,14 +387,16 @@ export async function handleTaskSend(
       // AC27: Transition health to dead and schedule async respawn (non-blocking)
       const failReason = err instanceof Error ? err.message : 'task execution failed';
       transitionHealth(state, 'dead', failReason);
-      setTimeout(() => {
-        attemptRespawn(state, config).then(newHealth => {
-          transitionHealth(state, newHealth, 'respawn result');
-        }).catch(respawnErr => {
-          console.error('[Session] Unexpected error during respawn attempt:', respawnErr);
-          transitionHealth(state, 'failed', 'respawn threw unexpectedly');
-        });
-      }, 1000);
+      if (sessionRef) {
+        setTimeout(() => {
+          attemptRespawn(state, config, sessionRef, debugEnabled).then(newHealth => {
+            transitionHealth(state, newHealth, 'respawn result');
+          }).catch(respawnErr => {
+            console.error('[Session] Unexpected error during respawn attempt:', respawnErr);
+            transitionHealth(state, 'failed', 'respawn threw unexpectedly');
+          });
+        }, 1000);
+      }
     } finally {
       queue.release();
       if (drainRef) drainRef.promise = null;
@@ -284,42 +411,43 @@ export async function handleTaskSend(
 }
 
 /**
- * Execute a task via V2 Agent SDK subprocess.
- * Returns the result message.
+ * Execute a task via the persistent V2 Agent SDK session.
+ * Dispatches prompt via session.send(), collects result with timeout.
  */
-async function executeAgentTask(message: Message, config: SessionConfig): Promise<Message> {
-  // Extract text content from message parts
+async function executeAgentTask(
+  message: Message,
+  config: SessionConfig,
+  sessionRef: SessionRef,
+  debugEnabled: boolean,
+): Promise<Message> {
   const textParts = message.parts.filter(p => p.type === 'text') as Array<{ type: 'text'; text: string }>;
   const prompt = textParts.map(p => p.text).join('\n');
+  const logRoot = config.cwd || process.cwd();
 
-  // Build subprocess arguments
-  const args: string[] = ['--print', prompt];
-  if (config.allowed_tools) {
-    args.push('--allowedTools', config.allowed_tools);
-  }
-  if (config.max_turns !== undefined) {
-    args.push('--maxTurns', String(config.max_turns));
-  }
+  const truncatedPrompt = prompt.length > 4096 ? prompt.slice(0, 4096) + '…[truncated]' : prompt;
+  await vcpLog(logRoot, {
+    source: 'session-manager', event: 'task_dispatch', decision: 'info',
+    details: `prompt_length=${prompt.length}\n--- REQUEST ---\n${truncatedPrompt}\n--- END REQUEST ---`,
+  }, debugEnabled);
 
-  // Spawn V2 Agent SDK (claude) subprocess — list form, no shell (CWE-78)
-  const proc = Bun.spawn(['claude', ...args], {
-    cwd: config.cwd || process.cwd(),
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
+  await sessionRef.session.send(prompt);
+  const result = await collectSessionResult(
+    sessionRef.session,
+    config.task_timeout_ms ?? DEFAULT_TASK_TIMEOUT_MS,
+  );
 
-  const stdout = await new Response(proc.stdout).text();
-  const exitCode = await proc.exited;
-
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`Agent subprocess exited with code ${exitCode}: ${stderr.slice(0, 200)}`);
+  if (result.error) {
+    throw new Error(`V2 session error: ${result.error}`);
   }
 
-  return {
-    role: 'agent',
-    parts: [{ type: 'text', text: stdout }],
-  };
+  const resultText = result.result ?? '';
+  const truncatedResult = resultText.length > 4096 ? resultText.slice(0, 4096) + '…[truncated]' : resultText;
+  await vcpLog(logRoot, {
+    source: 'session-manager', event: 'task_completed', decision: 'info',
+    details: `result_length=${resultText.length}\n--- RESPONSE ---\n${truncatedResult}\n--- END RESPONSE ---`,
+  }, debugEnabled);
+
+  return { role: 'agent', parts: [{ type: 'text', text: result.result ?? '' }] };
 }
 
 /**
@@ -409,12 +537,15 @@ const RESPAWN_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 const RESPAWN_MAX_COUNT = 3;
 
 /**
- * Attempt to respawn the session after a 'dead' state.
+ * Attempt to respawn the V2 session after a 'dead' state.
+ * Closes the dead session, re-reads the preset, creates a new session, warms it up.
  * Returns the new health state.
  */
 export async function attemptRespawn(
   state: SessionState,
-  config: SessionConfig
+  config: SessionConfig,
+  sessionRef?: SessionRef,
+  debugEnabled: boolean = false,
 ): Promise<SessionHealth> {
   if (!canRespawn(state.respawn_timestamps, RESPAWN_WINDOW_MS, RESPAWN_MAX_COUNT)) {
     console.error('[Session] Respawn rate limit exceeded — transitioning to failed');
@@ -425,22 +556,53 @@ export async function attemptRespawn(
   console.error('[Session] Attempting respawn...');
 
   try {
-    // Validate the preset still exists and is accessible
+    // Close the dead session (if any)
+    if (sessionRef?.session) {
+      try { sessionRef.session.close(); } catch { /* already closed */ }
+      sessionRef.session = null;
+    }
+
+    // Re-read preset (may have been updated)
     const presets = readPresets();
     const preset = presets.presets[config.preset_name];
     if (!preset) {
       console.error(`[Session] Preset not found: ${config.preset_name} — transitioning to failed (no respawn)`);
       return 'failed';
     }
-    if (preset.type === 'api') {
-      // Mask key in logs
+
+    if (preset.type === 'api' && sessionRef) {
+      console.error(`[Session] Recreating V2 session with key: ${maskApiKey(preset.api_key)}`);
+      const env = buildSessionEnv(preset);
+      sessionRef.session = unstable_v2_createSession({
+        model: preset.models[0],
+        env,
+        permissionMode: 'default',
+        allowedTools: config.allowed_tools?.split(',')
+          ?? ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
+      });
+      // Warmup the new session
+      await sessionRef.session.send('Respond with OK');
+      const warmupResult = await collectSessionResult(
+        sessionRef.session, config.task_timeout_ms ?? DEFAULT_TASK_TIMEOUT_MS,
+      );
+      if (warmupResult.error) {
+        console.error(`[Session] Respawn warmup failed: ${warmupResult.error}`);
+        await vcpLog(config.cwd || process.cwd(), {
+          source: 'session-manager', event: 'respawn_warmup_failed', decision: 'error',
+          details: warmupResult.error,
+        }, debugEnabled);
+        return 'failed';
+      }
+      await vcpLog(config.cwd || process.cwd(), {
+        source: 'session-manager', event: 'respawn_success', decision: 'info',
+        details: `model=${preset.models[0]}`,
+      }, debugEnabled);
+    } else if (preset.type === 'api') {
       console.error(`[Session] Using API preset with key: ${maskApiKey(preset.api_key)}`);
     }
 
-    // Respawn success — warm-up complete
     return 'ready';
   } catch (err) {
-    // Auth/config errors are immediately terminal
     console.error('[Session] Respawn failed with config/auth error — transitioning to failed:', err);
     return 'failed';
   }
@@ -511,10 +673,12 @@ export function parseCLIArgs(argv: string[]): SessionConfig {
         result.allowed_tools = next;
         i++;
         break;
-      case '--max-turns':
-        if (!next) throw new Error('--max-turns requires a value');
-        result.max_turns = parseInt(next, 10);
-        if (isNaN(result.max_turns)) throw new Error('--max-turns must be a number');
+      case '--task-timeout':
+        if (!next) throw new Error('--task-timeout requires a value');
+        result.task_timeout_ms = parseInt(next, 10);
+        if (isNaN(result.task_timeout_ms) || result.task_timeout_ms <= 0) {
+          throw new Error('--task-timeout must be a positive integer (milliseconds)');
+        }
         i++;
         break;
     }
@@ -547,21 +711,25 @@ export async function startServer(config: SessionConfig): Promise<void> {
     respawn_timestamps: [],
   };
 
-  // Validate preset exists
+  // Load preset
+  let resolvedPreset: import('../types/presets.ts').Preset | undefined;
   try {
     const presets = readPresets();
-    const preset = presets.presets[config.preset_name];
-    if (!preset) {
+    resolvedPreset = presets.presets[config.preset_name];
+    if (!resolvedPreset) {
       console.error(`[Session] Preset not found: ${config.preset_name}`);
       process.exit(1);
     }
-    if (preset.type === 'api') {
-      console.error(`[Session] Using API preset, masked key: ${maskApiKey(preset.api_key)}`);
+    if (resolvedPreset.type === 'api') {
+      console.error(`[Session] Using API preset, masked key: ${maskApiKey(resolvedPreset.api_key)}`);
     }
   } catch (err) {
     console.error('[Session] Failed to load preset config:', err);
     process.exit(1);
   }
+
+  const debugEnabled = await isDebugEnabled();
+  const sessionRef: SessionRef = { session: null };
 
   const idleTimeoutMs = config.idle_timeout_minutes * 60 * 1000;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -577,6 +745,11 @@ export async function startServer(config: SessionConfig): Promise<void> {
     shutdownRequested = true;
     console.error('[Session] Shutting down gracefully...');
     if (idleTimer) clearTimeout(idleTimer);
+    // Close V2 session
+    if (sessionRef.session) {
+      try { sessionRef.session.close(); } catch { /* already closed */ }
+      sessionRef.session = null;
+    }
     server.stop();
     // Drain in-flight task (wait up to 30s) before exiting
     const drain = drainRef.promise
@@ -613,7 +786,7 @@ export async function startServer(config: SessionConfig): Promise<void> {
       try {
         // Route matching
         if (req.method === 'POST' && pathname === '/tasks/send') {
-          return await handleTaskSend(req, state, queue, config, drainRef);
+          return await handleTaskSend(req, state, queue, config, drainRef, sessionRef, debugEnabled);
         }
 
         if (req.method === 'GET' && pathname.startsWith('/tasks/')) {
@@ -651,13 +824,42 @@ export async function startServer(config: SessionConfig): Promise<void> {
     },
   });
 
-  // Transition to ready state
-  transitionHealth(state, 'ready', 'server started');
+  // Create + warmup V2 session for API presets BEFORE emitting startup output
+  if (resolvedPreset!.type === 'api') {
+    const env = buildSessionEnv(resolvedPreset as ApiPreset);
+    sessionRef.session = unstable_v2_createSession({
+      model: (resolvedPreset as ApiPreset).models[0],
+      env,
+      permissionMode: 'default',
+      allowedTools: config.allowed_tools?.split(',')
+        ?? ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
+    });
+    // Warmup — blocks until session is live
+    await sessionRef.session.send('Respond with OK');
+    const warmupResult = await collectSessionResult(
+      sessionRef.session, config.task_timeout_ms ?? DEFAULT_TASK_TIMEOUT_MS,
+    );
+    if (warmupResult.error) {
+      console.error(`[Session] Warmup failed: ${warmupResult.error}`);
+      await vcpLog(config.cwd || process.cwd(), {
+        source: 'session-manager', event: 'warmup_failed', decision: 'error',
+        details: warmupResult.error,
+      }, debugEnabled);
+      process.exit(1);
+    }
+    transitionHealth(state, 'ready', 'V2 session warmed up');
+    await vcpLog(config.cwd || process.cwd(), {
+      source: 'session-manager', event: 'session_ready', decision: 'info',
+      details: `model=${(resolvedPreset as ApiPreset).models[0]} base_url=${(resolvedPreset as ApiPreset).base_url}`,
+    }, debugEnabled);
+  } else {
+    transitionHealth(state, 'ready', 'server started');
+  }
 
   // Start idle timer
   resetIdle();
 
-  // Emit startup output — consumed by pipeline-config.ts to get port + token
+  // ONLY NOW emit startup output — caller knows session is ready
   const startupOutput: SessionStartupOutput = {
     status: 'ready',
     port: server.port as number,

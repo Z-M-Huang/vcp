@@ -618,9 +618,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const builtPrompt = buildReviewPrompt(args, isResume);
+  const truncatedPrompt = builtPrompt.length > 4096 ? builtPrompt.slice(0, 4096) + '…[truncated]' : builtPrompt;
   await vcpLog(logProjectRoot, {
     source: 'cli-executor', event: 'command_built', decision: 'info',
-    details: JSON.stringify(cmdConfig.args),
+    details: `args=${JSON.stringify(cmdConfig.args)}\n--- PROMPT ---\n${truncatedPrompt}\n--- END PROMPT ---`,
   }, debugEnabled);
 
   console.log(JSON.stringify({
@@ -632,10 +634,19 @@ async function main(): Promise<void> {
 
   let result = await runCommand(cmdConfig, timeoutMs);
 
+  // Read output file content for verbose logging
+  let outputContent = '';
+  try {
+    const outFile = getOutputFile(args.type!, args.outputFile);
+    if (fileExists(outFile)) {
+      outputContent = fs.readFileSync(outFile, 'utf8');
+    }
+  } catch { /* best-effort */ }
+  const truncatedOutput = outputContent.length > 4096 ? outputContent.slice(0, 4096) + '…[truncated]' : outputContent;
   await vcpLog(logProjectRoot, {
     source: 'cli-executor', event: 'command_result',
     decision: result.success ? 'info' : 'error',
-    details: `success=${result.success} code=${result.code}`,
+    details: `success=${result.success} code=${result.code}\n--- OUTPUT ---\n${truncatedOutput}\n--- END OUTPUT ---`,
   }, debugEnabled);
 
   // Handle session expired - retry without resume

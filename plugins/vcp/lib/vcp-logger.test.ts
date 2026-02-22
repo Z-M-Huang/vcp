@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { mkdtemp, readFile, rm } from "fs/promises";
+import { mkdtemp, readFile, rm, writeFile, access } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -15,6 +15,15 @@ async function withTmpDir(fn: (dir: string) => Promise<void>): Promise<void> {
     await fn(dir);
   } finally {
     await rm(dir, { recursive: true });
+  }
+}
+
+async function fileExistsAt(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -121,14 +130,7 @@ describe("vcpLog", () => {
         decision: "info",
         details: "should not appear",
       }, false);
-      const { access } = await import("fs/promises");
-      let exists = true;
-      try {
-        await access(join(dir, ".vcp", "vcp.log"));
-      } catch {
-        exists = false;
-      }
-      expect(exists).toBe(false);
+      expect(await fileExistsAt(join(dir, ".vcp", "vcp.log"))).toBe(false);
     });
   });
 
@@ -139,14 +141,104 @@ describe("vcpLog", () => {
         event: "TestEvent",
         decision: "info",
       });
-      const { access } = await import("fs/promises");
-      let exists = true;
-      try {
-        await access(join(dir, ".vcp", "vcp.log"));
-      } catch {
-        exists = false;
-      }
-      expect(exists).toBe(false);
+      expect(await fileExistsAt(join(dir, ".vcp", "vcp.log"))).toBe(false);
+    });
+  });
+});
+
+describe("log rotation", () => {
+  test("rotates when file exceeds 2MB", async () => {
+    await withTmpDir(async (dir) => {
+      const logDir = join(dir, ".vcp");
+      const { mkdir } = await import("fs/promises");
+      await mkdir(logDir, { recursive: true });
+      const logFile = join(logDir, "vcp.log");
+
+      // Write a 2MB+ file to trigger rotation
+      const bigContent = "x".repeat(2 * 1024 * 1024 + 1);
+      await writeFile(logFile, bigContent);
+
+      // This write should trigger rotation
+      await vcpLog(dir, {
+        source: "test",
+        event: "AfterRotation",
+        decision: "info",
+        details: "new entry",
+      }, true);
+
+      // Original content should now be in .log.1
+      expect(await fileExistsAt(logFile + ".1")).toBe(true);
+      const rotatedContent = await readFile(logFile + ".1", "utf-8");
+      expect(rotatedContent.length).toBeGreaterThan(2 * 1024 * 1024);
+
+      // Current .log should have only the new entry
+      const currentContent = await readFile(logFile, "utf-8");
+      expect(currentContent).toContain("AfterRotation");
+      expect(currentContent.length).toBeLessThan(200);
+    });
+  });
+
+  test("keeps at most 3 versions", async () => {
+    await withTmpDir(async (dir) => {
+      const logDir = join(dir, ".vcp");
+      const { mkdir } = await import("fs/promises");
+      await mkdir(logDir, { recursive: true });
+      const logFile = join(logDir, "vcp.log");
+
+      // Pre-create .log.1 and .log.2
+      await writeFile(logFile + ".1", "version-1-content\n");
+      await writeFile(logFile + ".2", "version-2-content\n");
+
+      // Write a 2MB+ file to trigger rotation
+      const bigContent = "y".repeat(2 * 1024 * 1024 + 1);
+      await writeFile(logFile, bigContent);
+
+      await vcpLog(dir, {
+        source: "test",
+        event: "Rotate3",
+        decision: "info",
+      }, true);
+
+      // .log.2 should now contain what was .log.1 (version-1-content)
+      const v2 = await readFile(logFile + ".2", "utf-8");
+      expect(v2).toContain("version-1-content");
+
+      // .log.1 should contain the 2MB+ content
+      const v1 = await readFile(logFile + ".1", "utf-8");
+      expect(v1.length).toBeGreaterThan(2 * 1024 * 1024);
+
+      // .log should have the new entry
+      const current = await readFile(logFile, "utf-8");
+      expect(current).toContain("Rotate3");
+
+      // No .log.3 should exist
+      expect(await fileExistsAt(logFile + ".3")).toBe(false);
+    });
+  });
+
+  test("does not rotate when under 2MB", async () => {
+    await withTmpDir(async (dir) => {
+      const logDir = join(dir, ".vcp");
+      const { mkdir } = await import("fs/promises");
+      await mkdir(logDir, { recursive: true });
+      const logFile = join(logDir, "vcp.log");
+
+      // Write a small file (under 2MB)
+      await writeFile(logFile, "small content\n");
+
+      await vcpLog(dir, {
+        source: "test",
+        event: "NoRotation",
+        decision: "info",
+      }, true);
+
+      // No rotation should have occurred
+      expect(await fileExistsAt(logFile + ".1")).toBe(false);
+
+      // Content should be appended
+      const content = await readFile(logFile, "utf-8");
+      expect(content).toContain("small content");
+      expect(content).toContain("NoRotation");
     });
   });
 });

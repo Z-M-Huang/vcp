@@ -135,6 +135,7 @@ function devBuddyApp() {
           base_url: this.newPreset.base_url,
           api_key: this.newPreset.api_key,
           models,
+          timeout_ms: this.newPreset.timeout_minutes ? Number(this.newPreset.timeout_minutes) * 60000 : undefined,
         };
       } else if (this.newPreset.type === 'subscription') {
         body = {

@@ -42,8 +42,8 @@ export interface SessionConfig {
   idle_timeout_minutes: number;
   /** Comma-separated list of allowed tools for the V2 Agent SDK session */
   allowed_tools?: string;
-  /** Maximum number of turns per task */
-  max_turns?: number;
+  /** Per-task timeout in milliseconds (default: 300000 = 5 minutes) */
+  task_timeout_ms?: number;
 }
 
 export interface SessionStartupOutput {

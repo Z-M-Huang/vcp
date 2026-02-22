@@ -94,7 +94,7 @@ All hooks write diagnostic entries to `.vcp/vcp.log` in the project root via the
 
 ## Known Limitations
 
-- **Standards fetched from mutable `main` branch:** Skills fetch standards from `https://raw.githubusercontent.com/.../main/...`, which is mutable. A force-push or repository compromise could change what all users receive. When VCP reaches v1.0, standards will be pinned to tagged releases. For v0.2.1, the always-latest behavior is intentional while standards are still being written.
+- **Standards fetched from mutable `main` branch:** Skills fetch standards from `https://raw.githubusercontent.com/.../main/...`, which is mutable. A force-push or repository compromise could change what all users receive. When VCP reaches v1.0, standards will be pinned to tagged releases. For v0.2.2, the always-latest behavior is intentional while standards are still being written.
 
 - **Regex-based security gate cannot do taint tracking:** The security-gate hook uses regex pattern matching, which cannot follow data flow (e.g., a SQL query built in a variable then passed to `.query()`). Use the `/vcp-audit` or `/vcp-pre-commit-review` skills for AI-driven analysis that can trace data flow across variables.
 

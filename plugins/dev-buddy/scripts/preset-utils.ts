@@ -143,6 +143,12 @@ export function validatePreset(preset: unknown): Preset {
         throw new Error('API preset must have a non-empty models array');
       }
       validateModelNames(p.models as unknown[], 'API preset');
+      // timeout_ms is optional but must be positive integer if present
+      if (p.timeout_ms !== undefined) {
+        if (!Number.isInteger(p.timeout_ms) || (p.timeout_ms as number) <= 0) {
+          throw new Error('API preset timeout_ms must be a positive integer');
+        }
+      }
       return p as unknown as ApiPreset;
     }
     case 'subscription': {

@@ -37,6 +37,30 @@ VCP enforces standards through three layers:
 - README.md roadmap links to issues
 - Every folder has a README.md that indexes its contents
 
+### Dev Buddy Session Manager
+
+Session managers (`plugins/dev-buddy/scripts/session-manager.ts`) wrap persistent V2 Agent SDK sessions behind HTTP servers for API presets. The Claude SDK is configured via environment variables to route to external Claude-compatible providers (e.g., MiniMax).
+
+**Env var mapping for API presets:**
+
+| Env Var | Source | Purpose |
+|---------|--------|---------|
+| `ANTHROPIC_BASE_URL` | `preset.base_url` | Route SDK to external provider |
+| `ANTHROPIC_API_KEY` | `preset.api_key` | Authenticate with provider |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `preset.models[0]` | Map haiku alias to provider model |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `preset.models[0]` | Map sonnet alias to provider model |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `preset.models[0]` | Map opus alias to provider model |
+| `CLAUDE_CODE_SUBAGENT_MODEL` | `preset.models[0]` | Model for nested subagents |
+
+All aliases set to the same provider model name (**case-sensitive** — e.g., `MiniMax-M2.5` not `minimax-m2.5`).
+Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers; the env vars map those to the actual provider model.
+
+The subprocess env uses a platform-aware allowlist (not `...process.env`) for clean isolation.
+Per-task timeout defaults to 5 minutes, configurable via `ApiPreset.timeout_ms` (set in the web portal under "Task Timeout").
+`spawnSessionManagers()` passes `--task-timeout` from the preset when spawning session managers.
+
+See `plugins/dev-buddy/CLAUDE.md` § "Session Manager Architecture" for full details.
+
 ### Writing Standards
 
 - State the PRINCIPLE and WHY first
@@ -44,5 +68,3 @@ VCP enforces standards through three layers:
 - Show anti-patterns with explanation of WHY they're wrong
 - Be actionable: "Do X" not "Consider X"
 - Be AI-parseable: consistent structure, clear headings
-
-# READ README.md FOR PROJECT DETAILS

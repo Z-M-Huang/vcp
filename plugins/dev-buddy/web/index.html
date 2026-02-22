@@ -98,6 +98,10 @@
               Models (comma-separated)
               <input type="text" x-model="newPreset.models_str" placeholder="anthropic/claude-sonnet-4-5,anthropic/claude-opus-4">
             </label>
+            <label>
+              Task Timeout (minutes, optional)
+              <input type="number" x-model="newPreset.timeout_minutes" placeholder="5" min="1" step="1">
+            </label>
           </div>
         </template>
 
