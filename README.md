@@ -2,6 +2,8 @@
 
 <div align="center">
 
+<img src="assets/logo.png" alt="VCP Logo" width="600">
+
 # VCP — Vibe Coding Protocol
 
 **The security gate for AI-generated code.**
