@@ -298,6 +298,7 @@
                 <div class="stage-controls">
                   <select
                     x-model="stage.provider"
+                    x-init="$nextTick(() => $el.value = stage.provider || '')"
                     class="stage-select"
                     x-on:change="onProviderChange(stage)"
                   >
@@ -305,7 +306,7 @@
                       <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
                     </template>
                   </select>
-                  <select x-model="stage.model" class="stage-select model-select" required>
+                  <select x-model="stage.model" x-init="$nextTick(() => $el.value = stage.model || '')" class="stage-select model-select" required>
                     <option value="" disabled>Select model</option>
                     <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
                       <option x-bind:value="m" x-text="m"></option>
@@ -359,6 +360,7 @@
                 <div class="stage-controls">
                   <select
                     x-model="stage.provider"
+                    x-init="$nextTick(() => $el.value = stage.provider || '')"
                     class="stage-select"
                     x-on:change="onProviderChange(stage)"
                   >
@@ -366,7 +368,7 @@
                       <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
                     </template>
                   </select>
-                  <select x-model="stage.model" class="stage-select model-select" required>
+                  <select x-model="stage.model" x-init="$nextTick(() => $el.value = stage.model || '')" class="stage-select model-select" required>
                     <option value="" disabled>Select model</option>
                     <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
                       <option x-bind:value="m" x-text="m"></option>
