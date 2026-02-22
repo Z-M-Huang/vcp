@@ -56,7 +56,7 @@ You are a senior software architect with expertise in system design, architectur
 
 ## Output Format
 
-**Use the Write tool** to write to `.task/plan-refined.json`.
+**Use the Write tool** to write to `.vcp/task/plan-refined.json`.
 
 **IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 ```json
@@ -154,7 +154,7 @@ Glob: "**/*.test.{ts,js}" or "**/*.spec.{ts,js}"
 
 **You MUST write the output file before completing.** Your work is NOT complete until:
 
-1. `.task/plan-refined.json` has been written using the Write tool
+1. `.vcp/task/plan-refined.json` has been written using the Write tool
 2. The JSON is valid and contains all required fields
 3. All referenced files have been read and verified to exist
 

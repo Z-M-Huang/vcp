@@ -12,7 +12,7 @@ Vibe Coding Protocol plugin — project initialization, security enforcement, qu
 
 | Skill | Command | Description |
 |-------|---------|-------------|
-| vcp-init | `/vcp-init` | Initialize VCP configuration — creates `~/.vcp/config.json` (global) and `.vcp.json` (project), detects frameworks, scopes, discovers plugin path |
+| vcp-init | `/vcp-init` | Initialize VCP configuration — creates `~/.vcp/config.json` (global) and `.vcp/config.json` (project), detects frameworks, scopes, discovers plugin path |
 | vcp-context | `/vcp-context` | Inject VCP rule summaries into context — run after context compaction or at any time to refresh rules |
 | vcp-dependency-check | `/vcp-dependency-check` | Verify lockfile hygiene, version ranges, package existence, typosquatting |
 | vcp-pre-commit-review | `/vcp-pre-commit-review` | Review all staged/changed files against applicable standards. Produces PASS/BLOCK verdict |
@@ -57,12 +57,12 @@ Created by `/vcp-init` on first run. Subsequent project initializations reuse th
 Skills call `resolve-config.ts` (via Bash) to resolve project config and applicable standards. The script resolves the standards URL from global config (or per-project override), fetches the manifest, and resolves full URLs for each standard. Skills always apply the latest published rules.
 
 URL resolution order:
-1. `standards_url` in `.vcp.json` (rare per-project override)
+1. `standards_url` in `.vcp/config.json` (rare per-project override)
 2. `standards_url` in `~/.vcp/config.json` (the normal case)
 
 ### Project Configuration
 
-Skills require `.vcp.json` (project) with a `pluginRoot` field (set by `/vcp-init`). Global config (`~/.vcp/config.json`) is auto-created if missing (from project config + defaults), so users don't need to run `/vcp-init` again after upgrading. The project config determines:
+Skills require `.vcp/config.json` (project) with a `pluginRoot` field (set by `/vcp-init`). Global config (`~/.vcp/config.json`) is auto-created if missing (from project config + defaults), so users don't need to run `/vcp-init` again after upgrading. The project config determines:
 - Which scopes apply (web-frontend, web-backend, database, mobile, desktop, cli, devops)
 - Which compliance frameworks are active (GDPR, PCI DSS, HIPAA)
 - What paths to exclude from scanning
@@ -71,7 +71,7 @@ Skills require `.vcp.json` (project) with a `pluginRoot` field (set by `/vcp-ini
 
 At runtime, `severity` falls back to the global default when the project omits it, and `ignore` arrays are merged (union of global + project). `scopes` and `compliance` are required project fields — global defaults for these are only used as starting points during `/vcp-init`, not at runtime.
 
-If `.vcp.json` is not found, skills stop and tell the user to run `/vcp-init`.
+If `.vcp/config.json` is not found, skills stop and tell the user to run `/vcp-init`.
 
 ### Security Gate Hook
 
@@ -94,7 +94,7 @@ All hooks write diagnostic entries to `.vcp/vcp.log` in the project root via the
 
 ## Known Limitations
 
-- **Standards fetched from mutable `main` branch:** Skills fetch standards from `https://raw.githubusercontent.com/.../main/...`, which is mutable. A force-push or repository compromise could change what all users receive. When VCP reaches v1.0, standards will be pinned to tagged releases. For v0.2.0, the always-latest behavior is intentional while standards are still being written.
+- **Standards fetched from mutable `main` branch:** Skills fetch standards from `https://raw.githubusercontent.com/.../main/...`, which is mutable. A force-push or repository compromise could change what all users receive. When VCP reaches v1.0, standards will be pinned to tagged releases. For v0.2.1, the always-latest behavior is intentional while standards are still being written.
 
 - **Regex-based security gate cannot do taint tracking:** The security-gate hook uses regex pattern matching, which cannot follow data flow (e.g., a SQL query built in a variable then passed to `.query()`). Use the `/vcp-audit` or `/vcp-pre-commit-review` skills for AI-driven analysis that can trace data flow across variables.
 

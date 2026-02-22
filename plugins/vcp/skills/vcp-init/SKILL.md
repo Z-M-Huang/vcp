@@ -2,7 +2,7 @@
 name: vcp-init
 description: >
   Initialize VCP configuration for this project. Creates global config (~/.vcp/config.json)
-  if it doesn't exist, then creates project config (.vcp.json). Detects frameworks, scopes,
+  if it doesn't exist, then creates project config (.vcp/config.json). Detects frameworks, scopes,
   and discovers the plugin path.
   Run this once when setting up VCP for a new project.
 user-invocable: true
@@ -12,11 +12,11 @@ argument-hint: ""
 
 # VCP Project Initialization
 
-Create both a global config (`~/.vcp/config.json`) and a project config (`.vcp.json`). The global config stores the standards repository URL and plugin path, shared by all projects. The project config stores project-specific settings.
+Create both a global config (`~/.vcp/config.json`) and a project config (`.vcp/config.json`). The global config stores the standards repository URL and plugin path, shared by all projects. The project config stores project-specific settings.
 
 ## Step 1: Check for Existing Configs
 
-Read both `~/.vcp/config.json` and `.vcp.json` from the project root.
+Read both `~/.vcp/config.json` and `.vcp/config.json` from the project root.
 
 | Global exists | Project exists | Action |
 |:---:|:---:|---|
@@ -76,7 +76,7 @@ Use your judgment. Do not rely on a fixed lookup table — understand the projec
 
 ## Step 4: Confirm with the User
 
-**Always ask the user to confirm before writing the config.** Present your proposed configuration and ask for approval. Do not write `.vcp.json` until the user explicitly confirms.
+**Always ask the user to confirm before writing the config.** Present your proposed configuration and ask for approval. Do not write `.vcp/config.json` until the user explicitly confirms.
 
 Show the user:
 
@@ -92,7 +92,7 @@ Note: The config also supports an `ignore` array to suppress specific standards,
 
 Wait for the user to confirm or adjust before proceeding to Step 5.
 
-## Step 5: Write `.vcp.json`
+## Step 5: Write `.vcp/config.json`
 
 The config must conform to the JSON schema at:
 ```
@@ -138,7 +138,7 @@ Severity:    medium+
 Plugin root: /home/user/.claude/plugins/vcp
 
 Global config: ~/.vcp/config.json
-Project config: .vcp.json
+Project config: .vcp/config.json
 
 Run /vcp-audit, /vcp-dependency-check, or /vcp-pre-commit-review to start.
 ```

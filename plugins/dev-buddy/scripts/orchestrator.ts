@@ -104,10 +104,26 @@ process.on('SIGTERM', () => { releaseLock(); process.exit(143); });
 
 function showStatus(): void {
   if (!fs.existsSync(TASK_DIR)) {
-    logInfo('No .task directory found. Pipeline not started.');
-    console.log('');
-    console.log('To start, invoke /dev-buddy-feature-implement or /dev-buddy-bug-fix with your request.');
-    return;
+    // Auto-migrate old .task/ directory to .vcp/task/
+    const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const oldTaskDir = path.join(projectDir, '.task');
+    if (fs.existsSync(oldTaskDir)) {
+      try {
+        fs.mkdirSync(path.join(projectDir, '.vcp'), { recursive: true });
+        fs.renameSync(oldTaskDir, TASK_DIR);
+        logSuccess('Migrated .task/ → .vcp/task/');
+        // Fall through to show status from the migrated directory
+      } catch {
+        logWarn('Found .task/ in project root — this directory has moved to .vcp/task/.');
+        logWarn('Run: mkdir -p .vcp && mv .task .vcp/task');
+        return;
+      }
+    } else {
+      logInfo('No .vcp/task directory found. Pipeline not started.');
+      console.log('');
+      console.log('To start, invoke /dev-buddy-feature-implement or /dev-buddy-bug-fix with your request.');
+      return;
+    }
   }
 
   const progress = getProgress(TASK_DIR);
@@ -197,7 +213,7 @@ function showStatus(): void {
     console.log('Pipeline tasks file has no resolved_config. Reset pipeline to continue.');
   } else {
     console.log(`Phase: ${phase}`);
-    console.log('Unknown phase. Check .task/ files for pipeline state.');
+    console.log('Unknown phase. Check .vcp/task/ files for pipeline state.');
   }
 }
 
@@ -210,7 +226,7 @@ function runDryRun(): void {
   console.log('Running dry-run validation...');
   console.log('');
 
-  // 1. Check .task/ directory
+  // 1. Check .vcp/task/ directory
   if (fs.existsSync(TASK_DIR)) {
     console.log(`Task directory: OK (${TASK_DIR})`);
   } else {
@@ -336,10 +352,10 @@ function resetPipeline(): void {
 
   logWarn('Resetting pipeline...');
 
-  // Release lock before nuking the directory (lock file is inside .task)
+  // Release lock before nuking the directory (lock file is inside .vcp/task)
   releaseLock();
 
-  // Remove entire .task directory and recreate clean
+  // Remove entire .vcp/task directory and recreate clean
   fs.rmSync(TASK_DIR, { recursive: true, force: true });
   fs.mkdirSync(TASK_DIR, { recursive: true });
 
@@ -362,15 +378,33 @@ switch (command) {
   case '--dry-run':
     runDryRun();
     break;
-  case 'phase':
-    if (!fs.existsSync(TASK_DIR)) {
-      console.log('idle');
-    } else {
-      const progress = getProgress(TASK_DIR);
-      const { phase } = determinePhase(progress);
-      console.log(phase);
+  case 'phase': {
+    let phaseTaskDir = TASK_DIR;
+    if (!fs.existsSync(phaseTaskDir)) {
+      // Auto-migrate old .task/ directory
+      const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+      const oldTaskDir = path.join(projectDir, '.task');
+      if (fs.existsSync(oldTaskDir)) {
+        try {
+          fs.mkdirSync(path.join(projectDir, '.vcp'), { recursive: true });
+          fs.renameSync(oldTaskDir, phaseTaskDir);
+          console.error('[VCP] Migrated .task/ → .vcp/task/');
+        } catch {
+          console.error('[WARN] Found .task/ in project root — this directory has moved to .vcp/task/.');
+          console.error('[WARN] Run: mkdir -p .vcp && mv .task .vcp/task');
+          console.log('idle');
+          break;
+        }
+      } else {
+        console.log('idle');
+        break;
+      }
     }
+    const progress = getProgress(phaseTaskDir);
+    const { phase } = determinePhase(progress);
+    console.log(phase);
     break;
+  }
   default:
     console.log('Usage: bun orchestrator.ts {run|status|reset|dry-run|phase}');
     console.log('');

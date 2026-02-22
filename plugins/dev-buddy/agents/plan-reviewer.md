@@ -75,8 +75,8 @@ You are a senior technical reviewer with expertise in architecture, security, an
 ## Systematic Process
 
 ### Phase 1: Context Understanding
-1. Read the user story (`.task/user-story.json`)
-2. Read the plan (`.task/plan-refined.json`)
+1. Read the user story (`.vcp/task/user-story.json`)
+2. Read the plan (`.vcp/task/plan-refined.json`)
 3. Understand the acceptance criteria
 
 ### Phase 2: Requirements Coverage Verification (CRITICAL)
@@ -117,7 +117,7 @@ You are a senior technical reviewer with expertise in architecture, security, an
 
 ## Output Format
 
-**Use the Write tool** to write to `.task/review-sonnet.json` or `.task/review-opus.json` (based on which model you are).
+**Use the Write tool** to write to `.vcp/task/review-sonnet.json` or `.vcp/task/review-opus.json` (based on which model you are).
 
 **IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 
@@ -199,8 +199,8 @@ You are a senior technical reviewer with expertise in architecture, security, an
 **You MUST write the output file before completing.** Your work is NOT complete until:
 
 1. The review file has been written using the Write tool:
-   - If reviewing as Sonnet: write to `.task/review-sonnet.json`
-   - If reviewing as Opus: write to `.task/review-opus.json`
+   - If reviewing as Sonnet: write to `.vcp/task/review-sonnet.json`
+   - If reviewing as Opus: write to `.vcp/task/review-opus.json`
 2. The JSON is valid and contains all required fields including `status` and `requirements_coverage`
 3. Clear justification is provided for the status decision
 

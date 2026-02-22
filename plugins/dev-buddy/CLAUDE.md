@@ -9,7 +9,7 @@
 | `${CLAUDE_PLUGIN_ROOT}` | Plugin installation directory | `~/.claude/plugins/dev-buddy/` |
 | `${CLAUDE_PROJECT_DIR}` | Your project directory | `/path/to/your/project/` |
 
-**Important:** The `.task/` directory is created in your **project directory**, not the plugin directory.
+**Important:** The `.vcp/task/` directory is created in your **project directory**, not the plugin directory.
 
 ## Architecture Overview
 
@@ -30,32 +30,32 @@ Multi-Session Orchestrator Pipeline (Task-Based Enforcement, Configurable)
   +-- Requirements (INTERACTIVE) [feature pipeline only]
   |     +-- Task: "Requirements 1"
   |     +-- requirements-gatherer agent
-  |     -> .task/user-story.json
+  |     -> .vcp/task/user-story.json
   |
   +-- Planning (SEMI-INTERACTIVE) [feature pipeline only]
   |     +-- Task: "Planning 1"
   |     +-- planner agent
-  |     -> .task/plan-refined.json
+  |     -> .vcp/task/plan-refined.json
   |
   +-- Plan Reviews (TASK-ENFORCED SEQUENTIAL)
   |     +-- TaskCreate + TaskUpdate(addBlockedBy) for each plan-review stage in config
   |     +-- e.g., Plan Review 1 → Plan Review 2 → Plan Review 3 (configurable count)
-  |     -> .task/plan-review-1.json, plan-review-2.json, ...
+  |     -> .vcp/task/plan-review-1.json, plan-review-2.json, ...
   |
   +-- Implementation
   |     +-- TaskUpdate(addBlockedBy) blocks until last plan review completes
   |     +-- implementer agent
   |     +-- Resume for iterative fixes
-  |     -> .task/impl-result.json
+  |     -> .vcp/task/impl-result.json
   |
   +-- Code Reviews (TASK-ENFORCED SEQUENTIAL)
   |     +-- TaskCreate + TaskUpdate(addBlockedBy) for each code-review stage in config
   |     +-- e.g., Code Review 1 → Code Review 2 → Code Review 3 (configurable count)
-  |     -> .task/code-review-1.json, code-review-2.json, ...
+  |     -> .vcp/task/code-review-1.json, code-review-2.json, ...
   |
   +-- Completion
   |     +-- Report results
-  |     +-- TeamDelete (read team_name from .task/pipeline-tasks.json)
+  |     +-- TeamDelete (read team_name from .vcp/task/pipeline-tasks.json)
   ```
 
 ---
@@ -91,11 +91,11 @@ User provides initial description via /dev-buddy-feature-implement
 
 | Specialist | Output File |
 |-----------|------------|
-| Technical Analyst | `.task/analysis-technical.json` |
-| UX/Domain Analyst | `.task/analysis-ux-domain.json` |
-| Security Analyst | `.task/analysis-security.json` |
-| Performance Analyst | `.task/analysis-performance.json` |
-| Architecture Analyst | `.task/analysis-architecture.json` |
+| Technical Analyst | `.vcp/task/analysis-technical.json` |
+| UX/Domain Analyst | `.vcp/task/analysis-ux-domain.json` |
+| Security Analyst | `.vcp/task/analysis-security.json` |
+| Performance Analyst | `.vcp/task/analysis-performance.json` |
+| Architecture Analyst | `.vcp/task/analysis-architecture.json` |
 
 ### Sub-Phases
 
@@ -156,7 +156,7 @@ T9 = TaskCreate(subject: "Code Review 3", description: "...")      → TaskUpdat
 
 **CLI preset stages** (e.g., Codex): the task description instructs the `cli-executor` agent to call `cli-executor.ts` with `--preset <preset_name>`, `--model <model>`, and `--output-file <computed_path>` so the output lands in the correct type-indexed file.
 
-Returned IDs are stored in `.task/pipeline-tasks.json` alongside the `resolved_config` snapshot.
+Returned IDs are stored in `.vcp/task/pipeline-tasks.json` alongside the `resolved_config` snapshot.
 
 **Progressive enrichment:** Before marking each task completed, the orchestrator reads its output file, extracts key context (≤ 500 chars), and appends a `CONTEXT FROM PRIOR TASK` block to the next task's description via `TaskUpdate`. This gives each agent relevant context from the previous phase without re-reading full artifacts. Enrichment is best-effort — failure does not block the pipeline.
 
@@ -278,7 +278,7 @@ Pipeline enforcement uses two hooks:
 
 ### UserPromptSubmit Hook (Guidance)
 - **File:** `hooks/guidance-hook.ts`
-- **Purpose:** Reads `.task/*.json` files to determine phase, injects advisory guidance
+- **Purpose:** Reads `.vcp/task/*.json` files to determine phase, injects advisory guidance
 - **No state tracking:** Phase is implicit from which artifact files exist
 
 ### SubagentStop Hook (Enforcement)
@@ -294,7 +294,7 @@ Max 10 re-reviews per reviewer before escalating to user.
 
 ## Output Formats
 
-### User Story (`.task/user-story.json`)
+### User Story (`.vcp/task/user-story.json`)
 ```json
 {
   "id": "story-YYYYMMDD-HHMMSS",
@@ -307,7 +307,7 @@ Max 10 re-reviews per reviewer before escalating to user.
 }
 ```
 
-### Plan Refined (`.task/plan-refined.json`)
+### Plan Refined (`.vcp/task/plan-refined.json`)
 ```json
 {
   "id": "plan-YYYYMMDD-HHMMSS",
@@ -320,7 +320,7 @@ Max 10 re-reviews per reviewer before escalating to user.
 }
 ```
 
-### Pipeline Tasks (`.task/pipeline-tasks.json`)
+### Pipeline Tasks (`.vcp/task/pipeline-tasks.json`)
 
 Format includes a `resolved_config` snapshot and a `stages` array with task IDs:
 
@@ -459,7 +459,7 @@ The config server (`scripts/config-server.ts`) exposes these REST endpoints:
 If stuck:
 
 1. **Check task state:** `TaskList()` to see blocked tasks (requires pipeline team to be active)
-2. **Check artifacts:** Read `.task/*.json` files to understand progress
+2. **Check artifacts:** Read `.vcp/task/*.json` files to understand progress
 3. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset`
 4. **If TaskList() doesn't work:** Check that the pipeline team exists — team creation may need to be re-run
 

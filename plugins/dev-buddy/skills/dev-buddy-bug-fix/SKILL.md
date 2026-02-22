@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, Skill
 
 You coordinate worker agents using Task tools to diagnose and fix a bug. The pipeline is data-driven from the bugfix_pipeline config: sequential RCA stages, followed by implicit orchestrator consolidation, then plan-review/implementation/code-review stages.
 
-**Task directory:** `${CLAUDE_PROJECT_DIR}/.task/`
+**Task directory:** `${CLAUDE_PROJECT_DIR}/.vcp/task/`
 **Agents location:** `${CLAUDE_PLUGIN_ROOT}/agents/`
 
 ---
@@ -92,7 +92,7 @@ TeamDelete(team_name: "pipeline-{BASENAME}-{HASH}")   ← ignore errors
 TeamCreate(team_name: "pipeline-{BASENAME}-{HASH}", description: "Bug-fix pipeline orchestration and task management")
 ```
 
-Store team name in `.task/pipeline-tasks.json` as `team_name` field.
+Store team name in `.vcp/task/pipeline-tasks.json` as `team_name` field.
 
 ### Step 1.4: Verify Task Tools Available
 
@@ -147,68 +147,68 @@ For `rca` (stageIndex N, outputFile rca-N.json):
 PHASE: Root Cause Analysis {N}
 AGENT: dev-buddy:root-cause-analyst (model: {stage.model})
 INPUT: Bug description from conversation context
-OUTPUT: .task/rca-{N}.json
-PROMPT MUST INCLUDE: Full bug description, 'Write output to .task/rca-{N}.json. Set reviewer field to {stage.model or "rca-{N}"}.'
-COMPLETION: .task/rca-{N}.json exists with root_cause.summary populated
+OUTPUT: .vcp/task/rca-{N}.json
+PROMPT MUST INCLUDE: Full bug description, 'Write output to .vcp/task/rca-{N}.json. Set reviewer field to {stage.model or "rca-{N}"}.'
+COMPLETION: .vcp/task/rca-{N}.json exists with root_cause.summary populated
 ```
 
 For `plan-review` (subscription/api, stageIndex N, outputFile plan-review-N.json):
 ```
 PHASE: Plan Review {N} (RCA + Plan Validation)
 AGENT: dev-buddy:plan-reviewer (model: {stage.model})
-INPUT: .task/user-story.json, .task/plan-refined.json, + all rca-*.json files
-OUTPUT: .task/plan-review-{N}.json
-PROMPT MUST INCLUDE: 'Write output to .task/plan-review-{N}.json. Validate that the consolidated RCA diagnosis is correct and the fix plan is sound.'
-RESULT HANDLING: Read .task/plan-review-{N}.json → check status → handle per Result Handling rules
-COMPLETION: .task/plan-review-{N}.json exists with status and requirements_coverage fields
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, + all rca-*.json files
+OUTPUT: .vcp/task/plan-review-{N}.json
+PROMPT MUST INCLUDE: 'Write output to .vcp/task/plan-review-{N}.json. Validate that the consolidated RCA diagnosis is correct and the fix plan is sound.'
+RESULT HANDLING: Read .vcp/task/plan-review-{N}.json → check status → handle per Result Handling rules
+COMPLETION: .vcp/task/plan-review-{N}.json exists with status and requirements_coverage fields
 ```
 
 For `plan-review` (CLI provider, stageIndex N, outputFile plan-review-N.json):
 ```
 PHASE: Plan Review {N} (CLI - RCA Validation gate)
 AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
-INPUT: .task/user-story.json, .task/plan-refined.json, + all rca-*.json files
-OUTPUT: .task/plan-review-{N}.json
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, + all rca-*.json files
+OUTPUT: .vcp/task/plan-review-{N}.json
 NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
-      --output-file "${CLAUDE_PROJECT_DIR}/.task/plan-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
+      --output-file "${CLAUDE_PROJECT_DIR}/.vcp/task/plan-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
 RESULT HANDLING: if rejected → ask user to re-examine bug or provide more context
-COMPLETION: .task/plan-review-{N}.json exists with status field
+COMPLETION: .vcp/task/plan-review-{N}.json exists with status field
 ```
 
 For `implementation`:
 ```
 PHASE: Implementation (Bug Fix)
 AGENT: dev-buddy:implementer (model: {stage.model})
-INPUT: .task/user-story.json, .task/plan-refined.json
-OUTPUT: .task/impl-result.json
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json
+OUTPUT: .vcp/task/impl-result.json
 PROMPT MUST INCLUDE: This is a bug fix — make the smallest possible change that addresses the root cause.
-COMPLETION: .task/impl-result.json exists with status='complete'
+COMPLETION: .vcp/task/impl-result.json exists with status='complete'
 ```
 
 For `code-review` (subscription/api, stageIndex N, outputFile code-review-N.json):
 ```
 PHASE: Code Review {N}
 AGENT: dev-buddy:code-reviewer (model: {stage.model})
-INPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json
-OUTPUT: .task/code-review-{N}.json
-PROMPT MUST INCLUDE: 'Write output to .task/code-review-{N}.json.'
-RESULT HANDLING: Read .task/code-review-{N}.json → check status → handle per Result Handling rules
-COMPLETION: .task/code-review-{N}.json exists with status and acceptance_criteria_verification fields
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, .vcp/task/impl-result.json
+OUTPUT: .vcp/task/code-review-{N}.json
+PROMPT MUST INCLUDE: 'Write output to .vcp/task/code-review-{N}.json.'
+RESULT HANDLING: Read .vcp/task/code-review-{N}.json → check status → handle per Result Handling rules
+COMPLETION: .vcp/task/code-review-{N}.json exists with status and acceptance_criteria_verification fields
 ```
 
 For `code-review` (CLI provider, stageIndex N, outputFile code-review-N.json):
 ```
 PHASE: Code Review {N} (CLI - final gate)
 AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
-INPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json
-OUTPUT: .task/code-review-{N}.json
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, .vcp/task/impl-result.json
+OUTPUT: .vcp/task/code-review-{N}.json
 NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
-      --output-file "${CLAUDE_PROJECT_DIR}/.task/code-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
+      --output-file "${CLAUDE_PROJECT_DIR}/.vcp/task/code-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
 RESULT HANDLING: if rejected → terminal state code_rejected (ask user)
-COMPLETION: .task/code-review-{N}.json exists with status field
+COMPLETION: .vcp/task/code-review-{N}.json exists with status field
 ```
 
-**Save to `.task/pipeline-tasks.json`**:
+**Save to `.vcp/task/pipeline-tasks.json`**:
 ```json
 {
   "team_name": "pipeline-myproject-a1b2c3",
@@ -288,7 +288,7 @@ Find all rca-*.json files from `stages` array entries with `type === 'rca'`:
 ```
 rcaFiles = stages.filter(s => s.type === 'rca').map(s => s.output_file)
 // e.g., ['rca-1.json', 'rca-2.json']
-Read each: Read(".task/rca-1.json"), Read(".task/rca-2.json"), ...
+Read each: Read(".vcp/task/rca-1.json"), Read(".vcp/task/rca-2.json"), ...
 ```
 
 ### Step 2: Consolidate Findings
@@ -311,7 +311,7 @@ Read each: Read(".task/rca-1.json"), Read(".task/rca-2.json"), ...
 
 ### Step 3: Write user-story.json
 
-Write `.task/user-story.json` with bug-fix acceptance criteria. **This file name is FIXED — not configurable:**
+Write `.vcp/task/user-story.json` with bug-fix acceptance criteria. **This file name is FIXED — not configurable:**
 
 ```json
 {
@@ -343,7 +343,7 @@ Write `.task/user-story.json` with bug-fix acceptance criteria. **This file name
 
 ### Step 4: Write plan-refined.json
 
-Write `.task/plan-refined.json` with a minimal fix plan. **This file name is FIXED — not configurable:**
+Write `.vcp/task/plan-refined.json` with a minimal fix plan. **This file name is FIXED — not configurable:**
 
 ```json
 {
@@ -448,8 +448,8 @@ TaskUpdate(fix.id, addBlockedBy: [current_task_id])
 
 rerev = TaskCreate(
   subject: "{stage subject} v{iteration+1}",
-  description: "...SAME OUTPUT FILE: .task/{stage.output_file}
-               {if CLI stage: --output-file .task/{stage.output_file}}..."
+  description: "...SAME OUTPUT FILE: .vcp/task/{stage.output_file}
+               {if CLI stage: --output-file .vcp/task/{stage.output_file}}..."
 )
 TaskUpdate(rerev.id, addBlockedBy: [fix.id])
 if next_task_id is not null:
@@ -474,7 +474,7 @@ Task(
     --plugin-root '${CLAUDE_PLUGIN_ROOT}' \
     --preset '{stage.provider}' \
     --model '{stage.model}' \
-    --output-file '${CLAUDE_PROJECT_DIR}/.task/{stage.output_file}'
+    --output-file '${CLAUDE_PROJECT_DIR}/.vcp/task/{stage.output_file}'
   Review the {plan|code} and write output to the specified file."
 )
 ```
@@ -559,7 +559,7 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
 ## Pipeline Completion
 
 1. Report results to the user
-2. Read `team_name` from `.task/pipeline-tasks.json` and use `TeamDelete` to clean up
+2. Read `team_name` from `.vcp/task/pipeline-tasks.json` and use `TeamDelete` to clean up
 3. Shutdown session managers:
    ```bash
    bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts" shutdown --cwd "${CLAUDE_PROJECT_DIR}"
@@ -569,7 +569,7 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
 
 **subscription:** `Task(subagent_type: "dev-buddy:<agent>", model: "<model>", prompt: "...")`
 
-**api:** curl to session manager port from `.task/session-ports.json`
+**api:** curl to session manager port from `.vcp/task/session-ports.json`
 
 **cli:** Task description specifies cli-executor.ts invocation with `--preset`, `--model`, and `--output-file`
 
@@ -578,6 +578,6 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
 ## Emergency Controls
 
 1. **Check task state:** `TaskList()`
-2. **Check artifacts:** Read `.task/*.json` files
-3. **Check resolved config:** Read `resolved_config` from `.task/pipeline-tasks.json`
+2. **Check artifacts:** Read `.vcp/task/*.json` files
+3. **Check resolved config:** Read `resolved_config` from `.vcp/task/pipeline-tasks.json`
 4. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset`

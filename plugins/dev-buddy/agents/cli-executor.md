@@ -1,7 +1,7 @@
 ---
 name: cli-executor
 description: Execute CLI-based reviews using preset templates. Thin wrapper that invokes cli-executor.ts with proper timeout and validation.
-tools: Read, Bash, Glob
+tools: Read, Bash, Glob, Bash
 disallowedTools: Write, Edit
 ---
 
@@ -45,13 +45,13 @@ Store this path as `PLUGIN_ROOT`.
 Check which input file exists to determine review type:
 
 ```
-Read(".task/impl-result.json")
-Read(".task/plan-refined.json")
+Read(".vcp/task/impl-result.json")
+Read(".vcp/task/plan-refined.json")
 ```
 
 **Decision:**
-- If `.task/impl-result.json` exists → `REVIEW_TYPE = "code"`
-- Else if `.task/plan-refined.json` exists → `REVIEW_TYPE = "plan"`
+- If `.vcp/task/impl-result.json` exists → `REVIEW_TYPE = "code"`
+- Else if `.vcp/task/plan-refined.json` exists → `REVIEW_TYPE = "plan"`
 - Else → Report error: "No reviewable file found"
 
 ---
@@ -66,7 +66,7 @@ bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" \
   --plugin-root "{PLUGIN_ROOT}" \
   --preset "{PRESET_NAME}" \
   --model "{MODEL}" \
-  --output-file "{PROJECT_DIR}/.task/{OUTPUT_FILE}"
+  --output-file "{PROJECT_DIR}/.vcp/task/{OUTPUT_FILE}"
 ```
 
 **Required flags:**
@@ -84,7 +84,7 @@ bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" \
 
 Linux/macOS:
 ```bash
-bun "/home/user/.claude/plugins/dev-buddy/scripts/cli-executor.ts" --type plan --plugin-root "/home/user/.claude/plugins/dev-buddy" --preset "codex-cli" --model "o3" --output-file "/path/to/project/.task/plan-review-1.json"
+bun "/home/user/.claude/plugins/dev-buddy/scripts/cli-executor.ts" --type plan --plugin-root "/home/user/.claude/plugins/dev-buddy" --preset "codex-cli" --model "o3" --output-file "/path/to/project/.vcp/task/plan-review-1.json"
 ```
 
 Windows:
@@ -98,7 +98,7 @@ bun "C:/Users/user/.claude/plugins/dev-buddy/scripts/cli-executor.ts" --type cod
 
 The wrapper script handles session management automatically with **type-scoped markers**:
 
-1. **First review:** If `.task/.cli-session-{type}` doesn't exist, runs fresh review
+1. **First review:** If `.vcp/task/.cli-session-{type}` doesn't exist, runs fresh review
 2. **Subsequent reviews:** If marker exists and preset supports resume, uses resume template
 3. **Session expired:** If resume fails, automatically removes marker and retries fresh
 4. **On success:** Creates session marker if preset supports resume
@@ -116,7 +116,7 @@ The script outputs JSON events to stdout. Check the final event:
   "status": "approved|needs_changes|needs_clarification|rejected",
   "summary": "...",
   "needs_clarification": false,
-  "output_file": ".task/plan-review-1.json",
+  "output_file": ".vcp/task/plan-review-1.json",
   "session_marker_created": true
 }
 ```
@@ -205,10 +205,10 @@ You are a **thin wrapper**. You exist solely to invoke `cli-executor.ts` via Bas
 
 ```bash
 # Plan review with explicit output file and model
-bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type plan --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o3" --output-file "{PROJECT_DIR}/.task/plan-review-1.json"
+bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type plan --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o3" --output-file "{PROJECT_DIR}/.vcp/task/plan-review-1.json"
 
 # Code review
-bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o4-mini" --output-file "{PROJECT_DIR}/.task/code-review-3.json"
+bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o4-mini" --output-file "{PROJECT_DIR}/.vcp/task/code-review-3.json"
 
 # Resume with changes summary
 bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o3" --resume --changes-summary "Fixed SQL injection"

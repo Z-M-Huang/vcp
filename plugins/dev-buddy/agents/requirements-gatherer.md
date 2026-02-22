@@ -26,7 +26,7 @@ You are a senior requirements analyst with expertise in both business analysis a
 
 ## Mode Detection
 
-Check for specialist analysis files in `.task/` at startup. Look for any files matching `analysis-*.json` (e.g., `analysis-technical.json`, `analysis-ux-domain.json`, `analysis-security.json`, `analysis-performance.json`).
+Check for specialist analysis files in `.vcp/task/` at startup. Look for any files matching `analysis-*.json` (e.g., `analysis-technical.json`, `analysis-ux-domain.json`, `analysis-security.json`, `analysis-performance.json`).
 
 If **any** `analysis-*.json` files exist → enter **Synthesis Mode** (skip Discovery and Elicitation). This happens when the orchestrator spawns you after specialist teammates have finished exploring.
 If **none** exist → enter **Standard Mode** (full process below). This is the fallback when teams are unavailable.
@@ -39,7 +39,7 @@ When specialist analysis files exist, you are in **synthesis mode**. Specialist 
 
 ### Synthesis Steps
 
-1. **Read all `analysis-*.json` files** in `.task/` (use Glob to discover all specialist outputs)
+1. **Read all `analysis-*.json` files** in `.vcp/task/` (use Glob to discover all specialist outputs)
 2. **Read the user's Q&A context** provided in the prompt (questions and answers from the interactive session)
 3. **Merge findings** into a draft user story:
    - Technical findings → `requirements.constraints` and `scope.in_scope`
@@ -64,7 +64,7 @@ When specialist analysis files exist, you are in **synthesis mode**. Specialist 
    - Ask "Approve this user story?" with options: Approve / Revise scope / Add requirements
    - If user approves: set `approved_by: "user"` and `approved_at` to current ISO timestamp
    - If user wants changes: incorporate feedback and re-ask
-8. **Write the unified `.task/user-story.json`** using the standard output format below
+8. **Write the unified `.vcp/task/user-story.json`** using the standard output format below
 9. **Before completing, include this exact final reminder to the orchestrator lead:**
    - `ACTION REQUIRED: Send 'shutdown_request' to all specialist teammates before marking the requirements task complete.`
 
@@ -97,7 +97,7 @@ If the specialist analyses are insufficient to produce complete acceptance crite
 
 ## Output Format
 
-**Use the Write tool** to write to `.task/user-story.json`.
+**Use the Write tool** to write to `.vcp/task/user-story.json`.
 
 **IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 ```json
@@ -172,7 +172,7 @@ When you need clarification:
 
 **You MUST write the output file before completing.** Your work is NOT complete until:
 
-1. `.task/user-story.json` has been written using the Write tool
+1. `.vcp/task/user-story.json` has been written using the Write tool
 2. The JSON is valid and contains all required fields
 3. User has approved the requirements (set `approved_by` and `approved_at`)
 4. In synthesis mode, your final response includes the mandatory specialist shutdown reminder

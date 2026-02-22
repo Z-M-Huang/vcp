@@ -1,7 +1,7 @@
 /**
  * VCP Config Resolution — CLI entrypoint for skills.
  *
- * Reads .vcp.json and ~/.vcp/config.json, fetches the standards manifest,
+ * Reads .vcp/config.json (project) and ~/.vcp/config.json (global), fetches the standards manifest,
  * resolves applicable standards (with ignores applied), and outputs
  * structured JSON for skills to consume.
  *
@@ -37,7 +37,7 @@ const [rawConfig, initialGlobalConfig] = await Promise.all([
 
 if (!rawConfig) {
   console.error(
-    "No .vcp.json found in this project. Run /vcp-init to configure VCP for this project.",
+    "No .vcp/config.json found in this project. Run /vcp-init to configure VCP for this project.",
   );
   process.exit(1);
 }
@@ -50,7 +50,7 @@ const standardsUrl = resolveStandardsUrl(globalConfig, rawConfig);
 
 if (!standardsUrl) {
   console.error(
-    "No standards URL available. Set standards_url in ~/.vcp/config.json (run /vcp-init) or .vcp.json.",
+    "No standards URL available. Set standards_url in ~/.vcp/config.json (run /vcp-init) or .vcp/config.json.",
   );
   process.exit(1);
 }

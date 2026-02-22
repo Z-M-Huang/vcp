@@ -9,16 +9,17 @@ import {
   deriveReviewFiles
 } from './review-validator.ts';
 
-const TEST_DIR = join(import.meta.dir, '.test-task');
+const TEST_PROJECT_DIR = join(import.meta.dir, '.test-reviewer-project');
+const TEST_DIR = join(TEST_PROJECT_DIR, '.vcp', 'task');
 
 describe('review-validator', () => {
   beforeEach(() => {
     mkdirSync(TEST_DIR, { recursive: true });
-    process.env.CLAUDE_PROJECT_DIR = join(import.meta.dir, '.test-task').replace('.task', '');
+    process.env.CLAUDE_PROJECT_DIR = TEST_PROJECT_DIR;
   });
 
   afterEach(() => {
-    rmSync(TEST_DIR, { recursive: true, force: true });
+    rmSync(TEST_PROJECT_DIR, { recursive: true, force: true });
   });
 
   describe('validateCodeReview', () => {

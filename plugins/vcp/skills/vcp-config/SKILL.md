@@ -3,7 +3,7 @@ name: vcp-config
 description: >
   View and modify VCP configuration. Add or remove ignore entries, toggle scopes,
   manage compliance frameworks, change severity threshold, and manage exclude patterns.
-  Supports both project config (.vcp.json) and global config (~/.vcp/config.json).
+  Supports both project config (.vcp/config.json) and global config (~/.vcp/config.json).
 user-invocable: true
 allowed-tools: Read, Write, WebFetch, AskUserQuestion
 argument-hint: "<natural language command>"
@@ -11,7 +11,7 @@ argument-hint: "<natural language command>"
 
 # VCP Config
 
-View and modify `.vcp.json` (project) or `~/.vcp/config.json` (global) configuration via natural language commands.
+View and modify `.vcp/config.json` (project) or `~/.vcp/config.json` (global) configuration via natural language commands.
 
 ## Examples
 
@@ -54,8 +54,8 @@ View and modify `.vcp.json` (project) or `~/.vcp/config.json` (global) configura
    - Read `~/.vcp/config.json`. If it does not exist, stop and tell the user: "No global VCP config found. Run `/vcp-init` to create it."
    - Strip "global" from the arguments and proceed to Step 2 with the global config.
 
-2. Otherwise → operate on `.vcp.json` (project config):
-   - Read `.vcp.json` from the project root.
+2. Otherwise → operate on `.vcp/config.json` (project config):
+   - Read `.vcp/config.json` from the project root.
    - If it does not exist, stop and tell the user: "No VCP configuration found. Run `/vcp-init` to set up VCP for this project."
    - Also read `~/.vcp/config.json` (global config) for context — used by the `show` command to display the `Source` column.
 
@@ -189,7 +189,7 @@ Display the current project config in a formatted table with a `Source` column s
 ```
 
 **Source values:**
-- `project` — value comes from `.vcp.json`
+- `project` — value comes from `.vcp/config.json`
 - `global` — value comes from `~/.vcp/config.json`
 - `global default` — value inherited from `~/.vcp/config.json` `defaults` (project doesn't set it)
 - `merged` — ignore list is a union of global defaults and project values
@@ -237,17 +237,17 @@ After applying any mutation:
 
 1. Show a confirmation message:
    ```
-   Updated .vcp.json — added "core-security/rule-3" to ignore list.
+   Updated .vcp/config.json — added "core-security/rule-3" to ignore list.
    ```
 
 2. If the change affects which standards are loaded (scope or compliance changes), mention it:
    ```
-   Updated .vcp.json — enabled database scope. Standards `database-encryption` and `database-schema-security` will now be checked.
+   Updated .vcp/config.json — enabled database scope. Standards `database-encryption` and `database-schema-security` will now be checked.
    ```
 
 3. If the change suppressed security findings, repeat the warning:
    ```
-   Updated .vcp.json — added "CWE-798" to ignore list.
+   Updated .vcp/config.json — added "CWE-798" to ignore list.
    WARNING: Hardcoded secret detection (CWE-798) is now suppressed in the security gate.
    ```
 

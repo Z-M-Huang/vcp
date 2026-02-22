@@ -19,6 +19,7 @@
  * Requires: bun (cross-platform TypeScript runtime)
  */
 
+import { mkdir, rename } from "fs/promises";
 import { vcpLog } from "../lib/vcp-logger";
 import { loadGlobalConfig, mergeIgnoreArrays } from "../lib/global-config";
 
@@ -87,13 +88,28 @@ if (filePath) {
   }
 }
 
-// Load .vcp.json and global config ignore lists for CWE suppression
+// Load .vcp/config.json and global config ignore lists for CWE suppression
 let vcpConfig: any = null;
 if (projectRoot) {
   try {
-    vcpConfig = await Bun.file(`${projectRoot}/.vcp.json`).json();
+    vcpConfig = await Bun.file(`${projectRoot}/.vcp/config.json`).json();
   } catch {
-    // No config found — proceed with empty ignore set
+    // Auto-migrate from old location (.vcp.json → .vcp/config.json)
+    try {
+      vcpConfig = await Bun.file(`${projectRoot}/.vcp.json`).json();
+      try {
+        await mkdir(`${projectRoot}/.vcp`, { recursive: true });
+        await rename(`${projectRoot}/.vcp.json`, `${projectRoot}/.vcp/config.json`);
+        console.error(`[VCP] Migrated .vcp.json → .vcp/config.json`);
+      } catch {
+        console.error(
+          `[VCP] Found .vcp.json in project root — this file has moved to .vcp/config.json. ` +
+          `Run: mkdir -p .vcp && mv .vcp.json .vcp/config.json`,
+        );
+      }
+    } catch {
+      // No config found — proceed with empty ignore set
+    }
   }
 }
 const mergedIgnore = mergeIgnoreArrays(
@@ -272,7 +288,7 @@ const suppressed = findings.length - filtered.length;
 if (suppressed > 0) {
   const suppressedCWEs = [...new Set(findings.filter((f) => ignoredCWEs.has(f.cwe)).map((f) => f.cwe))].join(", ");
   const output = {
-    systemMessage: `VCP Security Gate — WARNING: Suppressed ${suppressed} finding(s) via .vcp.json ignore (${suppressedCWEs}).`,
+    systemMessage: `VCP Security Gate — WARNING: Suppressed ${suppressed} finding(s) via .vcp/config.json ignore (${suppressedCWEs}).`,
   };
   console.log(JSON.stringify(output));
   await vcpLog(projectRoot, {

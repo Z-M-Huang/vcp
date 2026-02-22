@@ -32,7 +32,9 @@ venv/
 
 # VCP runtime
 .vcp-log
-.vcp/*.log
+**/.vcp/*.log
+.vcp/task
+.task
 
 # Spike / experimental work
 spike/
@@ -41,5 +43,3 @@ spike/
 .env
 .env.local
 .env.*.local
-
-.task

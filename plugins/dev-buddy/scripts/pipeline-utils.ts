@@ -52,9 +52,9 @@ export interface PipelineProgress {
 
 // ─── Path Helpers ───────────────────────────────────────────────────
 
-/** Compute the .task directory path. Resolves at call time from env/cwd. */
+/** Compute the .vcp/task directory path. Resolves at call time from env/cwd. */
 export function computeTaskDir(): string {
-  return path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), '.task');
+  return path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), '.vcp', 'task');
 }
 
 // ─── File Helpers ───────────────────────────────────────────────────

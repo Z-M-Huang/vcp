@@ -23,7 +23,7 @@ import type { StageType } from '../types/stage-definitions.ts';
 // Config path: ~/.vcp/dev-buddy.json (C11)
 export const CONFIG_PATH = path.join(os.homedir(), '.vcp', 'dev-buddy.json');
 
-// Session ports file (stored in .task/ relative to cwd)
+// Session ports file (stored in .vcp/task/ relative to cwd)
 const SESSION_PORTS_FILENAME = 'session-ports.json';
 
 // ─── Default Config ──────────────────────────────────────────────────────────
@@ -377,8 +377,8 @@ export async function spawnSessionManagers(
     console.error(`[Pipeline] Session manager for '${presetName}' ready on port ${startupJson.port}`);
   }
 
-  // Write mappings to .task/session-ports.json
-  const taskDir = path.join(cwd, '.task');
+  // Write mappings to .vcp/task/session-ports.json
+  const taskDir = path.join(cwd, '.vcp', 'task');
   fs.mkdirSync(taskDir, { recursive: true });
   const portsPath = path.join(taskDir, SESSION_PORTS_FILENAME);
   fs.writeFileSync(portsPath, JSON.stringify(mappings, null, 2), 'utf-8');
@@ -441,10 +441,10 @@ function sendSigterm(mapping: SessionPortMapping): void {
 }
 
 /**
- * Read session port mappings from .task/session-ports.json.
+ * Read session port mappings from .vcp/task/session-ports.json.
  */
 export function readSessionMappings(cwd: string): SessionPortMapping[] {
-  const portsPath = path.join(cwd, '.task', SESSION_PORTS_FILENAME);
+  const portsPath = path.join(cwd, '.vcp', 'task', SESSION_PORTS_FILENAME);
   if (!fs.existsSync(portsPath)) return [];
   const raw = fs.readFileSync(portsPath, 'utf-8');
   return JSON.parse(raw) as SessionPortMapping[];
@@ -482,7 +482,7 @@ if (import.meta.main) {
         } else {
           await shutdownSessionManagers(mappings);
           // Clean up port file
-          const portsPath = path.join(cwd, '.task', SESSION_PORTS_FILENAME);
+          const portsPath = path.join(cwd, '.vcp', 'task', SESSION_PORTS_FILENAME);
           if (fs.existsSync(portsPath)) fs.unlinkSync(portsPath);
           console.log(`[Pipeline] Shut down ${mappings.length} session manager(s)`);
         }

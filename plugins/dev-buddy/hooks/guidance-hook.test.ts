@@ -4,7 +4,7 @@ import { join } from 'path';
 
 // Set env before importing module (TASK_DIR is resolved at load time)
 const TEST_PROJECT_DIR = join(import.meta.dir, '.test-project-guidance');
-const TEST_TASK_DIR = join(TEST_PROJECT_DIR, '.task');
+const TEST_TASK_DIR = join(TEST_PROJECT_DIR, '.vcp', 'task');
 process.env.CLAUDE_PROJECT_DIR = TEST_PROJECT_DIR;
 
 // Import after env is set

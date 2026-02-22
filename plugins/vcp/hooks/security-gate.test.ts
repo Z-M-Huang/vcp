@@ -101,8 +101,9 @@ async function withTmpDir(fn: (dir: string) => Promise<void>): Promise<void> {
 }
 
 async function writeConfig(dir: string, ignore: string[] = []) {
+  await mkdir(join(dir, ".vcp"), { recursive: true });
   await writeFile(
-    join(dir, ".vcp.json"),
+    join(dir, ".vcp", "config.json"),
     JSON.stringify({
       version: "1.0",
       scopes: {},
@@ -330,7 +331,7 @@ describe("documentation file bypass", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CWE ignore via .vcp.json
+// CWE ignore via .vcp/config.json
 // ---------------------------------------------------------------------------
 describe("CWE ignore", () => {
   test("suppresses ignored CWE and emits warning via stdout JSON", async () => {
@@ -395,7 +396,7 @@ describe("CWE ignore", () => {
 // Config edge cases
 // ---------------------------------------------------------------------------
 describe("config edge cases", () => {
-  test("no .vcp.json — still blocks", async () => {
+  test("no .vcp/config.json — still blocks", async () => {
     await withTmpDir(async (dir) => {
       const r = await runHook(writeInput(HARDCODED_SECRET), {
         CLAUDE_PROJECT_DIR: dir,
@@ -414,9 +415,10 @@ describe("config edge cases", () => {
     });
   });
 
-  test("malformed .vcp.json — fails open, still blocks", async () => {
+  test("malformed .vcp/config.json — fails open, still blocks", async () => {
     await withTmpDir(async (dir) => {
-      await writeFile(join(dir, ".vcp.json"), "not json{{{");
+      await mkdir(join(dir, ".vcp"), { recursive: true });
+      await writeFile(join(dir, ".vcp", "config.json"), "not json{{{");
       const r = await runHook(writeInput(HARDCODED_SECRET), {
         CLAUDE_PROJECT_DIR: dir,
       });

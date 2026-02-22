@@ -14,15 +14,15 @@ Verify project dependencies against the VCP dependency management standard.
 
 ## Step 1: Resolve Config
 
-1. Read `.vcp.json` from the project root. Extract the `pluginRoot` field.
-2. **If `.vcp.json` does not exist or `pluginRoot` is missing:** Stop and tell the user: "No VCP configuration found. Run `/vcp-init` to configure VCP for this project."
+1. Read `.vcp/config.json` from the project root. Extract the `pluginRoot` field.
+2. **If `.vcp/config.json` does not exist or `pluginRoot` is missing:** Stop and tell the user: "No VCP configuration found. Run `/vcp-init` to configure VCP for this project."
 3. **Validate `pluginRoot`:** The path must be absolute, contain `/.claude/` (or `\.claude\` on Windows) as a path segment, and contain only safe path characters (letters, digits, `/`, `\`, `-`, `_`, `.`, `:`, and spaces). Reject any path with shell metacharacters (`;`, `&`, `|`, `$`, `` ` ``, `(`, `)`, `{`, `}`, `<`, `>`, `!`, `~`, `#`, `*`, `?`, `[`, `]`, `'`, `"`). If validation fails, stop and tell the user: "Invalid pluginRoot — must be within ~/.claude/ and contain no shell metacharacters. Run `/vcp-init` to fix." Also verify the file `<pluginRoot>/lib/vcp-context-core.ts` exists using Glob. If it does not exist, stop and tell the user: "pluginRoot points to an invalid VCP installation. Run `/vcp-init` to fix."
 4. Run the config resolution script via Bash:
    ```bash
    bun "<pluginRoot>/lib/resolve-config.ts" "<project-root>"
    ```
 5. Parse the JSON output. It contains: `applicableStandards`, `ignoredRules`, `severity`, `exclude`.
-6. Also read `.vcp.json` `frameworks` field to determine which package ecosystem(s) to check. If no `frameworks` are listed, auto-detect by looking for manifest files (package.json, requirements.txt, pyproject.toml, pom.xml, build.gradle, Gemfile, go.mod, Cargo.toml).
+6. Also read `.vcp/config.json` `frameworks` field to determine which package ecosystem(s) to check. If no `frameworks` are listed, auto-detect by looking for manifest files (package.json, requirements.txt, pyproject.toml, pom.xml, build.gradle, Gemfile, go.mod, Cargo.toml).
 
 ## Step 2: Fetch Applicable Standard
 

@@ -56,7 +56,7 @@ You are a senior fullstack developer with expertise in test-driven development a
 
 **YOU MUST READ THE PLAN AND CREATE SUBTASKS WITH blockedBy BEFORE WRITING ANY CODE.**
 
-1. Read the approved plan (`.task/plan-refined.json`)
+1. Read the approved plan (`.vcp/task/plan-refined.json`)
 2. Verify all prerequisite steps are complete
 3. Map **every** plan step to a subtask — nothing gets implemented without a corresponding task
 4. At least 3 subtasks for any plan with 5+ steps
@@ -139,7 +139,7 @@ while True:
 5. Run all test commands from plan
 6. Verify success patterns match
 7. Document any deviations from plan
-8. Write implementation result (`.task/impl-result.json`)
+8. Write implementation result (`.vcp/task/impl-result.json`)
 
 ## Code Quality Standards
 
@@ -168,7 +168,7 @@ while True:
 
 ## Output Format
 
-**Use the Write tool** to write to `.task/impl-result.json`.
+**Use the Write tool** to write to `.vcp/task/impl-result.json`.
 
 **IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 ```json
@@ -246,7 +246,7 @@ The hook manages iteration tracking. Max 10 iterations per reviewer before escal
 **You MUST write the output file before completing.** Your work is NOT complete until:
 
 1. All subtasks have status `completed` (verified via `TaskList()`)
-2. `.task/impl-result.json` has been written using the Write tool
+2. `.vcp/task/impl-result.json` has been written using the Write tool
 3. The JSON is valid and contains all required fields including `status`
 4. All tests have been run and results documented
 5. All acceptance criteria from the plan have been addressed

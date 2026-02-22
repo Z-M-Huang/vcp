@@ -43,7 +43,7 @@ function readJson(filePath: string): Record<string, unknown> | null {
 // ================== CONFIGURATION ==================
 
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
-const TASK_DIR = '.task';
+const TASK_DIR = '.vcp/task';
 const TRACE_FILE = path.join(TASK_DIR, 'cli_trace.log');
 
 /** Compute the default output file path based on review type.
@@ -224,17 +224,17 @@ function validateInputs(args: ParsedArgs, preset: CliPreset): string[] {
 
   // Check task directory
   if (!fileExists(TASK_DIR)) {
-    errors.push('.task directory not found');
+    errors.push('.vcp/task directory not found');
   }
 
   // Check review-specific input files
   if (args.type === 'plan') {
     if (!fileExists(path.join(TASK_DIR, 'plan-refined.json'))) {
-      errors.push('Missing .task/plan-refined.json for plan review');
+      errors.push('Missing .vcp/task/plan-refined.json for plan review');
     }
   } else if (args.type === 'code') {
     if (!fileExists(path.join(TASK_DIR, 'impl-result.json'))) {
-      errors.push('Missing .task/impl-result.json for code review');
+      errors.push('Missing .vcp/task/impl-result.json for code review');
     }
   }
 
@@ -286,10 +286,10 @@ interface CmdConfig {
 /** Build the review prompt based on review type and context. */
 function buildReviewPrompt(args: ParsedArgs, isResume: boolean): string {
   const inputFile = args.type === 'plan'
-    ? '.task/plan-refined.json'
-    : '.task/impl-result.json';
+    ? '.vcp/task/plan-refined.json'
+    : '.vcp/task/impl-result.json';
   const standardsPath = path.join(args.pluginRoot!, 'docs', 'standards.md');
-  const userStoryFile = '.task/user-story.json';
+  const userStoryFile = '.vcp/task/user-story.json';
   const userStoryRef = fileExists(userStoryFile) ? ` Requirements and acceptance criteria are in ${userStoryFile}.` : '';
 
   const readFilesFirst = `IMPORTANT: You MUST use your shell tools to read ALL referenced files BEFORE producing your review output. Do NOT output the review JSON until you have read and analyzed every file. Read the files first, then produce your final structured review.`;

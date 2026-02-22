@@ -103,7 +103,7 @@ T8 = TaskCreate(subject: "Code Review 2")      → addBlockedBy: [T7]
 T9 = TaskCreate(subject: "Code Review 3")      → addBlockedBy: [T8]  <- final gate
 ```
 
-Store returned IDs + `resolved_config` snapshot in `.task/pipeline-tasks.json`. See SKILL.md for full details.
+Store returned IDs + `resolved_config` snapshot in `.vcp/task/pipeline-tasks.json`. See SKILL.md for full details.
 
 ### Dynamic Fix Tasks
 
@@ -120,13 +120,13 @@ When a review returns `needs_changes`:
 
 | File Pattern | Stage Type | Description |
 |------|-------------|-------------|
-| `.task/user-story.json` | requirements | Approved requirements (singleton) |
-| `.task/plan-refined.json` | planning | Implementation plan (singleton) |
-| `.task/plan-review-{N}.json` | plan-review | Plan review N (e.g., plan-review-1.json, plan-review-3.json) |
-| `.task/impl-result.json` | implementation | Implementation result (singleton) |
-| `.task/code-review-{N}.json` | code-review | Code review N (e.g., code-review-1.json, code-review-2.json) |
-| `.task/rca-{N}.json` | rca | Root cause analysis N (e.g., rca-1.json, rca-2.json) |
-| `.task/pipeline-tasks.json` | (meta) | Team name + Task IDs + `resolved_config` snapshot |
+| `.vcp/task/user-story.json` | requirements | Approved requirements (singleton) |
+| `.vcp/task/plan-refined.json` | planning | Implementation plan (singleton) |
+| `.vcp/task/plan-review-{N}.json` | plan-review | Plan review N (e.g., plan-review-1.json, plan-review-3.json) |
+| `.vcp/task/impl-result.json` | implementation | Implementation result (singleton) |
+| `.vcp/task/code-review-{N}.json` | code-review | Code review N (e.g., code-review-1.json, code-review-2.json) |
+| `.vcp/task/rca-{N}.json` | rca | Root cause analysis N (e.g., rca-1.json, rca-2.json) |
+| `.vcp/task/pipeline-tasks.json` | (meta) | Team name + Task IDs + `resolved_config` snapshot |
 
 ---
 
@@ -157,7 +157,7 @@ When a review returns `needs_changes`:
 If stuck:
 
 1. **Check task state:** `TaskList()` to see blocked tasks (requires pipeline team to be active)
-2. **Check artifacts:** Read `.task/*.json` files to understand progress
+2. **Check artifacts:** Read `.vcp/task/*.json` files to understand progress
 3. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset`
 4. **Check phase:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" phase`
 

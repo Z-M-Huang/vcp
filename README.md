@@ -374,7 +374,7 @@ Set the URL globally (applies to all projects) or per-project:
 | File | Scope | Purpose |
 |------|-------|---------|
 | `~/.vcp/config.json` | Global (machine-wide) | Standards URL, plugin path, default severity/scopes/compliance/ignore |
-| `.vcp.json` | Project | Scopes, compliance frameworks, severity threshold, frameworks, exclude patterns, ignore rules |
+| `.vcp/config.json` | Project | Scopes, compliance frameworks, severity threshold, frameworks, exclude patterns, ignore rules |
 
 Manage via natural language with `/vcp-config`:
 

@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, Skill
 
 You coordinate worker agents using Task tools, handle user questions, and drive the pipeline to completion with Codex as final gate.
 
-**Task directory:** `${CLAUDE_PROJECT_DIR}/.task/`
+**Task directory:** `${CLAUDE_PROJECT_DIR}/.vcp/task/`
 **Agents location:** `${CLAUDE_PLUGIN_ROOT}/agents/`
 
 ---
@@ -35,15 +35,15 @@ The orchestrator spawns specialist teammates for parallel exploration during req
 
 | Specialist | Spawn When | Focus | Output File |
 |-----------|-----------|-------|-------------|
-| **Technical Analyst** | Always | Existing code, patterns, constraints, dependencies, files to change | `.task/analysis-technical.json` |
-| **UX/Domain Analyst** | Always | User workflows, edge cases, industry patterns, accessibility | `.task/analysis-ux-domain.json` |
-| **Security Analyst** | Always | OWASP relevance, threat model, non-functional requirements | `.task/analysis-security.json` |
-| **Performance Analyst** | Always | Load impact, scalability, resource usage, bottlenecks, caching | `.task/analysis-performance.json` |
-| **Architecture Analyst** | Always | Design patterns, SOLID principles, code organization, maintainability, best practices | `.task/analysis-architecture.json` |
+| **Technical Analyst** | Always | Existing code, patterns, constraints, dependencies, files to change | `.vcp/task/analysis-technical.json` |
+| **UX/Domain Analyst** | Always | User workflows, edge cases, industry patterns, accessibility | `.vcp/task/analysis-ux-domain.json` |
+| **Security Analyst** | Always | OWASP relevance, threat model, non-functional requirements | `.vcp/task/analysis-security.json` |
+| **Performance Analyst** | Always | Load impact, scalability, resource usage, bottlenecks, caching | `.vcp/task/analysis-performance.json` |
+| **Architecture Analyst** | Always | Design patterns, SOLID principles, code organization, maintainability, best practices | `.vcp/task/analysis-architecture.json` |
 
 All 5 core specialists are **always spawned** for every request.
 
-Additional specialists should write their analysis to `.task/analysis-<type>.json` following the same output format.
+Additional specialists should write their analysis to `.vcp/task/analysis-<type>.json` following the same output format.
 
 ---
 
@@ -204,78 +204,78 @@ PHASE: Requirements Gathering (team-based)
 AGENT: Special — spawn 5+ specialist teammates (subagent_type: general-purpose, model: opus) into pipeline team,
        then synthesize via requirements-gatherer (subagent_type: dev-buddy:requirements-gatherer, model: opus)
 INPUT: User's initial request (from conversation context)
-OUTPUT: .task/user-story.json
+OUTPUT: .vcp/task/user-story.json
 PROCEDURE: 1) Spawn all 5 core specialists as teammates 2) Interactive loop: receive messages, AskUserQuestion
            3) Wait for all analysis files 4) Spawn requirements-gatherer in synthesis mode (one-shot Task)
            5) shutdown_request to ALL specialists, wait ~60s, retry once if needed, then proceed 6) Mark completed
-COMPLETION: .task/user-story.json exists with acceptance_criteria array
+COMPLETION: .vcp/task/user-story.json exists with acceptance_criteria array
 ```
 
 For `planning`:
 ```
 PHASE: Planning
 AGENT: dev-buddy:planner (model: opus)
-INPUT: .task/user-story.json
-OUTPUT: .task/plan-refined.json
-COMPLETION: .task/plan-refined.json exists with steps array, test_plan, and completion_promise
+INPUT: .vcp/task/user-story.json
+OUTPUT: .vcp/task/plan-refined.json
+COMPLETION: .vcp/task/plan-refined.json exists with steps array, test_plan, and completion_promise
 ```
 
 For `plan-review` (subscription/api provider, stageIndex N, outputFile plan-review-N.json):
 ```
 PHASE: Plan Review {N}
 AGENT: dev-buddy:plan-reviewer (model: {stage.model})
-INPUT: .task/user-story.json, .task/plan-refined.json
-OUTPUT: .task/plan-review-{N}.json
-PROMPT MUST INCLUDE: 'Write output to .task/plan-review-{N}.json.'
-RESULT HANDLING: Read .task/plan-review-{N}.json → check status → handle per Result Handling rules
-COMPLETION: .task/plan-review-{N}.json exists with status and requirements_coverage fields
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json
+OUTPUT: .vcp/task/plan-review-{N}.json
+PROMPT MUST INCLUDE: 'Write output to .vcp/task/plan-review-{N}.json.'
+RESULT HANDLING: Read .vcp/task/plan-review-{N}.json → check status → handle per Result Handling rules
+COMPLETION: .vcp/task/plan-review-{N}.json exists with status and requirements_coverage fields
 ```
 
 For `plan-review` (CLI provider, stageIndex N, outputFile plan-review-N.json):
 ```
 PHASE: Plan Review {N} (CLI - final gate)
 AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
-INPUT: .task/user-story.json, .task/plan-refined.json
-OUTPUT: .task/plan-review-{N}.json
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json
+OUTPUT: .vcp/task/plan-review-{N}.json
 NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
-      --output-file "${CLAUDE_PROJECT_DIR}/.task/plan-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
+      --output-file "${CLAUDE_PROJECT_DIR}/.vcp/task/plan-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
 RESULT HANDLING: if rejected → terminal state plan_rejected (ask user)
-COMPLETION: .task/plan-review-{N}.json exists with status field
+COMPLETION: .vcp/task/plan-review-{N}.json exists with status field
 ```
 
 For `implementation`:
 ```
 PHASE: Implementation
 AGENT: dev-buddy:implementer (model: {stage.model})
-INPUT: .task/user-story.json, .task/plan-refined.json
-OUTPUT: .task/impl-result.json
-COMPLETION: .task/impl-result.json exists with status='complete'
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json
+OUTPUT: .vcp/task/impl-result.json
+COMPLETION: .vcp/task/impl-result.json exists with status='complete'
 ```
 
 For `code-review` (subscription/api provider, stageIndex N, outputFile code-review-N.json):
 ```
 PHASE: Code Review {N}
 AGENT: dev-buddy:code-reviewer (model: {stage.model})
-INPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json
-OUTPUT: .task/code-review-{N}.json
-PROMPT MUST INCLUDE: 'Write output to .task/code-review-{N}.json.'
-RESULT HANDLING: Read .task/code-review-{N}.json → check status → handle per Result Handling rules
-COMPLETION: .task/code-review-{N}.json exists with status and acceptance_criteria_verification fields
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, .vcp/task/impl-result.json
+OUTPUT: .vcp/task/code-review-{N}.json
+PROMPT MUST INCLUDE: 'Write output to .vcp/task/code-review-{N}.json.'
+RESULT HANDLING: Read .vcp/task/code-review-{N}.json → check status → handle per Result Handling rules
+COMPLETION: .vcp/task/code-review-{N}.json exists with status and acceptance_criteria_verification fields
 ```
 
 For `code-review` (CLI provider, stageIndex N, outputFile code-review-N.json):
 ```
 PHASE: Code Review {N} (CLI - final gate)
 AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
-INPUT: .task/user-story.json, .task/plan-refined.json, .task/impl-result.json
-OUTPUT: .task/code-review-{N}.json
+INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, .vcp/task/impl-result.json
+OUTPUT: .vcp/task/code-review-{N}.json
 NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
-      --output-file "${CLAUDE_PROJECT_DIR}/.task/code-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
+      --output-file "${CLAUDE_PROJECT_DIR}/.vcp/task/code-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
 RESULT HANDLING: if rejected → terminal state code_rejected (ask user)
-COMPLETION: .task/code-review-{N}.json exists with status field
+COMPLETION: .vcp/task/code-review-{N}.json exists with status field
 ```
 
-**Save to `.task/pipeline-tasks.json`** using actual returned IDs:
+**Save to `.vcp/task/pipeline-tasks.json`** using actual returned IDs:
 ```json
 {
   "team_name": "pipeline-vibe-pipe-a1b2c3",
@@ -356,7 +356,7 @@ Always spawn all 5 core specialists. Determine if additional specialists are nee
 
 ### Step 2: Spawn Specialist Teammates
 
-Read `team_name` from `.task/pipeline-tasks.json` and spawn specialist teammates:
+Read `team_name` from `.vcp/task/pipeline-tasks.json` and spawn specialist teammates:
 
 ```
 Task(
@@ -364,7 +364,7 @@ Task(
   team_name: <team_name>,
   subagent_type: "general-purpose",
   model: "opus",
-  prompt: "You are a Technical Analyst. Explore the codebase for [feature]. Message findings to lead. Write to .task/analysis-technical.json."
+  prompt: "You are a Technical Analyst. Explore the codebase for [feature]. Message findings to lead. Write to .vcp/task/analysis-technical.json."
 )
 ```
 
@@ -387,7 +387,7 @@ Wait for all specialists to complete their analysis files.
 Task(
   subagent_type: "dev-buddy:requirements-gatherer",
   model: "opus",
-  prompt: "Synthesis mode: Read ALL analysis-*.json files in .task/. Validate scope with user via AskUserQuestion. Get explicit approval before writing user-story.json."
+  prompt: "Synthesis mode: Read ALL analysis-*.json files in .vcp/task/. Validate scope with user via AskUserQuestion. Get explicit approval before writing user-story.json."
 )
 ```
 
@@ -452,7 +452,7 @@ fix = TaskCreate(
   activeForm: "Fixing issues...",
   description: "PHASE: Fix issues from {stage subject} review
 AGENT: dev-buddy:{planner|implementer} (model: {opus|sonnet})
-INPUT: .task/{stage.output_file} (issues), {source_file} (current artifact)
+INPUT: .vcp/task/{stage.output_file} (issues), {source_file} (current artifact)
 OUTPUT: {source_file} (updated)
 ISSUES TO FIX:
 {issues summary}
@@ -466,11 +466,11 @@ rerev = TaskCreate(
   description: "PHASE: Re-review (iteration {iteration+1})
 AGENT: {same agent as original stage}
 INPUT: {same INPUT as original stage}
-OUTPUT: .task/{stage.output_file}  ← SAME OUTPUT FILE (overwrite)
+OUTPUT: .vcp/task/{stage.output_file}  ← SAME OUTPUT FILE (overwrite)
 NOTE: Re-review after fix. Same stage index ({stage.stageIndex}), same output file.
-{if CLI stage: pass --output-file .task/{stage.output_file} and optional --model}
+{if CLI stage: pass --output-file .vcp/task/{stage.output_file} and optional --model}
 RESULT HANDLING: Same as original stage
-COMPLETION: .task/{stage.output_file} exists with updated status"
+COMPLETION: .vcp/task/{stage.output_file} exists with updated status"
 )
 TaskUpdate(rerev.id, addBlockedBy: [fix.id])
 if next_task_id is not null:
@@ -495,7 +495,7 @@ Task(
     --plugin-root '${CLAUDE_PLUGIN_ROOT}' \
     --preset '{stage.provider}' \
     --model '{stage.model}' \
-    --output-file '${CLAUDE_PROJECT_DIR}/.task/{stage.output_file}'
+    --output-file '${CLAUDE_PROJECT_DIR}/.vcp/task/{stage.output_file}'
   Review the {plan|code} and write output to the specified file."
 )
 ```
@@ -528,7 +528,7 @@ For custom pipelines, the agent reference is dynamically derived from the `stage
 Task(
   subagent_type: "dev-buddy:<agent-name>",
   model: "<model>",
-  prompt: "[Agent instructions] + [Context from .task/ files]"
+  prompt: "[Agent instructions] + [Context from .vcp/task/ files]"
 )
 ```
 
@@ -650,7 +650,7 @@ Same as before — singleton stages use canonical file names.
 When all reviews are approved (or a terminal state is reached):
 
 1. Report results to the user
-2. Read `team_name` from `.task/pipeline-tasks.json` and use `TeamDelete` with it to clean up
+2. Read `team_name` from `.vcp/task/pipeline-tasks.json` and use `TeamDelete` with it to clean up
 3. Shutdown session managers:
    ```bash
    bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts" shutdown --cwd "${CLAUDE_PROJECT_DIR}"
@@ -663,7 +663,7 @@ When all reviews are approved (or a terminal state is reached):
 Task(subagent_type: "dev-buddy:<agent-name>", model: "<model>", prompt: "...")
 ```
 
-**If provider type is `api`:** Use curl to the session manager port from `.task/session-ports.json`:
+**If provider type is `api`:** Use curl to the session manager port from `.vcp/task/session-ports.json`:
 ```bash
 curl -s --connect-timeout 5 --max-time 300 \
   -X POST "http://localhost:{PORT}/tasks/send" \
@@ -699,6 +699,6 @@ curl -s --connect-timeout 5 --max-time 300 \
 If stuck:
 
 1. **Check task state:** `TaskList()` to see blocked tasks (requires pipeline team to be active)
-2. **Check artifacts:** Read `.task/*.json` files to understand progress
-3. **Check resolved config:** Read `resolved_config` from `.task/pipeline-tasks.json`
+2. **Check artifacts:** Read `.vcp/task/*.json` files to understand progress
+3. **Check resolved config:** Read `resolved_config` from `.vcp/task/pipeline-tasks.json`
 4. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset`

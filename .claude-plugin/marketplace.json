@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Vibe Coding Protocol — Standards and enforcement for AI-generated code quality",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "plugins": [
     {
       "name": "vcp",
       "description": "Vibe Coding Protocol — project initialization, security enforcement, quality checks, and dependency verification for AI-generated code",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": { "name": "Z-M-Huang" },
       "source": "./plugins/vcp",
       "category": "security"
@@ -19,7 +19,7 @@
     {
       "name": "dev-buddy",
       "description": "Multi-AI pipeline orchestration with session management, preset providers, and hybrid backend routing",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": { "name": "Z-M-Huang" },
       "source": "./plugins/dev-buddy",
       "category": "development"

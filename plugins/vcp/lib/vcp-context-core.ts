@@ -12,6 +12,8 @@
  * Requires: bun (cross-platform TypeScript runtime)
  */
 
+import { mkdir, rename } from "fs/promises";
+
 import {
   loadGlobalConfig,
   validateStandardsUrl,
@@ -105,14 +107,29 @@ export async function loadConfig(
   projectRoot: string,
 ): Promise<VcpConfig | null> {
   try {
-    return await Bun.file(`${projectRoot}/.vcp.json`).json();
+    return await Bun.file(`${projectRoot}/.vcp/config.json`).json();
   } catch {
+    // Auto-migrate from old location (.vcp.json → .vcp/config.json)
+    try {
+      const config = await Bun.file(`${projectRoot}/.vcp.json`).json();
+      try {
+        await mkdir(`${projectRoot}/.vcp`, { recursive: true });
+        await rename(`${projectRoot}/.vcp.json`, `${projectRoot}/.vcp/config.json`);
+        console.error(`[VCP] Migrated .vcp.json → .vcp/config.json`);
+      } catch {
+        console.error(
+          `[VCP] Found .vcp.json in project root — this file has moved to .vcp/config.json. ` +
+          `Run: mkdir -p .vcp && mv .vcp.json .vcp/config.json`,
+        );
+      }
+      return config as VcpConfig;
+    } catch { /* No config at either location */ }
     return null;
   }
 }
 
 /**
- * Parse the ignore array from .vcp.json into categorized sets.
+ * Parse the ignore array from .vcp/config.json into categorized sets.
  * Centralized so every consumer of the config gets consistent filtering.
  *
  * - Standard IDs (e.g., "core-architecture") → exclude entire standard

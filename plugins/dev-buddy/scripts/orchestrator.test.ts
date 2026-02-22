@@ -9,7 +9,7 @@ import {
 } from './pipeline-utils.ts';
 
 const TEST_PROJECT_DIR = join(import.meta.dir, '.test-project-orchestrator');
-const TEST_TASK_DIR = join(TEST_PROJECT_DIR, '.task');
+const TEST_TASK_DIR = join(TEST_PROJECT_DIR, '.vcp', 'task');
 
 /**
  * Run `orchestrator.ts phase` with controlled CLAUDE_PROJECT_DIR
@@ -301,7 +301,7 @@ describe('path resolution and environment', () => {
     rmSync(TEST_PROJECT_DIR, { recursive: true, force: true });
   });
 
-  test('TASK_DIR defaults to cwd/.task when CLAUDE_PROJECT_DIR not set', () => {
+  test('TASK_DIR defaults to cwd/.vcp/task when CLAUDE_PROJECT_DIR not set', () => {
     const result = Bun.spawnSync(['bun', join(import.meta.dir, 'orchestrator.ts'), 'phase'], {
       env: {
         ...process.env,
@@ -334,16 +334,16 @@ describe('path resolution and environment', () => {
     const projectB = join(import.meta.dir, '.test-project-b');
 
     try {
-      mkdirSync(join(projectA, '.task'), { recursive: true });
-      mkdirSync(join(projectB, '.task'), { recursive: true });
+      mkdirSync(join(projectA, '.vcp', 'task'), { recursive: true });
+      mkdirSync(join(projectB, '.vcp', 'task'), { recursive: true });
 
       // Project A: has pipeline-tasks.json + user-story → plan_drafting
       writeFileSync(
-        join(projectA, '.task', 'pipeline-tasks.json'),
+        join(projectA, '.vcp', 'task', 'pipeline-tasks.json'),
         JSON.stringify(makeFeatureTasks())
       );
       writeFileSync(
-        join(projectA, '.task', 'user-story.json'),
+        join(projectA, '.vcp', 'task', 'user-story.json'),
         JSON.stringify({ title: 'A' })
       );
 
@@ -420,7 +420,7 @@ describe('lock behavior', () => {
     expect(existsSync(join(TEST_TASK_DIR, 'state.json'))).toBe(false);
   });
 
-  test('wx flag prevents race condition on concurrent create', () => {
+  test('wx flag prevents race condition on concurrent lock create', () => {
     // Manually test the wx flag behavior
     const testLock = join(TEST_TASK_DIR, '.test-lock');
 
@@ -439,5 +439,74 @@ describe('lock behavior', () => {
 
     // Original content preserved
     expect(readFileSync(testLock, 'utf-8')).toBe('first');
+  });
+});
+
+describe('.task/ → .vcp/task/ auto-migration', () => {
+  const migrationProject = join(import.meta.dir, '.test-project-migration');
+  const oldTaskDir = join(migrationProject, '.task');
+  const newTaskDir = join(migrationProject, '.vcp', 'task');
+
+  afterEach(() => {
+    rmSync(migrationProject, { recursive: true, force: true });
+  });
+
+  test('phase command auto-migrates .task/ to .vcp/task/', () => {
+    // Create old .task/ with pipeline artifacts
+    mkdirSync(oldTaskDir, { recursive: true });
+    writeFileSync(
+      join(oldTaskDir, 'pipeline-tasks.json'),
+      JSON.stringify(makeFeatureTasks())
+    );
+    writeFileSync(
+      join(oldTaskDir, 'user-story.json'),
+      JSON.stringify({ title: 'test' })
+    );
+
+    const result = Bun.spawnSync(['bun', join(import.meta.dir, 'orchestrator.ts'), 'phase'], {
+      env: { ...process.env, CLAUDE_PROJECT_DIR: migrationProject },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    // Should migrate and report actual phase, not idle
+    const phase = result.stdout.toString().trim();
+    expect(phase).toBe('plan_drafting');
+    expect(result.stderr.toString()).toContain('Migrated .task/');
+    // Old dir gone, new dir exists
+    expect(existsSync(oldTaskDir)).toBe(false);
+    expect(existsSync(newTaskDir)).toBe(true);
+  });
+
+  test('status command auto-migrates .task/ to .vcp/task/', () => {
+    mkdirSync(oldTaskDir, { recursive: true });
+    writeFileSync(
+      join(oldTaskDir, 'pipeline-tasks.json'),
+      JSON.stringify(makeFeatureTasks())
+    );
+
+    const result = Bun.spawnSync(['bun', join(import.meta.dir, 'orchestrator.ts'), 'status'], {
+      env: { ...process.env, CLAUDE_PROJECT_DIR: migrationProject },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    // Should migrate and show actual status, not "not started"
+    const output = result.stdout.toString();
+    expect(output).not.toContain('Pipeline not started');
+    expect(existsSync(oldTaskDir)).toBe(false);
+    expect(existsSync(newTaskDir)).toBe(true);
+  });
+
+  test('phase returns idle when neither .task/ nor .vcp/task/ exists', () => {
+    mkdirSync(migrationProject, { recursive: true });
+
+    const result = Bun.spawnSync(['bun', join(import.meta.dir, 'orchestrator.ts'), 'phase'], {
+      env: { ...process.env, CLAUDE_PROJECT_DIR: migrationProject },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(result.stdout.toString().trim()).toBe('idle');
   });
 });

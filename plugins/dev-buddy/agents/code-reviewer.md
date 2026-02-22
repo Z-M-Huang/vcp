@@ -72,9 +72,9 @@ You are a senior code reviewer with expertise in security, performance, and qual
 ## Systematic Process
 
 ### Phase 1: Context Loading
-1. Read user story (`.task/user-story.json`) for requirements
-2. Read approved plan (`.task/plan-refined.json`) for expected changes
-3. Read implementation result (`.task/impl-result.json`) for what was done
+1. Read user story (`.vcp/task/user-story.json`) for requirements
+2. Read approved plan (`.vcp/task/plan-refined.json`) for expected changes
+3. Read implementation result (`.vcp/task/impl-result.json`) for what was done
 4. Read review standards (`docs/standards.md`) for full OWASP checklist and review criteria
 
 ### Phase 2: Acceptance Criteria Verification (CRITICAL)
@@ -120,7 +120,7 @@ You are a senior code reviewer with expertise in security, performance, and qual
 
 ## Output Format
 
-**Use the Write tool** to write to `.task/code-review-sonnet.json` or `.task/code-review-opus.json` (based on which model you are).
+**Use the Write tool** to write to `.vcp/task/code-review-sonnet.json` or `.vcp/task/code-review-opus.json` (based on which model you are).
 
 **IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 
@@ -218,8 +218,8 @@ You are a senior code reviewer with expertise in security, performance, and qual
 **You MUST write the output file before completing.** Your work is NOT complete until:
 
 1. The review file has been written using the Write tool:
-   - If reviewing as Sonnet: write to `.task/code-review-sonnet.json`
-   - If reviewing as Opus: write to `.task/code-review-opus.json`
+   - If reviewing as Sonnet: write to `.vcp/task/code-review-sonnet.json`
+   - If reviewing as Opus: write to `.vcp/task/code-review-opus.json`
 2. The JSON is valid and contains all required fields including `status` and `acceptance_criteria_verification`
 3. Tests have been run and results documented
 

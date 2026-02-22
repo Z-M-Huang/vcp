@@ -84,7 +84,7 @@ Write your findings to the output file specified in your task description.
 
 ## Output Format
 
-**Use the Write tool** to write to the output path specified in your task description (e.g., `.task/rca-sonnet.json` or `.task/rca-opus.json`).
+**Use the Write tool** to write to the output path specified in your task description (e.g., `.vcp/task/rca-sonnet.json` or `.vcp/task/rca-opus.json`).
 
 **IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 

@@ -54,7 +54,7 @@ export async function loadGlobalConfig(): Promise<VcpGlobalConfig | null> {
  *
  * Security: Always uses DEFAULT_MANIFEST_URL — never promotes project
  * config's standards_url to global, because project config is untrusted
- * (any repo can contain a .vcp.json pointing to an attacker-controlled URL).
+ * (any repo can contain a .vcp/config.json pointing to an attacker-controlled URL).
  * pluginRoot is taken from the project config since it's needed for
  * skill execution and is validated by callers before use.
  *

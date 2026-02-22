@@ -7,11 +7,13 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { mkdtemp, writeFile, rm } from "fs/promises";
+import { mkdtemp, writeFile, rm, mkdir, readFile } from "fs/promises";
+import { existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
 import {
+  loadConfig,
   resolveApplicableStandards,
   extractRuleSummaries,
   parseIgnoreList,
@@ -759,7 +761,7 @@ describe("integration: security-context.ts", () => {
 
   test("exits 0 with no project config", async () => {
     await withTmpDir(async (dir) => {
-      // Empty dir — no .vcp.json. Hook should still exit 0 and produce output.
+      // Empty dir — no .vcp/config.json. Hook should still exit 0 and produce output.
       const proc = Bun.spawn(["bun", "run", HOOK_PATH], {
         stdout: "pipe",
         stderr: "pipe",
@@ -779,5 +781,59 @@ describe("integration: security-context.ts", () => {
     const exitCode = await proc.exited;
     expect(exitCode).toBe(0);
   }, 20000);
+});
+
+// --- loadConfig auto-migration tests ---
+
+describe("loadConfig auto-migration", () => {
+  test("loads from .vcp/config.json when present", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vcp-migrate-"));
+    try {
+      await mkdir(join(dir, ".vcp"), { recursive: true });
+      await writeFile(
+        join(dir, ".vcp", "config.json"),
+        JSON.stringify({ version: "1.0", scopes: { core: true }, compliance: [] }),
+      );
+      const config = await loadConfig(dir);
+      expect(config).not.toBeNull();
+      expect(config!.version).toBe("1.0");
+      expect(config!.scopes).toEqual({ core: true });
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  test("auto-migrates .vcp.json to .vcp/config.json", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vcp-migrate-"));
+    try {
+      // Place config at old location only
+      await writeFile(
+        join(dir, ".vcp.json"),
+        JSON.stringify({ version: "1.0", scopes: { web: true }, compliance: ["soc2"] }),
+      );
+      const config = await loadConfig(dir);
+      // Config should be returned
+      expect(config).not.toBeNull();
+      expect(config!.scopes).toEqual({ web: true });
+      // Old file should be gone, new file should exist
+      expect(existsSync(join(dir, ".vcp.json"))).toBe(false);
+      expect(existsSync(join(dir, ".vcp", "config.json"))).toBe(true);
+      // New file should contain the same data
+      const migrated = JSON.parse(await readFile(join(dir, ".vcp", "config.json"), "utf-8"));
+      expect(migrated.scopes).toEqual({ web: true });
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  test("returns null when no config exists at either location", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vcp-migrate-"));
+    try {
+      const config = await loadConfig(dir);
+      expect(config).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
 });
 

@@ -82,7 +82,7 @@ VCP enforces standards through three layers:
 
 - `plugins/vcp/` — Single plugin with 10 skills, 1 agent, and 4 hooks
 - Skills fetch standards from `standards/manifest.json` at runtime via WebFetch (always latest from main)
-- `.vcp.json` in project root configures scopes, compliance frameworks, severity threshold, and CWE ignore list
+- `.vcp/config.json` in project root configures scopes, compliance frameworks, severity threshold, and CWE ignore list
 - `security-gate.ts` exits 2 (block) on pattern match, 0 (allow) otherwise
 - `stop-reminder.ts` reminds user to run VCP checks before committing
 

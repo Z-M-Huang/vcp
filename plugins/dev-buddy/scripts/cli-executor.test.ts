@@ -76,7 +76,7 @@ describe('cli-executor.ts', () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-executor-test-'));
-    fs.mkdirSync(path.join(tempDir, '.task'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, '.vcp', 'task'), { recursive: true });
 
     mockPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-plugin-'));
     fs.mkdirSync(path.join(mockPluginRoot, 'docs', 'schemas'), { recursive: true });
@@ -174,7 +174,7 @@ describe('cli-executor.ts', () => {
 
   test('fails with missing --model argument', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -223,7 +223,7 @@ describe('cli-executor.ts', () => {
 
   test('fails when model not in preset models list', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -272,7 +272,7 @@ describe('cli-executor.ts', () => {
 
   test('fails when schema file missing', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
     fs.unlinkSync(path.join(mockPluginRoot, 'docs', 'schemas', 'plan-review.schema.json'));
@@ -292,7 +292,7 @@ describe('cli-executor.ts', () => {
 
   test('fails when standards.md missing', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
     fs.unlinkSync(path.join(mockPluginRoot, 'docs', 'standards.md'));
@@ -319,7 +319,7 @@ describe('cli-executor.ts', () => {
       mockHome
     );
 
-    const outputPath = path.join(tempDir, '.task', 'review-codex.json');
+    const outputPath = path.join(tempDir, '.vcp', 'task', 'review-codex.json');
     expect(fs.existsSync(outputPath)).toBe(true);
 
     const output = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
@@ -328,7 +328,7 @@ describe('cli-executor.ts', () => {
   });
 
   test('writes error to --output-file path when specified', async () => {
-    const customOutput = '.task/plan-review-3.json';
+    const customOutput = '.vcp/task/plan-review-3.json';
     await runScript(
       [
         '--type', 'plan',
@@ -374,11 +374,11 @@ describe('cli-executor.ts', () => {
 
   test('detects active session from .cli-session-{type} marker', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
     fs.writeFileSync(
-      path.join(tempDir, '.task', '.cli-session-plan'),
+      path.join(tempDir, '.vcp', 'task', '.cli-session-plan'),
       new Date().toISOString()
     );
 
@@ -395,11 +395,11 @@ describe('cli-executor.ts', () => {
 
   test('plan session marker does not affect code review', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', '.cli-session-plan'),
+      path.join(tempDir, '.vcp', 'task', '.cli-session-plan'),
       new Date().toISOString()
     );
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'impl-result.json'),
+      path.join(tempDir, '.vcp', 'task', 'impl-result.json'),
       JSON.stringify({ files: [] })
     );
 
@@ -416,11 +416,11 @@ describe('cli-executor.ts', () => {
 
   test('code session marker triggers sessionActive for code review', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', '.cli-session-code'),
+      path.join(tempDir, '.vcp', 'task', '.cli-session-code'),
       new Date().toISOString()
     );
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'impl-result.json'),
+      path.join(tempDir, '.vcp', 'task', 'impl-result.json'),
       JSON.stringify({ files: [] })
     );
 
@@ -437,7 +437,7 @@ describe('cli-executor.ts', () => {
 
   test('--resume flag forces resume mode', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -456,7 +456,7 @@ describe('cli-executor.ts', () => {
 
   test('rejects --output-file with path traversal', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -466,7 +466,7 @@ describe('cli-executor.ts', () => {
         '--preset', MOCK_PRESET_NAME,
         '--model', 'test-model',
         '--plugin-root', mockPluginRoot,
-        '--output-file', '.task/../../../etc/evil.json',
+        '--output-file', '.vcp/task/../../../etc/evil.json',
       ],
       tempDir,
       mockHome
@@ -481,7 +481,7 @@ describe('cli-executor.ts', () => {
 
   test('rejects --output-file without .json extension', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -491,7 +491,7 @@ describe('cli-executor.ts', () => {
         '--preset', MOCK_PRESET_NAME,
         '--model', 'test-model',
         '--plugin-root', mockPluginRoot,
-        '--output-file', '.task/evil.txt',
+        '--output-file', '.vcp/task/evil.txt',
       ],
       tempDir,
       mockHome
@@ -525,7 +525,7 @@ describe('cli-executor.ts', () => {
     );
 
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -546,7 +546,7 @@ describe('cli-executor.ts', () => {
 
   test('--changes-summary is included in start event context', async () => {
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -590,12 +590,12 @@ describe('cli-executor.ts', () => {
       JSON.stringify(unquotedPresets, null, 2)
     );
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
     // Session marker + --resume triggers changesSummary prompt path
     fs.writeFileSync(
-      path.join(tempDir, '.task', '.cli-session-plan'),
+      path.join(tempDir, '.vcp', 'task', '.cli-session-plan'),
       new Date().toISOString()
     );
 
@@ -627,7 +627,7 @@ describe('cli-executor.ts', () => {
   test('unquoted placeholder produces single arg per placeholder', async () => {
     // With tokenize-first fix, {prompt} becomes one token then one arg
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -675,7 +675,7 @@ describe('cli-executor.ts', () => {
       JSON.stringify(midTokenPresets, null, 2)
     );
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -700,7 +700,7 @@ describe('cli-executor.ts', () => {
       JSON.stringify({ debug: true })
     );
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -726,7 +726,7 @@ describe('cli-executor.ts', () => {
       JSON.stringify({ debug: true })
     );
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 
@@ -747,7 +747,7 @@ describe('cli-executor.ts', () => {
   test('does not write .vcp/dev-buddy.log when debug is disabled', async () => {
     // No debug config file at all
     fs.writeFileSync(
-      path.join(tempDir, '.task', 'plan-refined.json'),
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
 

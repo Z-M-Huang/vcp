@@ -2,7 +2,7 @@
 /**
  * Simplified Guidance Hook - Advisory Mode Orchestration
  *
- * This UserPromptSubmit hook provides guidance based on .task/*.json files.
+ * This UserPromptSubmit hook provides guidance based on .vcp/task/*.json files.
  * State is implicit from which files exist.
  * Enforcement is handled by SubagentStop hook (review-validator.ts).
  *
@@ -30,7 +30,7 @@ export const TASK_DIR = computeTaskDir();
  * Compute guidance message based on current progress
  */
 export function computeGuidance(): { message: string; phase: string; isEmpty?: boolean; isComplete?: boolean } {
-  // Check if .task directory exists
+  // Check if .vcp/task directory exists
   if (!fs.existsSync(TASK_DIR)) {
     return {
       message: '',
