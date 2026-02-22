@@ -76,8 +76,8 @@ interface ParsedArgs {
   model: string | null;
 }
 
-/** Regex for valid model names — must only contain lowercase letters, digits, dots, hyphens. */
-const MODEL_NAME_REGEX = /^[a-z0-9.-]+$/;
+/** Regex for valid model names — alphanumeric, dots, hyphens, underscores only. */
+const MODEL_NAME_REGEX = /^[a-zA-Z0-9._-]+$/;
 
 function parseArgs(): ParsedArgs {
   const args = process.argv.slice(2);
@@ -210,7 +210,7 @@ function validateInputs(args: ParsedArgs, preset: CliPreset): string[] {
   if (!args.model) {
     errors.push('Missing --model (required for CLI executor)');
   } else if (!MODEL_NAME_REGEX.test(args.model)) {
-    errors.push(`Invalid --model value '${args.model}'. Must match /^[a-z0-9.-]+$/`);
+    errors.push(`Invalid --model value '${args.model}'. Must match /^[a-zA-Z0-9._-]+$/`);
   } else if (!preset.models.includes(args.model)) {
     errors.push(`Model '${args.model}' is not in preset's models list: [${preset.models.join(', ')}]`);
   }

@@ -49,8 +49,8 @@
         },
         "model": {
           "type": "string",
-          "pattern": "^[a-z0-9.-]+$",
-          "description": "Model name. Required. Must match /^[a-z0-9.-]+$/ to prevent shell metacharacter injection (CWE-78)."
+          "pattern": "^[a-zA-Z0-9._-]+$",
+          "description": "Model name. Required. Must match /^[a-zA-Z0-9._-]+$/ to prevent shell metacharacter injection (CWE-78)."
         }
       },
       "additionalProperties": false

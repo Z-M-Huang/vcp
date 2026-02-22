@@ -105,4 +105,4 @@ export function getOutputFileName(type: StageType, index: number): string {
  * Allows lowercase letters, digits, dots, and hyphens only.
  * Prevents shell metacharacter injection (CWE-78).
  */
-export const MODEL_NAME_REGEX = /^[a-z0-9.-]+$/;
+export const MODEL_NAME_REGEX = /^[a-zA-Z0-9._-]+$/;

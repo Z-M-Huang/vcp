@@ -414,7 +414,7 @@ See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 - `requirements` and `planning` are **feature-only** — not allowed in bugfix pipeline
 - `rca` is **bugfix-only** — not allowed in feature pipeline
 - Each pipeline must have **at least one** `implementation` stage
-- `model` is **required** on every stage entry — values must match `/^[a-z0-9.-]+$/` (prevents shell metacharacter injection)
+- `model` is **required** on every stage entry — values must match `/^[a-zA-Z0-9._-]+$/` (prevents shell metacharacter injection)
 
 ### Config Validation
 

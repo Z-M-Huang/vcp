@@ -19,7 +19,7 @@ export interface StageEntry {
   type: StageType;
   /** The preset name to use for this stage (references ~/.vcp/ai-presets.json). */
   provider: string;
-  /** Model name. Required. Validated against /^[a-z0-9.-]+$/. */
+  /** Model name. Required. Validated against /^[a-zA-Z0-9._-]+$/. */
   model: string;
 }
 

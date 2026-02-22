@@ -82,7 +82,7 @@ export function writePresets(config: PresetConfig): void {
 function validateModelNames(models: unknown[], label: string): void {
   for (const model of models) {
     if (typeof model !== 'string' || !MODEL_NAME_REGEX.test(model)) {
-      throw new Error(`${label} model '${model}' is invalid. Must match /^[a-z0-9.-]+$/`);
+      throw new Error(`${label} model '${model}' is invalid. Must match /^[a-zA-Z0-9._-]+$/`);
     }
   }
 }

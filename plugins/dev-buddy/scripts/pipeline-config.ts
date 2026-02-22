@@ -158,7 +158,7 @@ export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' 
       }
       if (!MODEL_NAME_REGEX.test(entry.model)) {
         throw new Error(
-          `${name}[${i}]: invalid model name '${entry.model}'. Must match /^[a-z0-9.-]+$/`
+          `${name}[${i}]: invalid model name '${entry.model}'. Must match /^[a-zA-Z0-9._-]+$/`
         );
       }
     }

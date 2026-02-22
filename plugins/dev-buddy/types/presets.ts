@@ -45,7 +45,7 @@ export interface CliPreset {
   reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh';
   /** Custom timeout in milliseconds. Default: 1200000 (20 minutes). */
   timeout_ms?: number;
-  /** List of model names supported by this CLI tool. Required. Validated against /^[a-z0-9.-]+$/. */
+  /** List of model names supported by this CLI tool. Required. Validated against /^[a-zA-Z0-9._-]+$/. */
   models: string[];
 }
 
