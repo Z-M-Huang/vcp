@@ -207,7 +207,7 @@ INPUT: User's initial request (from conversation context)
 OUTPUT: .task/user-story.json
 PROCEDURE: 1) Spawn all 5 core specialists as teammates 2) Interactive loop: receive messages, AskUserQuestion
            3) Wait for all analysis files 4) Spawn requirements-gatherer in synthesis mode (one-shot Task)
-           5) shutdown_request to ALL specialists, wait for confirmations 6) Mark completed
+           5) shutdown_request to ALL specialists, wait ~60s, retry once if needed, then proceed 6) Mark completed
 COMPLETION: .task/user-story.json exists with acceptance_criteria array
 ```
 
@@ -339,9 +339,12 @@ while pipeline not complete:
 
 **After synthesis completes (requirements-gatherer returns):**
 1. Send `shutdown_request` to ALL specialist teammates via `SendMessage`
-2. Wait for shutdown confirmations from ALL specialists
-3. **Only after all confirmations received:** Mark requirements task as completed
-4. Proceed to planning phase
+2. Track which specialists have confirmed shutdown
+3. If any specialist has not confirmed after ~60 seconds (1-2 idle notifications without a shutdown confirmation), re-send `shutdown_request` to that specialist
+4. If a specialist still has not confirmed after the retry, **proceed anyway** — mark requirements task as completed. Unresponsive teammates will be cleaned up when the pipeline team is deleted at completion.
+5. Proceed to planning phase
+
+**Rationale:** Teammates may go idle without processing the shutdown request (known edge case). The pipeline team deletion at the end of the pipeline (`TeamDelete`) will clean up any lingering teammates, so it is safe to proceed past unresponsive specialists.
 
 ---
 
@@ -392,8 +395,9 @@ Task(
 
 After synthesis:
 1. Send `shutdown_request` to ALL specialist teammates
-2. Wait for confirmations from ALL specialists
-3. Only then mark requirements task as completed
+2. Wait for confirmations. If any specialist does not confirm after ~60 seconds, re-send `shutdown_request` once.
+3. If a specialist still does not confirm after the retry, proceed anyway — they will be cleaned up by TeamDelete at pipeline completion.
+4. Mark requirements task as completed
 
 ---
 

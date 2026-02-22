@@ -47,7 +47,7 @@ VCP uses a global config at `~/.vcp/config.json` to store machine-level settings
 
 - **`standards_url`** — URL to the standards manifest (default: VCP public repo; can point to internal GitHub Enterprise)
 - **`pluginRoot`** — Absolute path to the VCP plugin directory
-- **`debug`** — Enable diagnostic logging to `.vcp-log` in the project root (default: `false`)
+- **`debug`** — Enable diagnostic logging to `.vcp/vcp.log` in the project root (default: `false`)
 - **`defaults`** — Optional defaults: `severity` and `ignore` are applied at runtime; `scopes` and `compliance` are proposed as starting points during `/vcp-init` only
 
 Created by `/vcp-init` on first run. Subsequent project initializations reuse the existing global config. If the global config is missing when a skill runs (e.g., an existing user who hasn't run `/vcp-init` since the global config was introduced), it is auto-created from the project config and defaults. Hooks only read the global config — they never auto-create it (hooks run in untrusted repo context and must stay fast).
@@ -90,7 +90,7 @@ If any pattern matches, the hook exits with code 2 (block) and prints the findin
 
 ### Diagnostic Log
 
-All hooks write diagnostic entries to `.vcp-log` in the project root via the shared `vcp-logger.ts` module. The log records timestamps, hook names, decisions, and details for every invocation. Add `.vcp-log` to your `.gitignore`.
+All hooks write diagnostic entries to `.vcp/vcp.log` in the project root via the shared `vcp-logger.ts` module. The log records timestamps, hook names, decisions, and details for every invocation. Add `.vcp/*.log` to your `.gitignore`.
 
 ## Known Limitations
 

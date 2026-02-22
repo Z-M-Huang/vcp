@@ -83,11 +83,6 @@
             <option value="cli">CLI (Command-line tool)</option>
           </select>
         </label>
-        <label>
-          Description (optional)
-          <input type="text" x-model="newPreset.description" placeholder="Optional description">
-        </label>
-
         <!-- API-specific fields -->
         <template x-if="newPreset.type === 'api'">
           <div>
@@ -187,7 +182,6 @@
 
             <div class="preset-details">
               <div x-text="preset.name" class="preset-display-name"></div>
-              <div x-show="preset.description" x-text="preset.description" class="preset-desc"></div>
 
               <!-- API preset details -->
               <template x-if="preset.type === 'api'">

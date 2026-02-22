@@ -19,7 +19,7 @@ async function withTmpDir(fn: (dir: string) => Promise<void>): Promise<void> {
 }
 
 describe("vcpLog", () => {
-  test("creates .vcp-log in project root", async () => {
+  test("creates .vcp/vcp.log in project root", async () => {
     await withTmpDir(async (dir) => {
       await vcpLog(dir, {
         source: "test",
@@ -27,7 +27,7 @@ describe("vcpLog", () => {
         decision: "info",
         details: "hello",
       }, true);
-      const content = await readFile(join(dir, ".vcp-log"), "utf-8");
+      const content = await readFile(join(dir, ".vcp", "vcp.log"), "utf-8");
       expect(content.length).toBeGreaterThan(0);
     });
   });
@@ -46,7 +46,7 @@ describe("vcpLog", () => {
         decision: "warn",
         details: "second",
       }, true);
-      const content = await readFile(join(dir, ".vcp-log"), "utf-8");
+      const content = await readFile(join(dir, ".vcp", "vcp.log"), "utf-8");
       const lines = content.trim().split("\n");
       expect(lines).toHaveLength(2);
       expect(lines[0]).toContain("first");
@@ -62,7 +62,7 @@ describe("vcpLog", () => {
         decision: "block",
         details: "CWE-798",
       }, true);
-      const content = await readFile(join(dir, ".vcp-log"), "utf-8");
+      const content = await readFile(join(dir, ".vcp", "vcp.log"), "utf-8");
       // Format: ISO_TIMESTAMP [event] source: decision — details
       expect(content).toMatch(
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[PreToolUse\] security-gate: block — CWE-798\n$/,
@@ -82,7 +82,7 @@ describe("vcpLog", () => {
   });
 
   test("skips logging when projectRoot is empty", async () => {
-    // Should no-op silently, not create .vcp-log in CWD
+    // Should no-op silently, not create .vcp/vcp.log in CWD
     await vcpLog("", {
       source: "test",
       event: "TestEvent",
@@ -107,7 +107,7 @@ describe("vcpLog", () => {
         event: "TestEvent",
         decision: "allow",
       }, true);
-      const content = await readFile(join(dir, ".vcp-log"), "utf-8");
+      const content = await readFile(join(dir, ".vcp", "vcp.log"), "utf-8");
       expect(content).not.toContain(" — ");
       expect(content).toMatch(/allow\n$/);
     });
@@ -124,7 +124,7 @@ describe("vcpLog", () => {
       const { access } = await import("fs/promises");
       let exists = true;
       try {
-        await access(join(dir, ".vcp-log"));
+        await access(join(dir, ".vcp", "vcp.log"));
       } catch {
         exists = false;
       }
@@ -142,7 +142,7 @@ describe("vcpLog", () => {
       const { access } = await import("fs/promises");
       let exists = true;
       try {
-        await access(join(dir, ".vcp-log"));
+        await access(join(dir, ".vcp", "vcp.log"));
       } catch {
         exists = false;
       }

@@ -42,7 +42,7 @@ function runScript(
   stderr: string;
 }> {
   return new Promise((resolve) => {
-    const env = { ...process.env, HOME: mockHome, USERPROFILE: mockHome };
+    const env = { ...process.env, HOME: mockHome, USERPROFILE: mockHome, CLAUDE_PROJECT_DIR: cwd };
     const proc = spawn('bun', [SCRIPT_PATH, ...args], {
       cwd,
       env,
@@ -564,5 +564,200 @@ describe('cli-executor.ts', () => {
 
     const startEvent = result.events.find(e => e.event === 'start');
     expect(startEvent).toBeDefined();
+  });
+
+  // ================== TOKENIZER FIX (apostrophe bug) ==================
+
+  test('prompt containing apostrophes does not crash tokenizer', async () => {
+    // Use unquoted {prompt} placeholder — before the fix, apostrophes in the
+    // substituted prompt would be treated as shell quote delimiters by the tokenizer
+    const unquotedPresets = {
+      version: '2.0',
+      presets: {
+        'unquoted-cli': {
+          type: 'cli',
+          name: 'Unquoted CLI',
+          command: 'echo',
+          args_template: '--model {model} {prompt}',
+          models: ['test-model'],
+          supports_resume: true,
+          resume_args_template: '--resume {prompt}',
+        },
+      },
+    };
+    fs.writeFileSync(
+      path.join(mockHome, '.vcp', 'ai-presets.json'),
+      JSON.stringify(unquotedPresets, null, 2)
+    );
+    fs.writeFileSync(
+      path.join(tempDir, '.task', 'plan-refined.json'),
+      JSON.stringify({ id: 'test', steps: [] })
+    );
+    // Session marker + --resume triggers changesSummary prompt path
+    fs.writeFileSync(
+      path.join(tempDir, '.task', '.cli-session-plan'),
+      new Date().toISOString()
+    );
+
+    const result = await runScript(
+      [
+        '--type', 'plan',
+        '--preset', 'unquoted-cli',
+        '--model', 'test-model',
+        '--plugin-root', mockPluginRoot,
+        '--resume',
+        // Odd number of apostrophes — would crash old tokenizer
+        '--changes-summary', "The module hasn't been tested",
+      ],
+      tempDir,
+      mockHome
+    );
+
+    // Should NOT fail at command_building — apostrophes in substituted values are harmless
+    const buildError = result.events.find(e =>
+      e.phase === 'command_building' && e.event === 'error'
+    );
+    expect(buildError).toBeUndefined();
+
+    // Should reach CLI invocation (may later fail at output_validation since echo doesn't produce JSON)
+    const invokeEvent = result.events.find(e => e.event === 'invoking_cli');
+    expect(invokeEvent).toBeDefined();
+  });
+
+  test('unquoted placeholder produces single arg per placeholder', async () => {
+    // With tokenize-first fix, {prompt} becomes one token then one arg
+    fs.writeFileSync(
+      path.join(tempDir, '.task', 'plan-refined.json'),
+      JSON.stringify({ id: 'test', steps: [] })
+    );
+
+    const result = await runScript(
+      [
+        '--type', 'plan',
+        '--preset', MOCK_PRESET_NAME,
+        '--model', 'test-model',
+        '--plugin-root', mockPluginRoot,
+      ],
+      tempDir,
+      mockHome
+    );
+
+    // Should get past command_building without error
+    const buildError = result.events.find(e =>
+      e.phase === 'command_building' && e.event === 'error'
+    );
+    expect(buildError).toBeUndefined();
+
+    const invokeEvent = result.events.find(e => e.event === 'invoking_cli');
+    expect(invokeEvent).toBeDefined();
+  });
+
+  test('mid-token placeholders produce combined arg values', async () => {
+    fs.writeFileSync(
+      path.join(mockHome, '.vcp', 'config.json'),
+      JSON.stringify({ debug: true })
+    );
+    const midTokenPresets = {
+      version: '2.0',
+      presets: {
+        'mid-token': {
+          type: 'cli',
+          name: 'Mid Token CLI',
+          command: 'echo',
+          args_template: '--model={model} --effort={reasoning_effort} "{prompt}"',
+          models: ['test-model'],
+          reasoning_effort: 'high',
+        },
+      },
+    };
+    fs.writeFileSync(
+      path.join(mockHome, '.vcp', 'ai-presets.json'),
+      JSON.stringify(midTokenPresets, null, 2)
+    );
+    fs.writeFileSync(
+      path.join(tempDir, '.task', 'plan-refined.json'),
+      JSON.stringify({ id: 'test', steps: [] })
+    );
+
+    await runScript(
+      ['--type', 'plan', '--preset', 'mid-token', '--model', 'test-model', '--plugin-root', mockPluginRoot],
+      tempDir,
+      mockHome
+    );
+
+    // Check debug log for combined args
+    const logPath = path.join(tempDir, '.vcp', 'dev-buddy.log');
+    expect(fs.existsSync(logPath)).toBe(true);
+
+    const logContent = fs.readFileSync(logPath, 'utf8');
+    expect(logContent).toContain('--model=test-model');
+    expect(logContent).toContain('--effort=high');
+  });
+
+  test('reasoning_effort defaults to medium when not set in preset', async () => {
+    fs.writeFileSync(
+      path.join(mockHome, '.vcp', 'config.json'),
+      JSON.stringify({ debug: true })
+    );
+    fs.writeFileSync(
+      path.join(tempDir, '.task', 'plan-refined.json'),
+      JSON.stringify({ id: 'test', steps: [] })
+    );
+
+    await runScript(
+      ['--type', 'plan', '--preset', MOCK_PRESET_NAME, '--model', 'test-model', '--plugin-root', mockPluginRoot],
+      tempDir,
+      mockHome
+    );
+
+    const logPath = path.join(tempDir, '.vcp', 'dev-buddy.log');
+    expect(fs.existsSync(logPath)).toBe(true);
+
+    const logContent = fs.readFileSync(logPath, 'utf8');
+    // preset_loaded should show reasoning_effort=medium (default)
+    expect(logContent).toContain('reasoning_effort=medium');
+  });
+
+  // ================== DEBUG LOGGING ==================
+
+  test('writes to .vcp/dev-buddy.log when debug is enabled', async () => {
+    fs.writeFileSync(
+      path.join(mockHome, '.vcp', 'config.json'),
+      JSON.stringify({ debug: true })
+    );
+    fs.writeFileSync(
+      path.join(tempDir, '.task', 'plan-refined.json'),
+      JSON.stringify({ id: 'test', steps: [] })
+    );
+
+    await runScript(
+      ['--type', 'plan', '--preset', MOCK_PRESET_NAME, '--model', 'test-model', '--plugin-root', mockPluginRoot],
+      tempDir,
+      mockHome
+    );
+
+    const logPath = path.join(tempDir, '.vcp', 'dev-buddy.log');
+    expect(fs.existsSync(logPath)).toBe(true);
+
+    const logContent = fs.readFileSync(logPath, 'utf8');
+    expect(logContent).toContain('[preset_loaded]');
+    expect(logContent).toContain('cli-executor');
+  });
+
+  test('does not write .vcp/dev-buddy.log when debug is disabled', async () => {
+    // No debug config file at all
+    fs.writeFileSync(
+      path.join(tempDir, '.task', 'plan-refined.json'),
+      JSON.stringify({ id: 'test', steps: [] })
+    );
+
+    await runScript(
+      ['--type', 'plan', '--preset', MOCK_PRESET_NAME, '--model', 'test-model', '--plugin-root', mockPluginRoot],
+      tempDir,
+      mockHome
+    );
+
+    const logPath = path.join(tempDir, '.vcp', 'dev-buddy.log');
+    expect(fs.existsSync(logPath)).toBe(false);
   });
 });

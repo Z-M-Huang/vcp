@@ -87,7 +87,7 @@ Interpret `$ARGUMENTS` as a natural language command. Determine the **action** a
 |--------|--------|-------------|
 | **show** | global config | Display global config |
 | **set standards_url** | URL | Change the standards manifest URL (must start with `https://`) |
-| **set debug** | true/false | Enable or disable diagnostic logging to `.vcp-log` in the project root |
+| **set debug** | true/false | Enable or disable diagnostic logging to `.vcp/vcp.log` in the project root |
 | **set default severity** | level | Set `defaults.severity` |
 | **set default scopes** | scope list | Set `defaults.scopes` |
 | **set default compliance** | framework list | Set `defaults.compliance` |

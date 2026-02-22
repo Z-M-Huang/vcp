@@ -33,6 +33,7 @@ import os from 'os';
 import { readJson as _readJsonBase, fileExists, writeJson } from './pipeline-utils.ts';
 import { readPresets } from './preset-utils.ts';
 import type { CliPreset } from '../types/presets.ts';
+import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
 
 /** Typed wrapper — cli-executor expects Record<string, unknown> | null */
 function readJson(filePath: string): Record<string, unknown> | null {
@@ -301,7 +302,7 @@ function buildReviewPrompt(args: ParsedArgs, isResume: boolean): string {
     const criteriaInstruction = args.type === 'plan'
       ? 'Map each acceptance criterion to plan steps.'
       : 'Verify implementation evidence for each acceptance criterion.';
-    return `${readFilesFirst}\n\nReview ${inputFile} against ${standardsPath}.${userStoryRef} Final gate review for ${args.type === 'plan' ? 'plan approval' : 'code quality'}. ${criteriaInstruction} Only set needs_clarification if you have a genuine question for the user after reading the files — NOT because you haven't read them yet.`;
+    return `${readFilesFirst}\n\nReview ${inputFile} against ${standardsPath}.${userStoryRef} Final gate review for ${args.type === 'plan' ? 'plan approval' : 'code quality'}. ${criteriaInstruction} Only set needs_clarification if you have a genuine question for the user after reading the files — NOT because you have not read them yet.`;
   }
 }
 
@@ -368,16 +369,17 @@ function buildCommand(args: ParsedArgs, preset: CliPreset, isResume: boolean): C
     ? preset.resume_args_template
     : preset.args_template;
 
-  const expandedTemplate = substitutePlaceholders(template, placeholders);
-  const tokenized = tokenizeTemplate(expandedTemplate);
+  const tokenized = tokenizeTemplate(template);
 
   if (!tokenized) {
+    // Fire-and-forget — best-effort diagnostic logging
+    vcpLog(logProjectRoot, { source: 'cli-executor', event: 'tokenize_failed', decision: 'error', details: template }, debugEnabled);
     throw new Error('Failed to tokenize args_template — unbalanced quotes');
   }
 
   return {
     command: preset.command,
-    args: tokenized,
+    args: tokenized.map(token => substitutePlaceholders(token, placeholders)),
   };
 }
 
@@ -538,11 +540,15 @@ function validateOutput(reviewType: string, outputFileOverride: string | null = 
 
 let currentReviewType: string | null = null;
 let currentOutputFileOverride: string | null = null;
+let debugEnabled = false;
+let logProjectRoot = '';
 
 async function main(): Promise<void> {
   const args = parseArgs();
   currentReviewType = args.type;
   currentOutputFileOverride = args.outputFile;
+  debugEnabled = await isDebugEnabled();
+  logProjectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const platform = getPlatform();
 
   // Validate preset name is provided
@@ -562,6 +568,11 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ event: 'error', phase: 'preset_loading', error: msg }));
     process.exit(1);
   }
+
+  await vcpLog(logProjectRoot, {
+    source: 'cli-executor', event: 'preset_loaded', decision: 'info',
+    details: `preset=${args.preset} command=${preset.command} reasoning_effort=${preset.reasoning_effort || 'medium'}`,
+  }, debugEnabled);
 
   const timeoutMs = preset.timeout_ms || DEFAULT_TIMEOUT_MS;
 
@@ -598,10 +609,19 @@ async function main(): Promise<void> {
     cmdConfig = buildCommand(args, preset, isResume);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    await vcpLog(logProjectRoot, {
+      source: 'cli-executor', event: 'command_error', decision: 'error',
+      details: msg,
+    }, debugEnabled);
     writeError(msg, 'command_building', args.type, args.outputFile);
     console.log(JSON.stringify({ event: 'error', phase: 'command_building', error: msg }));
     process.exit(1);
   }
+
+  await vcpLog(logProjectRoot, {
+    source: 'cli-executor', event: 'command_built', decision: 'info',
+    details: JSON.stringify(cmdConfig.args),
+  }, debugEnabled);
 
   console.log(JSON.stringify({
     event: 'invoking_cli',
@@ -611,6 +631,12 @@ async function main(): Promise<void> {
   }));
 
   let result = await runCommand(cmdConfig, timeoutMs);
+
+  await vcpLog(logProjectRoot, {
+    source: 'cli-executor', event: 'command_result',
+    decision: result.success ? 'info' : 'error',
+    details: `success=${result.success} code=${result.code}`,
+  }, debugEnabled);
 
   // Handle session expired - retry without resume
   if (!result.success && result.error === 'session_expired' && isResume) {

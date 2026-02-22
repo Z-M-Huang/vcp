@@ -8,7 +8,6 @@
 export interface ApiPreset {
   type: 'api';
   name: string;
-  description?: string;
   base_url: string;
   api_key: string;
   models: string[];
@@ -17,7 +16,6 @@ export interface ApiPreset {
 export interface SubscriptionPreset {
   type: 'subscription';
   name: string;
-  description?: string;
 }
 
 /**
@@ -33,7 +31,6 @@ export interface SubscriptionPreset {
 export interface CliPreset {
   type: 'cli';
   name: string;
-  description?: string;
   /** The CLI command to invoke (e.g., 'codex'). */
   command: string;
   /** Command template string with placeholders (e.g., 'exec --full-auto --model {model} {prompt}'). */

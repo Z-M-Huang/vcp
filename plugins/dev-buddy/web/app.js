@@ -44,7 +44,6 @@ function devBuddyApp() {
       key: '',
       type: 'subscription',
       name: '',
-      description: '',
       base_url: '',
       api_key: '',
       models_str: '',
@@ -133,7 +132,6 @@ function devBuddyApp() {
         body = {
           type: 'api',
           name: this.newPreset.name,
-          description: this.newPreset.description || undefined,
           base_url: this.newPreset.base_url,
           api_key: this.newPreset.api_key,
           models,
@@ -142,7 +140,6 @@ function devBuddyApp() {
         body = {
           type: 'subscription',
           name: this.newPreset.name,
-          description: this.newPreset.description || undefined,
         };
       } else if (this.newPreset.type === 'cli') {
         const models = this.newPreset.cli_models_str
@@ -151,7 +148,6 @@ function devBuddyApp() {
         body = {
           type: 'cli',
           name: this.newPreset.name,
-          description: this.newPreset.description || undefined,
           command: this.newPreset.command,
           args_template: this.newPreset.args_template,
           resume_args_template: this.newPreset.resume_args_template || undefined,
@@ -245,7 +241,6 @@ function devBuddyApp() {
       this.newPreset.key = name;
       this.newPreset.type = preset.type;
       this.newPreset.name = preset.name;
-      this.newPreset.description = preset.description || '';
 
       if (preset.type === 'api') {
         this.newPreset.base_url = preset.base_url || '';
@@ -282,7 +277,6 @@ function devBuddyApp() {
         key: '',
         type: 'subscription',
         name: '',
-        description: '',
         base_url: '',
         api_key: '',
         models_str: '',

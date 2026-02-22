@@ -11,6 +11,11 @@ import os from 'os';
 import type { Preset, PresetConfig, ApiPreset, SubscriptionPreset, CliPreset } from '../types/presets.ts';
 import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 
+/** Valid placeholders for CLI args_template and resume_args_template. */
+export const VALID_CLI_PLACEHOLDERS = new Set([
+  'model', 'output_file', 'schema_path', 'prompt', 'reasoning_effort',
+]);
+
 // Cross-platform config directory: ~/.vcp/
 export const CONFIG_DIR = path.join(os.homedir(), '.vcp');
 export const PRESETS_PATH = path.join(CONFIG_DIR, 'ai-presets.json');
@@ -39,7 +44,6 @@ export function createDefaultPresets(): PresetConfig {
       'anthropic-subscription': {
         type: 'subscription',
         name: 'Anthropic Subscription',
-        description: 'Default Claude subscription via Task tool',
       },
     },
   };
@@ -84,6 +88,33 @@ function validateModelNames(models: unknown[], label: string): void {
 }
 
 /**
+ * Validate a CLI template string for balanced braces and known placeholders.
+ * Returns an error message string, or null if valid.
+ */
+export function validateCliTemplate(template: string, fieldName: string): string | null {
+  const validList = [...VALID_CLI_PLACEHOLDERS].join(', ');
+  let i = 0;
+  while (i < template.length) {
+    if (template[i] === '{') {
+      const closeIdx = template.indexOf('}', i + 1);
+      if (closeIdx === -1) {
+        return `${fieldName}: unbalanced '{' at position ${i}. Missing closing '}'.`;
+      }
+      const name = template.slice(i + 1, closeIdx);
+      if (!VALID_CLI_PLACEHOLDERS.has(name)) {
+        return `${fieldName}: unknown placeholder '{${name}}'. Valid placeholders: ${validList}`;
+      }
+      i = closeIdx + 1;
+    } else if (template[i] === '}') {
+      return `${fieldName}: unexpected '}' at position ${i} without matching '{'.`;
+    } else {
+      i++;
+    }
+  }
+  return null;
+}
+
+/**
  * Validate a single preset object at runtime.
  * Returns the typed Preset if valid, throws on invalid input.
  */
@@ -125,9 +156,17 @@ export function validatePreset(preset: unknown): Preset {
       if (typeof p.args_template !== 'string' || p.args_template.trim() === '') {
         throw new Error('CLI preset must have a non-empty args_template string');
       }
+      {
+        const templateErr = validateCliTemplate(p.args_template as string, 'args_template');
+        if (templateErr) throw new Error(templateErr);
+      }
       // resume_args_template is optional but must be string if present
       if (p.resume_args_template !== undefined && typeof p.resume_args_template !== 'string') {
         throw new Error('CLI preset resume_args_template must be a string');
+      }
+      if (typeof p.resume_args_template === 'string' && p.resume_args_template.trim() !== '') {
+        const templateErr = validateCliTemplate(p.resume_args_template as string, 'resume_args_template');
+        if (templateErr) throw new Error(templateErr);
       }
       // supports_resume is optional but must be boolean if present
       if (p.supports_resume !== undefined && typeof p.supports_resume !== 'boolean') {
