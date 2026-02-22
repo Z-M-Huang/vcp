@@ -370,6 +370,12 @@ export async function spawnSessionManagers(
       throw new Error(`Session manager for '${presetName}' reported status: ${startupJson.status}`);
     }
 
+    // Detach child process so this parent (pipeline-config.ts) can exit
+    // while the session manager keeps running as an independent process.
+    // Also release the stdout reader — we only needed the startup JSON line.
+    reader.releaseLock();
+    proc.unref();
+
     const mapping: SessionPortMapping = {
       preset_name: presetName,
       port: startupJson.port,
@@ -476,7 +482,10 @@ if (import.meta.main) {
         validateProviderReferences(config);
         const mappings = await spawnSessionManagers(config, cwd);
         console.log(`[Pipeline] Spawned ${mappings.length} session manager(s)`);
-        break;
+        // Explicit exit — inherited stderr pipes from child processes can keep
+        // the event loop alive even after unref(). Force clean exit.
+        process.exit(0);
+        break; // unreachable, but satisfies lint
       }
 
       case 'shutdown': {

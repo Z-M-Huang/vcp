@@ -257,6 +257,7 @@ function devBuddyApp() {
           this.newPreset.api_key = '';
         }
         this.newPreset.models_str = Array.isArray(preset.models) ? preset.models.join(', ') : '';
+        this.newPreset.timeout_minutes = preset.timeout_ms ? String(Math.round(preset.timeout_ms / 60000)) : '';
       } else if (preset.type === 'cli') {
         this.newPreset.command = preset.command || '';
         this.newPreset.args_template = preset.args_template || '';
