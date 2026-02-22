@@ -42,6 +42,7 @@ Other tools scan code *after* your AI writes it. VCP prevents bad code *before* 
 - [Organization-Wide Standards](#organization-wide-standards)
 - [Configuration](#configuration)
 - [Core Philosophy](#core-philosophy)
+- [Documentation](#documentation)
 - [How to Contribute](#how-to-contribute)
 - [Repo Structure](#repo-structure)
 - [References](#references)
@@ -50,6 +51,8 @@ Other tools scan code *after* your AI writes it. VCP prevents bad code *before* 
 ---
 
 ## Quick Start
+
+**Prerequisites:** [Claude Code](https://code.claude.com/) and [Bun](https://bun.sh/). See the [Getting Started guide](https://github.com/Z-M-Huang/vcp/wiki/Getting-Started) for full setup.
 
 ```bash
 # Add the VCP marketplace
@@ -81,6 +84,10 @@ Use VCP alone for standards enforcement. Add Dev Buddy when you want structured 
 
 ## Why This Matters
 
+<div align="center">
+<img src="assets/why-vcp.png" alt="Without guardrails vs With VCP" width="800">
+</div>
+
 AI coding assistants produce code fast. They also produce code that's **2.74x more likely to contain security vulnerabilities**, **40% more complex**, and architecturally unsound at scale:
 
 | Problem | Data | Source |
@@ -99,18 +106,9 @@ VCP breaks this cycle by making the AI aware of engineering principles *before* 
 
 ## VCP — Three-Layer Enforcement
 
-```
-┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
-│  Layer 1: PREVENT      │  │  Layer 2: SCAN         │  │  Layer 3: BLOCK        │
-│                        │  │                        │  │                        │
-│  100+ rules injected   │  │  7 skills scan against │  │  19 patterns block     │
-│  at session start.     │  │  32 standards with     │  │  9 CWE categories on   │
-│  AI knows the rules    │  │  AI-driven analysis.   │  │  every Write/Edit/Bash │
-│  WHILE writing code.   │  │  Traces data flow,     │  │  call. Code is blocked │
-│                        │  │  understands intent.   │  │  BEFORE reaching disk. │
-│  ⟶ Prevention          │  │  ⟶ Deep analysis       │  │  ⟶ Instant rejection   │
-└────────────────────────┘  └────────────────────────┘  └────────────────────────┘
-```
+<div align="center">
+<img src="assets/three-layer-enforcement.png" alt="Three-Layer Enforcement: Prevent, Scan, Block" width="800">
+</div>
 
 No single layer catches everything. Layer 1 prevents violations at the source. Layer 3 blocks the most dangerous patterns instantly. Layer 2 catches the nuanced issues through deep analysis. Together they provide defense in depth.
 
@@ -167,6 +165,10 @@ VCP standards are mapped against authoritative security frameworks:
 ---
 
 ## Dev Buddy — Multi-AI Pipeline
+
+<div align="center">
+<img src="assets/dev-buddy-pipeline.png" alt="Multi-AI Pipeline Orchestration" width="800">
+</div>
 
 One AI writing and reviewing its own code is like grading your own homework. Dev Buddy orchestrates **multiple AI models** through structured development pipelines — with task-based dependencies that literally prevent skipping stages.
 
@@ -399,6 +401,19 @@ Manage via natural language with `/vcp-config`:
 3. **Fix the root cause, not the symptom.** Trace bugs to where they originate. Break the death spiral.
 4. **Principled, not prescriptive.** Explain WHY, not just WHAT. Allow alternatives that satisfy the principle.
 5. **AI-parseable.** Standards are structured for machine consumption — consistent format, unambiguous rules.
+
+---
+
+## Documentation
+
+Full documentation is on the **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)**:
+
+- **[Getting Started](https://github.com/Z-M-Huang/vcp/wiki/Getting-Started)** — Prerequisites, installation, first scan
+- **[Configuration](https://github.com/Z-M-Huang/vcp/wiki/Configuration)** — Scopes, compliance, severity, ignore rules
+- **[Skills Reference](https://github.com/Z-M-Huang/vcp/wiki/Skills-Reference)** — All 10 skills with usage and examples
+- **[Dev Buddy Quick Start](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Quick-Start)** — Multi-AI pipeline setup and first run
+- **[Dev Buddy Configuration](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Configuration)** — Pipeline stages, providers, models
+- **[FAQ](https://github.com/Z-M-Huang/vcp/wiki/FAQ)** — Common questions and troubleshooting
 
 ---
 
