@@ -4,7 +4,7 @@
 
 # VCP — Vibe Coding Protocol
 
-**Make AI-generated code secure, maintainable, and architecturally sound from the first line.**
+**The security gate for AI-generated code.**
 
 ![Visitors](https://visitor-badge.laobi.icu/badge?page_id=Z-M-Huang.vcp&style=flat-square)
 ![GitHub release](https://img.shields.io/github/v/release/Z-M-Huang/vcp?style=flat-square)
@@ -20,27 +20,26 @@
 
 </div>
 
-VCP is a standards enforcement protocol for AI coding assistants. It injects security and architecture rules directly into the AI's context, blocks dangerous patterns in real time, and provides deep on-demand analysis — so the code your AI writes follows the same principles a senior engineer would enforce in code review.
+Other tools scan code *after* your AI writes it. VCP prevents bad code *before* it reaches disk — injecting 100+ rules into the AI's context, blocking dangerous patterns in real time, and providing deep analysis on demand.
+
+```
+❌ VCP Security Gate — BLOCKED:
+   CWE-798: Hardcoded secret detected. Use environment variables or a secret manager.
+```
 
 ---
 
 ## Table of Contents
 
-- [Why VCP Matters](#why-vcp-matters)
-- [What You Get](#what-you-get)
-  - [Prevention, Not Just Detection](#prevention-not-just-detection)
-  - [Coverage Backed by Industry Standards](#coverage-backed-by-industry-standards)
-  - [Organization-Wide Enforcement](#organization-wide-enforcement)
-- [How It Works](#how-it-works)
-  - [Layer 1: Proactive Context](#layer-1-proactive-context--prevent-before-writing)
-  - [Layer 2: On-Demand Scanning](#layer-2-on-demand-scanning--deep-analysis)
-  - [Layer 3: Real-Time Blocking](#layer-3-real-time-blocking--stop-dangerous-code-instantly)
 - [Quick Start](#quick-start)
+- [Two Plugins, One Protocol](#two-plugins-one-protocol)
+- [Why This Matters](#why-this-matters)
+- [VCP — Three-Layer Enforcement](#vcp--three-layer-enforcement)
+- [Dev Buddy — Multi-AI Pipeline](#dev-buddy--multi-ai-pipeline)
+- [Standards Coverage](#standards-coverage)
 - [Organization-Wide Standards](#organization-wide-standards)
 - [Configuration](#configuration)
-- [Standards Coverage](#standards-coverage)
 - [Core Philosophy](#core-philosophy)
-- [Roadmap](#roadmap)
 - [How to Contribute](#how-to-contribute)
 - [Repo Structure](#repo-structure)
 - [References](#references)
@@ -48,9 +47,39 @@ VCP is a standards enforcement protocol for AI coding assistants. It injects sec
 
 ---
 
-## Why VCP Matters
+## Quick Start
 
-AI coding assistants produce code fast. They also produce code that's **2.74x more likely to contain security vulnerabilities**, **40% more complex**, and architecturally unsound at scale. The research is consistent:
+```bash
+# Add the VCP marketplace
+/plugin marketplace add Z-M-Huang/vcp
+
+# Install the plugin
+/plugin install vcp@vcp
+
+# Initialize your project
+/vcp-init
+```
+
+That's it. Standards are injected at session start, dangerous patterns are blocked on every write, and 7 scanning skills are available on demand.
+
+---
+
+## Two Plugins, One Protocol
+
+VCP ships two complementary plugins:
+
+| Plugin | What It Does | Install |
+|--------|-------------|---------|
+| **VCP** | Standards enforcement — 32 standards, real-time blocking, 7 scanning skills | `/plugin install vcp@vcp` |
+| **Dev Buddy** | Multi-AI pipeline — configurable stages, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
+
+Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.
+
+---
+
+## Why This Matters
+
+AI coding assistants produce code fast. They also produce code that's **2.74x more likely to contain security vulnerabilities**, **40% more complex**, and architecturally unsound at scale:
 
 | Problem | Data | Source |
 |---------|------|--------|
@@ -66,35 +95,22 @@ VCP breaks this cycle by making the AI aware of engineering principles *before* 
 
 ---
 
-## What You Get
+## VCP — Three-Layer Enforcement
 
-### Prevention, Not Just Detection
+```
+┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
+│  Layer 1: PREVENT      │  │  Layer 2: SCAN         │  │  Layer 3: BLOCK        │
+│                        │  │                        │  │                        │
+│  100+ rules injected   │  │  7 skills scan against │  │  19 patterns block     │
+│  at session start.     │  │  32 standards with     │  │  9 CWE categories on   │
+│  AI knows the rules    │  │  AI-driven analysis.   │  │  every Write/Edit/Bash │
+│  WHILE writing code.   │  │  Traces data flow,     │  │  call. Code is blocked │
+│                        │  │  understands intent.   │  │  BEFORE reaching disk. │
+│  ⟶ Prevention          │  │  ⟶ Deep analysis       │  │  ⟶ Instant rejection   │
+└────────────────────────┘  └────────────────────────┘  └────────────────────────┘
+```
 
-Most code quality tools scan after the fact. VCP works at the source — the AI's context window:
-
-- **Standards injected at session start** — The AI internalizes 100+ rules covering security, architecture, root cause analysis, testing, error handling, code quality, dependency management, and secure defaults while it writes code
-- **Real-time blocking** — 19 regex patterns across 9 CWEs block hardcoded secrets, SQL injection, eval injection, XSS, insecure deserialization, XPath injection, prototype pollution, and shell obfuscation *before code is written to disk*
-- **Deep analysis on demand** — AI-driven scanning traces data flow across variables and understands semantic intent — catches what regex cannot
-
-### Coverage Backed by Industry Standards
-
-VCP standards are mapped against authoritative security frameworks:
-
-- **OWASP Top 10:2025** — All 10 categories covered
-- **CWE Top 25:2024** — 19/25 covered (6 uncovered are memory-safety, out of scope for managed languages)
-- **OWASP API Security Top 10:2023** — All 10 categories addressed
-- **OWASP ASVS v5.0** — 15/17 chapters covered
-- **OWASP Docker Security** — 11/13 controls covered
-
-### Organization-Wide Enforcement
-
-VCP's manifest system is designed for teams and organizations. You can host your own standards alongside or instead of the defaults — enforcing company-specific rules, internal security policies, or regulatory requirements across every project and every developer using AI coding tools.
-
----
-
-## How It Works
-
-VCP enforces standards through three complementary layers:
+No single layer catches everything. Layer 1 prevents violations at the source. Layer 3 blocks the most dangerous patterns instantly. Layer 2 catches the nuanced issues through deep analysis. Together they provide defense in depth.
 
 ### Layer 1: Proactive Context — Prevent Before Writing
 
@@ -136,38 +152,134 @@ A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking da
 
 </details>
 
-**No single layer catches everything.** Layer 1 prevents violations at the source. Layer 3 blocks the most dangerous patterns instantly. Layer 2 catches the nuanced issues through deep analysis. Together they provide defense in depth.
+### Coverage Backed by Industry Standards
+
+VCP standards are mapped against authoritative security frameworks:
+
+- **OWASP Top 10:2025** — All 10 categories covered
+- **CWE Top 25:2024** — 19/25 covered (6 uncovered are memory-safety, out of scope for managed languages)
+- **OWASP API Security Top 10:2023** — All 10 categories addressed
+- **OWASP ASVS v5.0** — 15/17 chapters covered
+- **OWASP Docker Security** — 11/13 controls covered
 
 ---
 
-## Quick Start
+## Dev Buddy — Multi-AI Pipeline
 
-```bash
-# Add the VCP marketplace
-/plugin marketplace add Z-M-Huang/vcp
+One AI writing and reviewing its own code is like grading your own homework. Dev Buddy orchestrates **multiple AI models** through structured development pipelines — with task-based dependencies that literally prevent skipping stages.
 
-# Install the plugin
-/plugin install vcp@vcp
+### Two Pipelines
 
-# Initialize your project (creates ~/.vcp/config.json + .vcp.json)
-/vcp-init
+| Pipeline | Command | Phases |
+|----------|---------|--------|
+| **Feature Development** | `/dev-buddy-feature-implement` | Requirements → Planning → Plan Reviews → Implementation → Code Reviews |
+| **Bug Fix** | `/dev-buddy-bug-fix` | Root Cause Analysis → Plan Validation → Implementation → Code Reviews |
+
+### Cross-AI Review Gates
+
+Different AI models review each other's work at each phase. A typical pipeline:
+
+```
+Claude Opus plans ──→ Claude Sonnet reviews ──→ Claude Opus reviews ──→ Codex reviews
+                                                                            │
+                      Claude Sonnet implements ◀────────────────────────────┘
+                            │
+                      Claude Sonnet reviews ──→ Claude Opus reviews ──→ Codex reviews
 ```
 
-Once initialized:
-- Standards are injected into the AI's context automatically at session start
-- The security gate blocks dangerous patterns on every write
-- Skills (`/vcp-audit`, `/vcp-pre-commit-review`, etc.) are available on demand
-- A stop reminder fires before commits, prompting you to run VCP checks
+Each review is independent — reviewers don't see each other's verdicts. Cross-model review catches issues that single-AI self-review misses.
+
+### Data-Driven Enforcement
+
+Pipeline stages aren't instructions the AI might skip — they're **task dependencies** enforced by the system:
+
+| Instruction-Based (fragile) | Task-Based (VCP) |
+|-----------------------------|-------------------|
+| "Run Sonnet → Opus → Codex" | `blockedBy` prevents Codex until Opus completes |
+| AI can skip "redundant" steps | `TaskList()` only shows unblocked tasks |
+| No audit trail | Complete task history with metadata |
+| Hidden progress | Real-time task progress visible to user |
+
+### Team-Based Requirements
+
+The feature pipeline spawns 5 specialist agents that explore your codebase in parallel before a single line of code is planned:
+
+| Specialist | Focus |
+|------------|-------|
+| Technical Analyst | Existing codebase, patterns, dependencies, files to modify |
+| UX/Domain Analyst | User workflows, edge cases, accessibility |
+| Security Analyst | Threat model, OWASP relevance, non-functional security requirements |
+| Performance Analyst | Load impact, scalability, bottlenecks, caching |
+| Architecture Analyst | Design patterns, SOLID principles, maintainability |
+
+Their findings inform requirements gathering — producing richer, more complete specifications from the start.
+
+### Configurable Pipeline
+
+The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. Each stage specifies a type, provider, and model. Add, remove, or reorder stages. Swap AI providers per stage. Use the web portal (`/dev-buddy-config`) or edit JSON directly.
+
+<details>
+<summary><strong>Example: feature pipeline with Codex final gates</strong> — click to expand</summary>
+
+```json
+{
+  "feature_pipeline": [
+    { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
+    { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
+    { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
+    { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus" },
+    { "type": "plan-review", "provider": "my-codex-preset", "model": "o3" },
+    { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
+    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" },
+    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus" },
+    { "type": "code-review", "provider": "my-codex-preset", "model": "o3" }
+  ]
+}
+```
+
+</details>
+
+### Quick Start
+
+```bash
+# Install dev-buddy alongside VCP
+/plugin install vcp@dev-buddy
+
+# Feature development pipeline
+/dev-buddy-feature-implement Add user authentication with JWT
+
+# Bug fix pipeline
+/dev-buddy-bug-fix Login fails when email contains a plus sign
+
+# Configure pipeline stages and providers via web portal
+/dev-buddy-config
+```
+
+---
+
+## Standards Coverage
+
+32 standards across 9 scopes:
+
+| Scope | Standards | What They Cover |
+|-------|-----------|----------------|
+| **Core** (always active) | 9 | Security, architecture, root cause analysis, code quality, error handling, testing, dependency management, secure defaults, API misuse prevention |
+| **Web Frontend** | 4 | XSS prevention, CSP, accessibility (WCAG 2.2), performance, component structure |
+| **Web Backend** | 6 | Injection prevention, API design, data access, WebSocket/SSE, caching security, backend structure |
+| **Database** | 2 | Encryption (TDE, column-level, key management), schema security (RLS, masking, audit) |
+| **Mobile** | 2 | Keychain/KeyStore, certificate pinning, deep links, biometrics, attestation, platform configuration |
+| **Desktop** | 1 | Electron context isolation, Tauri capabilities, IPC validation, code signing |
+| **CLI** | 1 | Shell injection, argument injection, exit codes, signal handling |
+| **DevOps** | 4 | Containers, CI/CD, Infrastructure as Code, Kubernetes |
+| **Compliance** | 3 | GDPR/CCPA, PCI DSS v4.0, HIPAA |
+
+All standards follow a consistent format: **WHY** (the principle), **WHAT** (numbered actionable rules), **HOW** (code examples and anti-patterns). See [`standards/README.md`](standards/README.md) for the format specification.
 
 ---
 
 ## Organization-Wide Standards
 
-VCP's configuration system supports custom standards manifests, enabling organizations to enforce their own rules across all projects and developers.
-
-### How It Works
-
-The manifest is a two-level structure: a **root manifest** points to **scope manifests**, which point to **individual standards**. All references use full HTTPS URLs, so standards can be hosted anywhere — GitHub, internal servers, CDNs, or any mix.
+VCP's manifest system lets organizations enforce their own rules across all projects and developers — alongside or instead of VCP defaults.
 
 ```
 Root Manifest (manifest.json)
@@ -243,21 +355,19 @@ Set the URL globally (applies to all projects) or per-project:
 
 </details>
 
-### What This Enables
+**What this enables:**
 
-- **Consistent enforcement** — Every developer using AI coding tools follows the same rules, regardless of which project they're in
+- **Consistent enforcement** — Every developer using AI coding tools follows the same rules
 - **Mix and match** — Include VCP's default standards alongside your own, or replace them entirely
-- **Central updates** — Update a standard once, and every project picks up the change on next session start
-- **Scope targeting** — Custom scopes can be applied always, per-scope toggle, or per-compliance framework
+- **Central updates** — Update a standard once, every project picks it up on next session
 - **Schema validation** — Manifests are validated against [published JSON schemas](schemas/) for correctness
-
-See [`schemas/vcp-manifest.schema.json`](schemas/vcp-manifest.schema.json) and [`schemas/vcp-scope-manifest.schema.json`](schemas/vcp-scope-manifest.schema.json) for the full manifest contract.
 
 ---
 
 ## Configuration
 
-VCP uses two config files:
+<details>
+<summary><strong>VCP uses two config files</strong> — click to expand</summary>
 
 | File | Scope | Purpose |
 |------|-------|---------|
@@ -265,9 +375,6 @@ VCP uses two config files:
 | `.vcp.json` | Project | Scopes, compliance frameworks, severity threshold, frameworks, exclude patterns, ignore rules |
 
 Manage via natural language with `/vcp-config`:
-
-<details>
-<summary><strong>Configuration examples</strong> — click to expand</summary>
 
 ```
 /vcp-config ignore core-architecture          # Suppress a standard
@@ -283,26 +390,6 @@ Manage via natural language with `/vcp-config`:
 
 ---
 
-## Standards Coverage
-
-32 standards across 9 scopes:
-
-| Scope | Standards | What They Cover |
-|-------|-----------|----------------|
-| **Core** (always active) | 9 | Security, architecture, root cause analysis, code quality, error handling, testing, dependency management, secure defaults, API misuse prevention |
-| **Web Frontend** | 4 | XSS prevention, CSP, accessibility (WCAG 2.2), performance, component structure |
-| **Web Backend** | 6 | Injection prevention, API design, data access, WebSocket/SSE, caching security, backend structure |
-| **Database** | 2 | Encryption (TDE, column-level, key management), schema security (RLS, masking, audit) |
-| **Mobile** | 2 | Keychain/KeyStore, certificate pinning, deep links, biometrics, attestation, platform configuration |
-| **Desktop** | 1 | Electron context isolation, Tauri capabilities, IPC validation, code signing |
-| **CLI** | 1 | Shell injection, argument injection, exit codes, signal handling |
-| **DevOps** | 4 | Containers, CI/CD, Infrastructure as Code, Kubernetes |
-| **Compliance** | 3 | GDPR/CCPA, PCI DSS v4.0, HIPAA |
-
-All standards follow a consistent format: **WHY** (the principle), **WHAT** (numbered actionable rules), **HOW** (code examples and anti-patterns). See [`standards/README.md`](standards/README.md) for the format specification.
-
----
-
 ## Core Philosophy
 
 1. **Security comes first.** No feature is worth a vulnerability.
@@ -310,30 +397,6 @@ All standards follow a consistent format: **WHY** (the principle), **WHAT** (num
 3. **Fix the root cause, not the symptom.** Trace bugs to where they originate. Break the death spiral.
 4. **Principled, not prescriptive.** Explain WHY, not just WHAT. Allow alternatives that satisfy the principle.
 5. **AI-parseable.** Standards are structured for machine consumption — consistent format, unambiguous rules.
-
-### Non-Goals
-
-VCP governs **code that AI agents write**, not the surrounding infrastructure or policies:
-
-- Repository controls (branch protection, CODEOWNERS, MFA)
-- CI/CD operational config (deployment gates, approval workflows)
-- SBOM generation and signed builds
-- Incident response and SLAs
-- Organizational security policies (training, access reviews)
-
-If a control doesn't affect what code gets written, it's not a VCP standard.
-
----
-
-## Roadmap
-
-See [GitHub Issues](https://github.com/Z-M-Huang/vcp/issues) for the full backlog. Key upcoming items:
-
-- [ ] [Conformance Model](https://github.com/Z-M-Huang/vcp/issues/25) — MUST/SHOULD/MAY with objective pass/fail criteria
-- [ ] [Agentic AI Security](https://github.com/Z-M-Huang/vcp/issues/26) — Prompt injection, tool boundaries, human approval gates
-- [ ] [Codex CLI Support](https://github.com/Z-M-Huang/vcp/issues/19) — Adapt for OpenAI Codex CLI
-- [ ] [Gemini CLI Support](https://github.com/Z-M-Huang/vcp/issues/20) — Adapt for Google Gemini CLI
-- [ ] [Migration Plan Tooling](https://github.com/Z-M-Huang/vcp/issues/21) — Analyze existing codebases against VCP
 
 ---
 
@@ -364,7 +427,8 @@ vcp/
 │   ├── devops-*.md      # Containers, CI/CD, IaC, Kubernetes
 │   └── compliance-*.md  # GDPR, PCI DSS, HIPAA
 ├── schemas/             # JSON schemas for config and manifest validation
-├── plugins/vcp/         # Claude Code plugin (skills, hooks, agents)
+├── plugins/vcp/         # VCP plugin — standards enforcement (skills, hooks, agents)
+├── plugins/dev-buddy/   # Dev Buddy plugin — multi-AI pipeline orchestration
 └── .claude-plugin/      # Marketplace manifest
 ```
 
