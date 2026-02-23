@@ -2,7 +2,7 @@
  * VCP Security Gate — PreToolUse hook for Write|Edit|Bash
  *
  * Blocks tool calls that contain known dangerous code patterns.
- * Reads JSON from stdin, checks content against 19 regex patterns across 8 CWEs.
+ * Reads JSON from stdin, checks content against 21 regex patterns across 9 CWEs.
  *
  * For Write|Edit: checks new_string/content fields. Documentation files (.md, .mdx,
  * .txt, .rst) are exempt — they are never executed and routinely contain anti-pattern
@@ -258,6 +258,26 @@ if (/\["?__proto__"?\]\s*=|\.__proto__\s*=|constructor\s*\[\s*["']prototype["']\
   findings.push({
     cwe: "CWE-1321",
     message: "Prototype pollution pattern detected. Never assign to __proto__ or constructor.prototype.",
+  });
+}
+
+// CWE-1336: Server-Side Template Injection (SSTI) — Jinja2
+// Matches Template() with variable, or .from_string() on a Jinja2 environment variable
+// (env, environment, jinja_env, jinja2_env, j2_env). Does NOT match arbitrary expressions
+// like Environment().from_string() — only named variables to avoid false positives.
+if (/\bTemplate\s*\(\s*(?!["'`])/.test(content) || /\b(env|environment|jinja_env|jinja2_env|j2_env)\s*\.\s*from_string\s*\(\s*(?!["'`])/i.test(content)) {
+  findings.push({
+    cwe: "CWE-1336",
+    message: "Server-side template injection risk: Template() or from_string() with variable input. Use static templates.",
+  });
+}
+
+// CWE-1336: Server-Side Template Injection (SSTI) — Handlebars
+// Matches Handlebars.compile() with a variable argument (not a string literal)
+if (/Handlebars\.compile\s*\(\s*(?!["'`])/.test(content)) {
+  findings.push({
+    cwe: "CWE-1336",
+    message: "Server-side template injection risk: Handlebars.compile() with variable input. Use pre-compiled templates.",
   });
 }
 

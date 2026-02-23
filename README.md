@@ -16,7 +16,7 @@
 ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 
-![32 Standards](https://img.shields.io/badge/Standards-32-blue?style=flat-square)
+![35 Standards](https://img.shields.io/badge/Standards-35-blue?style=flat-square)
 ![11 Scopes](https://img.shields.io/badge/Scopes-11-green?style=flat-square)
 ![OWASP Top 10](https://img.shields.io/badge/OWASP_Top_10-Covered-critical?style=flat-square)
 ![14 Skills](https://img.shields.io/badge/Skills-14-blue?style=flat-square)
@@ -78,7 +78,7 @@ VCP ships two complementary plugins:
 
 | Plugin | What It Does | Install |
 |--------|-------------|---------|
-| **VCP** | Standards enforcement — 32 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
+| **VCP** | Standards enforcement — 35 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
 | **Dev Buddy** | Multi-AI pipeline — configurable stages, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
 
 Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.
@@ -123,7 +123,7 @@ Run `/vcp-context` to re-inject rules at any time (useful after context compacti
 
 ### Layer 2: On-Demand Scanning — Deep Analysis
 
-Skills scan code against 32 standards across 11 scopes using AI-driven analysis:
+Skills scan code against 35 standards across 11 scopes using AI-driven analysis:
 
 | Skill | What It Does |
 |-------|-------------|
@@ -140,7 +140,7 @@ Skills scan code against 32 standards across 11 scopes using AI-driven analysis:
 A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking dangerous patterns before they reach disk:
 
 <details>
-<summary><strong>19 patterns across 8 CWEs</strong> — click to expand</summary>
+<summary><strong>21 patterns across 9 CWEs</strong> — click to expand</summary>
 
 | CWE | What It Catches |
 |-----|----------------|
@@ -151,6 +151,7 @@ A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking da
 | CWE-502 | Insecure deserialization: pickle, unsafe YAML, node-serialize |
 | CWE-643 | XPath injection via string concatenation |
 | CWE-1321 | Prototype pollution via `__proto__` or `constructor.prototype` |
+| CWE-1336 | Server-side template injection (SSTI): Jinja2, Handlebars with variable input |
 | CWE-116 | Encoded data piped to shell execution |
 
 </details>
@@ -266,11 +267,11 @@ The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. 
 
 ## Standards Coverage
 
-32 standards across 11 scopes:
+35 standards across 11 scopes:
 
 | Scope | Standards | What They Cover |
 |-------|-----------|----------------|
-| **Core** (always active) | 9 | Security, architecture, root cause analysis, code quality, error handling, testing, dependency management, secure defaults, API misuse prevention |
+| **Core** (always active) | 12 | Security, architecture, root cause analysis, code quality, error handling, testing, dependency management, secure defaults, API misuse prevention, attack surface analysis, data flow security, concurrency security |
 | **Web Frontend** | 4 | XSS prevention, CSP, accessibility (WCAG 2.2), performance, component structure |
 | **Web Backend** | 6 | Injection prevention, API design, data access, WebSocket/SSE, caching security, backend structure |
 | **Database** | 2 | Encryption (TDE, column-level, key management), schema security (RLS, masking, audit) |

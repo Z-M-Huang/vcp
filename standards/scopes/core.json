@@ -9,6 +9,9 @@
     { "id": "core-testing", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-testing.md", "severity": "high", "tags": ["testing", "mocking", "behavior", "edge-cases", "tdd", "boundaries"] },
     { "id": "core-dependency-management", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-dependency-management.md", "severity": "critical", "tags": ["dependencies", "supply-chain", "slopsquatting", "lockfile", "security", "owasp"] },
     { "id": "core-secure-defaults", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-secure-defaults.md", "severity": "critical", "tags": ["security", "configuration", "defaults", "owasp", "cwe-798", "cwe-1393", "cwe-327", "cwe-276", "cwe-636", "cwe-489", "cwe-1188"] },
-    { "id": "core-api-design-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-api-design-security.md", "severity": "high", "tags": ["security", "api-design", "misuse-prevention", "owasp", "cwe-242", "cwe-676", "cwe-252", "cwe-636", "cwe-843"] }
+    { "id": "core-api-design-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-api-design-security.md", "severity": "high", "tags": ["security", "api-design", "misuse-prevention", "owasp", "cwe-242", "cwe-676", "cwe-252", "cwe-636", "cwe-843"] },
+    { "id": "core-attack-surface", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-attack-surface.md", "severity": "high", "tags": ["security", "attack-surface", "threat-modeling", "ptes", "owasp", "entry-points"] },
+    { "id": "core-data-flow-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-data-flow-security.md", "severity": "critical", "tags": ["security", "taint-analysis", "data-flow", "injection", "source-sink", "owasp", "cwe-20", "cwe-89", "cwe-78", "cwe-79", "cwe-1333"] },
+    { "id": "core-concurrency-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-concurrency-security.md", "severity": "high", "tags": ["security", "concurrency", "race-condition", "toctou", "atomicity", "cwe-367", "cwe-362"] }
   ]
 }

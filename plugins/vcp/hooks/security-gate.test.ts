@@ -43,6 +43,13 @@ const GITHUB_PAT = P("const token = 'ghp_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
 const XPATH_INJECTION = P('.xpa', 'th(f"/users/user[@name=\'{username}\']")');
 const PROTO_POLLUTION = P('obj["__prot', 'o__"] = malicious');
 const PROTO_POLLUTION_DOT = P('obj.constr', 'uctor.prototype.isAdmin = true');
+const JINJA2_TEMPLATE_VAR = P('Tem', 'plate(user_input)');
+const JINJA2_FROM_STRING = P('env.from_st', 'ring(user_data)');
+const HANDLEBARS_COMPILE_VAR = P('Handle', 'bars.compile(userTemplate)');
+const JINJA2_TEMPLATE_LITERAL = P('Tem', 'plate("<h1>Hello</h1>")');
+const HANDLEBARS_COMPILE_LITERAL = P('Handle', 'bars.compile("<div>{{name}}</div>")');
+const EJS_RENDER_FILE = P('ejs.render', 'File("template.ejs", data)');
+const NON_TEMPLATE_FROM_STRING = P('const parser = myLib.from_st', 'ring(userInput)');
 
 // --- Helpers ---
 
@@ -284,6 +291,50 @@ describe("new pattern detection", () => {
 
   test("allows short Bearer placeholder", async () => {
     const r = await runHook(writeInput('"Bearer ${token}"'));
+    expect(r.exitCode).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SSTI detection (CWE-1336)
+// ---------------------------------------------------------------------------
+describe("SSTI detection", () => {
+  test("blocks Jinja2 Template() with variable — CWE-1336", async () => {
+    const r = await runHook(writeInput(JINJA2_TEMPLATE_VAR));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-1336");
+  });
+
+  test("blocks Jinja2 from_string() with variable — CWE-1336", async () => {
+    const r = await runHook(writeInput(JINJA2_FROM_STRING));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-1336");
+  });
+
+  test("blocks Handlebars.compile() with variable — CWE-1336", async () => {
+    const r = await runHook(writeInput(HANDLEBARS_COMPILE_VAR));
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain("CWE-1336");
+  });
+
+  // False-positive avoidance
+  test("allows Template() with string literal", async () => {
+    const r = await runHook(writeInput(JINJA2_TEMPLATE_LITERAL));
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("allows Handlebars.compile() with string literal", async () => {
+    const r = await runHook(writeInput(HANDLEBARS_COMPILE_LITERAL));
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("allows safe ejs.renderFile with file path", async () => {
+    const r = await runHook(writeInput(EJS_RENDER_FILE));
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("allows non-template from_string() call", async () => {
+    const r = await runHook(writeInput(NON_TEMPLATE_FROM_STRING));
     expect(r.exitCode).toBe(0);
   });
 });

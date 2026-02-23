@@ -35,7 +35,7 @@ Scanning skills call `resolve-config.ts` via Bash to resolve project config, and
 | Hook | Event | Trigger | Description |
 |------|-------|---------|-------------|
 | security-context | SessionStart | Always | Injects VCP rule summaries into AI context at session start |
-| security-gate | PreToolUse | `Write\|Edit\|Bash` | Blocks tool calls containing dangerous code patterns (CWE-798, CWE-89, CWE-95, CWE-79, CWE-502, CWE-116) |
+| security-gate | PreToolUse | `Write\|Edit\|Bash` | Blocks tool calls containing dangerous code patterns (CWE-798, CWE-89, CWE-95, CWE-79, CWE-502, CWE-643, CWE-1321, CWE-1336, CWE-116) |
 | test-quality-warning | PostToolUse | `Write\|Edit` | Warns when test files contain mock-abuse patterns (excessive mocking, mock-only assertions, tautological assertions) |
 | stop-reminder | Stop | Always | Reminds the user to run VCP checks before committing |
 
@@ -75,7 +75,7 @@ If `.vcp/config.json` is not found, skills stop and tell the user to run `/vcp-i
 
 ### Security Gate Hook
 
-The `security-gate.ts` hook runs on every `Write`, `Edit`, or `Bash` tool call. It parses the tool input JSON from stdin and checks the content against 19 regex patterns across 8 CWEs:
+The `security-gate.ts` hook runs on every `Write`, `Edit`, or `Bash` tool call. It parses the tool input JSON from stdin and checks the content against 21 regex patterns across 9 CWEs:
 
 - **CWE-798** — Hardcoded secrets (passwords, API keys), AWS access keys (AKIA/ASIA/etc.), private keys (all PEM formats), JWT tokens, database connection strings with embedded credentials, hardcoded Bearer tokens, Google/GitHub API key prefixes
 - **CWE-89** — SQL string concatenation and template literal injection in query calls, covering Prisma (`$queryRawUnsafe`, `$executeRawUnsafe`) and Knex (`whereRaw`, `havingRaw`, `orderByRaw`, `joinRaw`)
@@ -84,6 +84,7 @@ The `security-gate.ts` hook runs on every `Write`, `Edit`, or `Bash` tool call. 
 - **CWE-502** — `pickle.load/loads`, `yaml.load` without Loader, `yaml.unsafe_load`/`full_load`, `node-serialize` `.unserialize()`
 - **CWE-643** — XPath injection via string concatenation in `.xpath()` calls
 - **CWE-1321** — Prototype pollution via `__proto__` or `constructor.prototype` assignment
+- **CWE-1336** — Server-side template injection (SSTI): Jinja2 `Template()`/`.from_string()`, Handlebars `.compile()` with variable input
 - **CWE-116** — Encoded data (base64/xxd) piped to shell execution or combined with `sh -c` (Bash only)
 
 If any pattern matches, the hook exits with code 2 (block) and prints the finding to stderr (fed to Claude as error message). If patterns are suppressed via CWE ignore, the hook exits 0 and outputs a JSON warning to stdout (shown to user via `systemMessage`). Otherwise it exits 0 (allow).

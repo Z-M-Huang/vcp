@@ -95,9 +95,9 @@ Group applicable standards into domains. Only create domains where standards exi
 
 | Domain | Standards |
 |--------|-----------|
-| `backend` | core-security, web-backend-security, web-backend-structure, web-backend-data-access, web-backend-api-design, web-backend-realtime, web-backend-caching |
+| `backend` | core-security, core-secure-defaults, core-api-design-security, core-data-flow-security, core-attack-surface, web-backend-security, web-backend-structure, web-backend-data-access, web-backend-api-design, web-backend-realtime, web-backend-caching |
 | `frontend` | web-frontend-security, web-frontend-structure, web-frontend-performance, web-frontend-accessibility |
-| `architecture` | core-architecture, core-code-quality, core-error-handling, core-testing, core-root-cause-analysis |
+| `architecture` | core-architecture, core-code-quality, core-error-handling, core-testing, core-root-cause-analysis, core-concurrency-security |
 | `database` | database-encryption, database-schema-security, core-dependency-management |
 | `compliance` | compliance-gdpr, compliance-pci-dss, compliance-hipaa (whichever are in applicableStandards) |
 | `mobile` | mobile-security, mobile-platform-configuration |
@@ -192,6 +192,41 @@ Consider the specific technology stack's behavior:
 - Framework migration tools: check if they handle rollback automatically
 
 If the technology already handles the concern → **FALSE-POSITIVE**
+
+### Check 6: Exposure Context
+
+Determine how the flagged code is reachable. Entry points include HTTP routes, WebSocket handlers, CLI argument parsers, message queue consumers, cron jobs, file import handlers, and gRPC/GraphQL resolvers — not just HTTP.
+
+- Is it called from a public entry point (no authentication required)?
+- Is it called from an authenticated entry point?
+- Is it behind an admin route with role checks?
+- Is it an internal utility not reachable from any entry point (HTTP, CLI, MQ, cron, etc.)?
+
+Adjust severity based on exposure:
+- Public entry point → keep original severity
+- Authenticated entry point → keep original severity (compromised credentials or insider threat)
+- Admin-only behind authentication + role check → downgrade one level
+- Internal code not reachable from any entry point → **FALSE-POSITIVE** (unless it could become reachable in the future, in which case mark as UNLIKELY)
+
+**How to check:** Trace backwards from the flagged function. Find all callers using Grep. Follow the call chain to an entry point (route handler, CLI parser, MQ consumer, cron handler). Check what middleware, decorators, or access controls protect that entry point.
+
+### Check 7: Exploit Path Viability
+
+Can this finding be exploited end-to-end? Trace the full exploit path:
+1. **Entry point:** How does the attacker reach the vulnerable code? (specific HTTP endpoint, WebSocket message, CLI argument)
+2. **Preconditions:** What must be true for exploitation? (authentication bypassed, specific user role, race condition timing)
+3. **Vulnerability:** What happens when the vulnerable code executes with attacker input?
+4. **Impact:** What does the attacker gain? (data exfiltration, privilege escalation, code execution, denial of service)
+
+Check for mitigating factors in the path:
+- WAF (Web Application Firewall) rules that filter the attack payload
+- CSP (Content Security Policy) headers that prevent script execution
+- Framework protections (e.g., Django ORM auto-parameterization, React auto-escaping)
+- Rate limiting that prevents brute-force exploitation
+- Network segmentation that limits blast radius
+
+If no viable exploit path exists (e.g., all paths to the sink go through adequate defenses) → mark as **UNLIKELY**
+If the exploit path exists but mitigating factors significantly reduce risk → downgrade severity
 
 ### Assign Verdict
 

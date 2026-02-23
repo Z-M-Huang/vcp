@@ -89,6 +89,22 @@ Per the dependency management standard rule 13, note if the project uses:
 
 If none are configured, recommend adding at least one.
 
+### 4f: Check for Install Scripts (npm/yarn/pnpm only)
+
+Install scripts (`preinstall`, `install`, `postinstall`) in dependencies execute arbitrary code during `npm install`. Legitimate packages use them for native binary compilation (e.g., `esbuild`, `sharp`), but malicious packages use them for supply chain attacks. This check flags install scripts so the user can verify they are expected.
+
+**Procedure:**
+
+1. If `node_modules/` does not exist in the project root, skip this step and note: `"node_modules not found — run npm install first to check install scripts."`
+2. Read `package.json` from the project root. Extract all dependency names from `dependencies` and `devDependencies` keys.
+3. For each dependency name, use the Read tool to read `node_modules/{name}/package.json`.
+4. Check if the `scripts` object contains any of: `preinstall`, `install`, `postinstall`.
+5. If found, flag as **WARN**: `"{name}" has a {script-name} script: "{first 80 characters of script content}". Verify this is expected.`
+
+**Verdict:** WARN (not block) — some legitimate packages use install scripts for native binaries. The warning tells the user to verify the script is expected.
+
+**Scope:** Only checks direct dependencies listed in `package.json` (not transitive dependencies in the full `node_modules` tree) to keep output manageable.
+
 ## Step 5: Report Findings
 
 Before outputting findings, remove any that match an entry in the `ignoredRules` array from the resolved config. If `"standard-id/rule-N"` is in the list, suppress that specific rule's findings. (Standard-level ignores are already applied by the config resolution script.) After filtering, if any findings were suppressed, append a line: `**Suppressed:** X finding(s) by ignore config.`
@@ -113,6 +129,10 @@ Use this format:
 
 #### Suspicious Packages
 - `colros` — very similar to popular package `colors` (possible typosquatting)
+
+#### Install Scripts
+- `sharp` has a `install` script: `node install/check`. Verify this is expected.
+- `esbuild` has a `postinstall` script: `node install.js`. Verify this is expected.
 
 #### Supply Chain Tools
 - No behavioral analysis tools detected. Consider adding Socket.dev or OpenSSF Scorecard.

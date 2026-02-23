@@ -150,6 +150,14 @@ AI-generated backend code has severe gaps: improper password handling (1.88x mor
 
 32. **Rotate refresh tokens on every use.** Issue a new refresh token with every refresh request. Invalidate the old one. If a previously-used refresh token is presented again, invalidate the entire token family (assume compromise). This limits the window of refresh token theft. (CWE-613)
 
+### Information Leakage Prevention
+
+33. **Return identical responses for valid and invalid identifiers.** Authentication endpoints (login, password reset, registration) must return the same HTTP status code, response body structure, and response time regardless of whether the identifier (email, username) exists. Use constant-time comparison and add artificial delay to normalize timing. An attacker who can distinguish "user exists" from "user doesn't exist" can enumerate valid accounts. (CWE-203)
+
+34. **Disable verbose error pages in production.** Set Django `DEBUG=False`, Express `NODE_ENV=production`, Rails `config.consider_all_requests_local = false`, Spring `server.error.include-stacktrace=never`, and ASP.NET `<customErrors mode="On"/>`. Verbose error pages expose stack traces, file paths, database queries, framework versions, and dependency details — all of which aid targeted attacks. (CWE-209)
+
+35. **Never include internal details in API error responses.** Error responses to clients must not contain: internal file paths, database table or column names, SQL query text, stack traces, internal IP addresses, or framework-specific error codes. Return a generic error message and a correlation ID. Log the full error internally for debugging. (CWE-209)
+
 ## Patterns
 
 ### Injection Prevention
