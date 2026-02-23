@@ -29,16 +29,24 @@ export interface SubscriptionPreset {
  *   {schema_path}      — path to JSON schema for structured output validation
  *   {prompt}           — AI-generated review/task prompt
  *   {reasoning_effort} — reasoning effort level (only when supports_reasoning_effort is true)
+ *
+ * Available placeholders in one_shot_args_template (no pipeline context):
+ *   {model}            — model name (validated against models[])
+ *   {prompt}           — user's task text
+ *   {reasoning_effort} — reasoning effort level
+ *   Note: {output_file} and {schema_path} are NOT available in one-shot mode.
  */
 export interface CliPreset {
   type: 'cli';
   name: string;
   /** The CLI command to invoke (e.g., 'codex'). */
   command: string;
-  /** Command template string with placeholders (e.g., 'exec --full-auto --model {model} {prompt}'). */
+  /** Command template for pipeline mode with placeholders (e.g., 'exec --full-auto --model {model} -o {output_file} {prompt}'). Must contain {model}, {prompt}, {output_file}. */
   args_template: string;
   /** Optional resume template string. Used when resuming a session. */
   resume_args_template?: string;
+  /** Optional template for one-shot mode (/dev-buddy-once). Only supports {model}, {prompt}, {reasoning_effort}. Must contain {model} and {prompt}. */
+  one_shot_args_template?: string;
   /** Whether this CLI tool supports session resume. */
   supports_resume?: boolean;
   /** Whether this CLI tool supports reasoning effort configuration. */

@@ -16,6 +16,20 @@ export const VALID_CLI_PLACEHOLDERS = new Set([
   'model', 'output_file', 'schema_path', 'prompt', 'reasoning_effort',
 ]);
 
+/** Placeholders required in args_template for pipeline cli-executor to function. */
+export const REQUIRED_ARGS_TEMPLATE_PLACEHOLDERS = ['model', 'prompt', 'output_file'] as const;
+
+/** Valid placeholders for one_shot_args_template (no pipeline context). */
+export const VALID_ONE_SHOT_PLACEHOLDERS = new Set([
+  'model', 'prompt', 'reasoning_effort',
+]);
+
+/** Placeholders required in one_shot_args_template. */
+export const REQUIRED_ONE_SHOT_PLACEHOLDERS = ['model', 'prompt'] as const;
+
+/** Placeholders forbidden in one_shot_args_template (pipeline-only). */
+export const FORBIDDEN_ONE_SHOT_PLACEHOLDERS = new Set(['output_file', 'schema_path']);
+
 // Cross-platform config directory: ~/.vcp/
 export const CONFIG_DIR = path.join(os.homedir(), '.vcp');
 export const PRESETS_PATH = path.join(CONFIG_DIR, 'ai-presets.json');
@@ -89,10 +103,20 @@ function validateModelNames(models: unknown[], label: string): void {
 
 /**
  * Validate a CLI template string for balanced braces and known placeholders.
+ * Optionally checks required placeholders are present and forbidden ones are absent.
  * Returns an error message string, or null if valid.
  */
-export function validateCliTemplate(template: string, fieldName: string): string | null {
-  const validList = [...VALID_CLI_PLACEHOLDERS].join(', ');
+export function validateCliTemplate(
+  template: string,
+  fieldName: string,
+  options?: {
+    validSet?: Set<string>;
+    required?: readonly string[];
+    forbidden?: Set<string>;
+  },
+): string | null {
+  const validSet = options?.validSet ?? VALID_CLI_PLACEHOLDERS;
+  const validList = [...validSet].join(', ');
   let i = 0;
   while (i < template.length) {
     if (template[i] === '{') {
@@ -101,8 +125,11 @@ export function validateCliTemplate(template: string, fieldName: string): string
         return `${fieldName}: unbalanced '{' at position ${i}. Missing closing '}'.`;
       }
       const name = template.slice(i + 1, closeIdx);
-      if (!VALID_CLI_PLACEHOLDERS.has(name)) {
+      if (!validSet.has(name)) {
         return `${fieldName}: unknown placeholder '{${name}}'. Valid placeholders: ${validList}`;
+      }
+      if (options?.forbidden?.has(name)) {
+        return `${fieldName}: placeholder '{${name}}' is not allowed in this template.`;
       }
       i = closeIdx + 1;
     } else if (template[i] === '}') {
@@ -111,6 +138,15 @@ export function validateCliTemplate(template: string, fieldName: string): string
       i++;
     }
   }
+
+  // Check required placeholders are present
+  if (options?.required) {
+    const missing = options.required.filter(p => !template.includes(`{${p}}`));
+    if (missing.length > 0) {
+      return `${fieldName}: missing required placeholder(s): {${missing.join('}, {')}}`;
+    }
+  }
+
   return null;
 }
 
@@ -158,21 +194,45 @@ export function validatePreset(preset: unknown): Preset {
       if (typeof p.command !== 'string' || p.command.trim() === '') {
         throw new Error('CLI preset must have a command string');
       }
-      // args_template is required
+      // args_template is required — must contain {model}, {prompt}, {output_file}
       if (typeof p.args_template !== 'string' || p.args_template.trim() === '') {
         throw new Error('CLI preset must have a non-empty args_template string');
       }
       {
-        const templateErr = validateCliTemplate(p.args_template as string, 'args_template');
+        const templateErr = validateCliTemplate(p.args_template as string, 'args_template', {
+          required: REQUIRED_ARGS_TEMPLATE_PLACEHOLDERS,
+        });
         if (templateErr) throw new Error(templateErr);
       }
-      // resume_args_template is optional but must be string if present
+      // resume_args_template is optional but must be string if present.
+      // Normalize whitespace-only to undefined to prevent silent runtime breakage.
       if (p.resume_args_template !== undefined && typeof p.resume_args_template !== 'string') {
         throw new Error('CLI preset resume_args_template must be a string');
       }
-      if (typeof p.resume_args_template === 'string' && p.resume_args_template.trim() !== '') {
-        const templateErr = validateCliTemplate(p.resume_args_template as string, 'resume_args_template');
-        if (templateErr) throw new Error(templateErr);
+      if (typeof p.resume_args_template === 'string') {
+        if (p.resume_args_template.trim() === '') {
+          p.resume_args_template = undefined;
+        } else {
+          const templateErr = validateCliTemplate(p.resume_args_template, 'resume_args_template');
+          if (templateErr) throw new Error(templateErr);
+        }
+      }
+      // one_shot_args_template is optional — must contain {model}, {prompt}, must NOT contain {output_file}/{schema_path}.
+      // Normalize whitespace-only to undefined to prevent silent runtime breakage.
+      if (p.one_shot_args_template !== undefined && typeof p.one_shot_args_template !== 'string') {
+        throw new Error('CLI preset one_shot_args_template must be a string');
+      }
+      if (typeof p.one_shot_args_template === 'string') {
+        if (p.one_shot_args_template.trim() === '') {
+          p.one_shot_args_template = undefined;
+        } else {
+          const templateErr = validateCliTemplate(p.one_shot_args_template, 'one_shot_args_template', {
+            validSet: VALID_ONE_SHOT_PLACEHOLDERS,
+            required: REQUIRED_ONE_SHOT_PLACEHOLDERS,
+            forbidden: FORBIDDEN_ONE_SHOT_PLACEHOLDERS,
+          });
+          if (templateErr) throw new Error(templateErr);
+        }
       }
       // supports_resume is optional but must be boolean if present
       if (p.supports_resume !== undefined && typeof p.supports_resume !== 'boolean') {

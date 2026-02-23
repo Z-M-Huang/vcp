@@ -9,6 +9,7 @@
  * Usage:
  *   bun session-manager.ts --preset <name> [--cwd <dir>] [--idle-timeout <min>]
  *                          [--allowed-tools <tools>] [--task-timeout <ms>]
+ *                          [--model <name>]
  */
 
 import os from 'os';
@@ -45,8 +46,8 @@ export const ENV_ALLOWLIST = [
  * Inherits allowlisted host vars + sets provider credentials and model aliases.
  * The env option replaces the entire subprocess env (clean isolation).
  */
-export function buildSessionEnv(preset: ApiPreset): Record<string, string> {
-  const model = preset.models[0]; // Case-sensitive — passed unmodified
+export function buildSessionEnv(preset: ApiPreset, modelOverride?: string): Record<string, string> {
+  const model = modelOverride ?? preset.models[0]; // Case-sensitive — passed unmodified
   const env: Record<string, string> = {};
 
   for (const key of ENV_ALLOWLIST) {
@@ -571,10 +572,11 @@ export async function attemptRespawn(
     }
 
     if (preset.type === 'api' && sessionRef) {
+      const respawnModel = config.model_override ?? preset.models[0];
       console.error(`[Session] Recreating V2 session with key: ${maskApiKey(preset.api_key)}`);
-      const env = buildSessionEnv(preset);
+      const env = buildSessionEnv(preset, config.model_override);
       sessionRef.session = unstable_v2_createSession({
-        model: preset.models[0],
+        model: respawnModel,
         env,
         permissionMode: 'default',
         allowedTools: config.allowed_tools?.split(',')
@@ -595,7 +597,7 @@ export async function attemptRespawn(
       }
       await vcpLog(config.cwd || process.cwd(), {
         source: 'session-manager', event: 'respawn_success', decision: 'info',
-        details: `model=${preset.models[0]}`,
+        details: `model=${respawnModel}`,
       }, debugEnabled);
     } else if (preset.type === 'api') {
       console.error(`[Session] Using API preset with key: ${maskApiKey(preset.api_key)}`);
@@ -679,6 +681,11 @@ export function parseCLIArgs(argv: string[]): SessionConfig {
         if (isNaN(result.task_timeout_ms) || result.task_timeout_ms <= 0) {
           throw new Error('--task-timeout must be a positive integer (milliseconds)');
         }
+        i++;
+        break;
+      case '--model':
+        if (!next) throw new Error('--model requires a value');
+        result.model_override = next;
         i++;
         break;
     }
@@ -824,11 +831,27 @@ export async function startServer(config: SessionConfig): Promise<void> {
     },
   });
 
+  // Resolve effective model: CLI override takes precedence over preset default
+  const apiPreset = resolvedPreset!.type === 'api' ? resolvedPreset as ApiPreset : null;
+  const effectiveModel = apiPreset
+    ? (config.model_override ?? apiPreset.models[0])
+    : undefined;
+
+  // Validate --model against preset's models list
+  if (config.model_override && apiPreset) {
+    if (!apiPreset.models.includes(config.model_override)) {
+      console.error(
+        `[Session] Model '${config.model_override}' not in preset's models list: [${apiPreset.models.join(', ')}]`
+      );
+      process.exit(1);
+    }
+  }
+
   // Create + warmup V2 session for API presets BEFORE emitting startup output
-  if (resolvedPreset!.type === 'api') {
-    const env = buildSessionEnv(resolvedPreset as ApiPreset);
+  if (apiPreset) {
+    const env = buildSessionEnv(apiPreset, effectiveModel);
     sessionRef.session = unstable_v2_createSession({
-      model: (resolvedPreset as ApiPreset).models[0],
+      model: effectiveModel!,
       env,
       permissionMode: 'default',
       allowedTools: config.allowed_tools?.split(',')
@@ -850,7 +873,7 @@ export async function startServer(config: SessionConfig): Promise<void> {
     transitionHealth(state, 'ready', 'V2 session warmed up');
     await vcpLog(config.cwd || process.cwd(), {
       source: 'session-manager', event: 'session_ready', decision: 'info',
-      details: `model=${(resolvedPreset as ApiPreset).models[0]} base_url=${(resolvedPreset as ApiPreset).base_url}`,
+      details: `model=${effectiveModel} base_url=${apiPreset.base_url}`,
     }, debugEnabled);
   } else {
     transitionHealth(state, 'ready', 'server started');

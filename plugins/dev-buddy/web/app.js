@@ -50,6 +50,7 @@ function devBuddyApp() {
       command: '',
       args_template: '',
       resume_args_template: '',
+      one_shot_args_template: '',
       supports_resume: false,
       supports_reasoning_effort: false,
       reasoning_effort: 'medium',
@@ -152,6 +153,7 @@ function devBuddyApp() {
           command: this.newPreset.command,
           args_template: this.newPreset.args_template,
           resume_args_template: this.newPreset.resume_args_template || undefined,
+          one_shot_args_template: this.newPreset.one_shot_args_template || undefined,
           supports_resume: this.newPreset.supports_resume || undefined,
           supports_reasoning_effort: this.newPreset.supports_reasoning_effort || undefined,
           reasoning_effort: this.newPreset.supports_reasoning_effort ? this.newPreset.reasoning_effort : undefined,
@@ -262,6 +264,7 @@ function devBuddyApp() {
         this.newPreset.command = preset.command || '';
         this.newPreset.args_template = preset.args_template || '';
         this.newPreset.resume_args_template = preset.resume_args_template || '';
+        this.newPreset.one_shot_args_template = preset.one_shot_args_template || '';
         this.newPreset.supports_resume = preset.supports_resume || false;
         this.newPreset.supports_reasoning_effort = preset.supports_reasoning_effort || false;
         this.newPreset.reasoning_effort = preset.reasoning_effort || 'medium';
@@ -285,6 +288,7 @@ function devBuddyApp() {
         command: '',
         args_template: '',
         resume_args_template: '',
+        one_shot_args_template: '',
         supports_resume: false,
         supports_reasoning_effort: false,
         reasoning_effort: 'medium',

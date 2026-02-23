@@ -186,6 +186,7 @@ This maintains the sequential requirement and ensures the same reviewer validate
 ```
 /dev-buddy-feature-implement [description of what you want]    # Feature development
 /dev-buddy-bug-fix [description of the bug]           # Bug fix
+/dev-buddy-once use <provider> [model <model>] <task>          # One-shot task
 ```
 
 ### Feature Development (`/dev-buddy-feature-implement`)
@@ -217,6 +218,30 @@ The bug-fix pipeline uses a different early-phase approach optimized for diagnos
 - Output files: `rca-1.json`, `rca-2.json`, ..., `plan-review-1.json`, `code-review-1.json`, etc.
 - Fix plan emphasizes smallest possible change, not architectural design
 - All stages execute **sequentially** (per FR6) — no parallel execution, even for consecutive RCA stages
+
+### One-Shot Task (`/dev-buddy-once`)
+
+Run a single arbitrary task using any configured provider — no pipeline, no reviews:
+
+```
+/dev-buddy-once use <provider> [model <model>] <task description>
+```
+
+- **subscription** → Spawns a Claude subagent with the specified model
+- **api** → Starts a session manager, sends the task, shuts down after
+- **cli** → Runs the CLI tool directly with the task as prompt
+
+Model defaults to `sonnet` (subscription) or `preset.models[0]` (api/cli) if omitted.
+
+Provider is matched by exact name first, then unique prefix. Run `/dev-buddy-manage-presets list` to see available presets.
+
+The one-shot runner script (`scripts/one-shot-runner.ts`) handles API and CLI lifecycle:
+- **API:** Spawns `session-manager.ts` with `--model` flag → sends task via HTTP with bearer auth → waits → graceful shutdown with try/finally cleanup
+- **CLI:** Uses the preset's `one_shot_args_template` (required for CLI presets in one-shot mode). Tokenizes it, substitutes `{model}`, `{prompt}`, `{reasoning_effort}` → platform-aware execution (CWE-78 safe) → wall-clock timeout. If `one_shot_args_template` is not configured, the runner exits with a validation error directing the user to configure it.
+
+**CLI Preset Templates:**
+- `args_template` — used by the pipeline's `cli-executor.ts`. Must contain `{model}`, `{prompt}`, `{output_file}`. May also use `{schema_path}` and `{reasoning_effort}`.
+- `one_shot_args_template` — used by `/dev-buddy-once`. Must contain `{model}` and `{prompt}`. Only supports `{model}`, `{prompt}`, `{reasoning_effort}` (no `{output_file}` or `{schema_path}`).
 
 ---
 
@@ -267,6 +292,7 @@ Codex (independent AI) provides final approval:
 |-------|---------|-------|
 | `/dev-buddy-feature-implement` | Start feature development pipeline (entry point) | All |
 | `/dev-buddy-bug-fix` | Start bug-fix pipeline — dual RCA, consolidation, Codex validation, fix, code review | All |
+| `/dev-buddy-once` | Run a single task with a specific provider and model (no pipeline) | Any |
 
 **Note:** Requirements gathering, planning, review (sonnet/opus), and implementation are handled by custom agents via Task tool. CLI provider stages (e.g., Codex final gate) use the `cli-executor` agent via `Task(subagent_type: "dev-buddy:cli-executor")` — model is passed to the CLI tool via `--preset` and `--model` flags, not the Task tool's model parameter.
 
@@ -514,6 +540,7 @@ bun session-manager.ts --preset <name> [options]
 | `--idle-timeout` | minutes | `60` | Idle timeout before auto-shutdown |
 | `--allowed-tools` | CSV | `Read,Write,Edit,Grep,Glob,Bash` | Tools the V2 session may use |
 | `--task-timeout` | ms | `300000` (5 min) | Per-task wall-clock timeout (from `ApiPreset.timeout_ms` via `spawnSessionManagers`) |
+| `--model` | string | `preset.models[0]` | Override model (must be in preset's `models[]` list). Used by one-shot runner. |
 
 ---
 

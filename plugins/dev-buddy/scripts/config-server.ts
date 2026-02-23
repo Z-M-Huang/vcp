@@ -29,7 +29,7 @@ import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
 const ALLOWED_PRESET_FIELDS: Record<string, Set<string>> = {
   api: new Set(['type', 'name', 'base_url', 'api_key', 'models', 'timeout_ms']),
   subscription: new Set(['type', 'name']),
-  cli: new Set(['type', 'name', 'command', 'args_template', 'resume_args_template', 'supports_resume', 'supports_reasoning_effort', 'reasoning_effort', 'timeout_ms', 'models']),
+  cli: new Set(['type', 'name', 'command', 'args_template', 'resume_args_template', 'one_shot_args_template', 'supports_resume', 'supports_reasoning_effort', 'reasoning_effort', 'timeout_ms', 'models']),
 };
 
 // Reveal rate limiting: Map<presetName, Array<timestamp>>

@@ -578,10 +578,10 @@ describe('cli-executor.ts', () => {
           type: 'cli',
           name: 'Unquoted CLI',
           command: 'echo',
-          args_template: '--model {model} {prompt}',
+          args_template: '--model {model} -o {output_file} {prompt}',
           models: ['test-model'],
           supports_resume: true,
-          resume_args_template: '--resume {prompt}',
+          resume_args_template: '--resume -m {model} -o {output_file} {prompt}',
         },
       },
     };
@@ -664,7 +664,7 @@ describe('cli-executor.ts', () => {
           type: 'cli',
           name: 'Mid Token CLI',
           command: 'echo',
-          args_template: '--model={model} --effort={reasoning_effort} "{prompt}"',
+          args_template: '--model={model} --effort={reasoning_effort} -o {output_file} "{prompt}"',
           models: ['test-model'],
           reasoning_effort: 'high',
         },
@@ -742,6 +742,80 @@ describe('cli-executor.ts', () => {
     const logContent = fs.readFileSync(logPath, 'utf8');
     expect(logContent).toContain('[preset_loaded]');
     expect(logContent).toContain('cli-executor');
+  });
+
+  // ================== RUNTIME PLACEHOLDER VALIDATION ==================
+
+  test('rejects args_template missing {output_file} at runtime', async () => {
+    const badPresets = {
+      version: '2.0',
+      presets: {
+        'bad-cli': {
+          type: 'cli',
+          name: 'Bad CLI',
+          command: 'echo',
+          args_template: '--model {model} "{prompt}"',
+          models: ['test-model'],
+        },
+      },
+    };
+    fs.writeFileSync(
+      path.join(mockHome, '.vcp', 'ai-presets.json'),
+      JSON.stringify(badPresets, null, 2)
+    );
+    fs.writeFileSync(
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
+      JSON.stringify({ id: 'test', steps: [] })
+    );
+
+    const result = await runScript(
+      ['--type', 'plan', '--preset', 'bad-cli', '--model', 'test-model', '--plugin-root', mockPluginRoot],
+      tempDir,
+      mockHome
+    );
+
+    const buildError = result.events.find(e =>
+      e.phase === 'command_building' && e.event === 'error'
+    );
+    expect(buildError).toBeDefined();
+    expect(buildError!.error).toContain('missing required');
+    expect(buildError!.error).toContain('output_file');
+  });
+
+  test('rejects args_template missing {model} at runtime', async () => {
+    const badPresets = {
+      version: '2.0',
+      presets: {
+        'no-model': {
+          type: 'cli',
+          name: 'No Model CLI',
+          command: 'echo',
+          args_template: '-o {output_file} "{prompt}"',
+          models: ['test-model'],
+        },
+      },
+    };
+    fs.writeFileSync(
+      path.join(mockHome, '.vcp', 'ai-presets.json'),
+      JSON.stringify(badPresets, null, 2)
+    );
+    fs.writeFileSync(
+      path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
+      JSON.stringify({ id: 'test', steps: [] })
+    );
+
+    const result = await runScript(
+      ['--type', 'plan', '--preset', 'no-model', '--model', 'test-model', '--plugin-root', mockPluginRoot],
+      tempDir,
+      mockHome
+    );
+
+    const buildError = result.events.find(e =>
+      e.phase === 'command_building' && e.event === 'error'
+    );
+    expect(buildError).toBeDefined();
+    expect(buildError!.error).toContain('missing required');
+    expect(buildError!.error).toContain('model');
   });
 
   test('does not write .vcp/dev-buddy.log when debug is disabled', async () => {

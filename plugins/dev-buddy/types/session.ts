@@ -44,6 +44,8 @@ export interface SessionConfig {
   allowed_tools?: string;
   /** Per-task timeout in milliseconds (default: 300000 = 5 minutes) */
   task_timeout_ms?: number;
+  /** Override model — when set, used instead of preset.models[0] */
+  model_override?: string;
 }
 
 export interface SessionStartupOutput {

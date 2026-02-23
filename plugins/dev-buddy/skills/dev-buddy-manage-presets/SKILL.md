@@ -32,7 +32,7 @@ Add a new preset by name. The type determines which fields are required:
 
 - **api**: `base_url`, `api_key` (provider credential), `models` (array) are required
 - **subscription**: Only `name` is required (uses Task tool)
-- **cli**: `command`, `args_template`, and `models` are required
+- **cli**: `command`, `args_template` (must contain `{model}`, `{prompt}`, `{output_file}`), and `models` are required. Optional: `one_shot_args_template` (for `/dev-buddy-once`, must contain `{model}` and `{prompt}`)
 
 Example — add an API preset. Replace `YOUR_PROVIDER_KEY` with your actual credential:
 ```bash
@@ -68,9 +68,18 @@ console.log('Preset added: my-subscription');
 Example — add a CLI preset:
 ```bash
 bun -e "
-const { readPresets, writePresets } = await import('${CLAUDE_PLUGIN_ROOT}/scripts/preset-utils.ts');
+const { readPresets, writePresets, validatePreset } = await import('${CLAUDE_PLUGIN_ROOT}/scripts/preset-utils.ts');
 const config = readPresets();
-config.presets['codex-cli'] = { type: 'cli', name: 'OpenAI Codex CLI', command: 'codex', args_template: 'exec --full-auto --model {model} {prompt}', models: ['o3', 'o4-mini'] };
+const newPreset = {
+  type: 'cli',
+  name: 'OpenAI Codex CLI',
+  command: 'codex',
+  args_template: 'exec --full-auto -m {model} -o {output_file} --output-schema {schema_path} \"{prompt}\"',
+  one_shot_args_template: 'exec --full-auto -m {model} \"{prompt}\"',
+  models: ['o3', 'o4-mini']
+};
+validatePreset(newPreset);
+config.presets['codex-cli'] = newPreset;
 writePresets(config);
 console.log('Preset added: codex-cli');
 "
@@ -145,7 +154,7 @@ console.log('Preset removed: ' + presetName);
 |------|----------------|-------|
 | `subscription` | `type`, `name` | Uses Claude Task tool (default) |
 | `api` | `type`, `name`, `base_url`, `api_key`, `models` | Direct API via session manager |
-| `cli` | `type`, `name`, `command`, `args_template`, `models` | CLI tool like Codex CLI |
+| `cli` | `type`, `name`, `command`, `args_template`, `models` | CLI tool like Codex CLI. Optional: `one_shot_args_template` for `/dev-buddy-once` |
 
 ## Config Location
 

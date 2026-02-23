@@ -31,7 +31,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { readJson as _readJsonBase, fileExists, writeJson } from './pipeline-utils.ts';
-import { readPresets } from './preset-utils.ts';
+import { readPresets, validateCliTemplate, REQUIRED_ARGS_TEMPLATE_PLACEHOLDERS } from './preset-utils.ts';
 import type { CliPreset } from '../types/presets.ts';
 import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
 
@@ -364,10 +364,21 @@ function buildCommand(args: ParsedArgs, preset: CliPreset, isResume: boolean): C
     reasoning_effort: preset.reasoning_effort || 'medium',
   };
 
-  // Choose template: resume if resuming and supported, else standard
-  const template = (isResume && preset.supports_resume && preset.resume_args_template)
-    ? preset.resume_args_template
+  // Choose template: resume if resuming and supported, else standard.
+  // Runtime trim guards against whitespace-only values from manual JSON edits.
+  const resumeTemplate = preset.resume_args_template?.trim();
+  const template = (isResume && preset.supports_resume && resumeTemplate)
+    ? resumeTemplate
     : preset.args_template;
+
+  // Runtime placeholder contract check — catches hand-edited presets that bypass validatePreset()
+  const templateErr = validateCliTemplate(template, 'args_template', {
+    required: REQUIRED_ARGS_TEMPLATE_PLACEHOLDERS,
+  });
+  if (templateErr) {
+    vcpLog(logProjectRoot, { source: 'cli-executor', event: 'template_invalid', decision: 'error', details: templateErr }, debugEnabled);
+    throw new Error(`CLI preset has invalid args_template: ${templateErr}`);
+  }
 
   const tokenized = tokenizeTemplate(template);
 

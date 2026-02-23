@@ -1,6 +1,6 @@
 {
   "name": "dev-buddy",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Multi-AI pipeline orchestration with session management, preset providers, and hybrid backend routing",
   "author": {
     "name": "Z-M-Huang"
@@ -15,7 +15,8 @@
     "code-review",
     "feature-implement",
     "codex",
-    "task-based"
+    "task-based",
+    "one-shot"
   ],
   "skills": "./skills/"
 }

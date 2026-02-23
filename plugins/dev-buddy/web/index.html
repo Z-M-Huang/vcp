@@ -131,6 +131,15 @@
               Resume Args Template
               <input type="text" x-model="newPreset.resume_args_template" placeholder="e.g. exec --full-auto -m {model} -o {output_file} --output-schema {schema_path} resume --last {prompt}">
             </label>
+            <label>
+              One-Shot Args Template <span class="optional-label">(for /dev-buddy-once)</span>
+              <div class="placeholder-pills">
+                <span class="pill">{model}</span>
+                <span class="pill">{prompt}</span>
+                <span class="pill" x-show="newPreset.supports_reasoning_effort">{reasoning_effort}</span>
+              </div>
+              <input type="text" x-model="newPreset.one_shot_args_template" placeholder="e.g. exec --full-auto -m {model} &quot;{prompt}&quot;">
+            </label>
             <label class="checkbox-label">
               <input type="checkbox" x-model="newPreset.supports_reasoning_effort">
               Supports Reasoning Effort
@@ -229,6 +238,10 @@
                   <div class="detail-row" x-show="preset.supports_resume && preset.resume_args_template">
                     <span class="label">Resume Template:</span>
                     <span x-text="preset.resume_args_template" class="code-text"></span>
+                  </div>
+                  <div class="detail-row" x-show="preset.one_shot_args_template">
+                    <span class="label">One-Shot Template:</span>
+                    <span x-text="preset.one_shot_args_template" class="code-text"></span>
                   </div>
                   <div class="detail-row" x-show="preset.reasoning_effort">
                     <span class="label">Reasoning Effort:</span>
