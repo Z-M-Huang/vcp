@@ -45,6 +45,8 @@ When specialist analysis files exist, you are in **synthesis mode**. Specialist 
    - Technical findings → `requirements.constraints` and `scope.in_scope`
    - UX/Domain findings → `acceptance_criteria` scenarios and `requirements.functional`
    - Security findings → `requirements.non_functional` and explicit security ACs
+   - If `analysis-security.json` has `vcp_active: true`, add a `vcp_standards_referenced`
+     array at the root of user-story.json (pass through from the security analysis).
    - Additional specialist findings → map to the most relevant section based on the specialist's focus (e.g., performance findings → `requirements.non_functional`, accessibility findings → acceptance criteria)
 4. **Validate with user** (MANDATORY — use AskUserQuestion):
    a. Collect ALL `questions_for_user` from every specialist analysis file
@@ -56,6 +58,9 @@ When specialist analysis files exist, you are in **synthesis mode**. Specialist 
 5. **Resolve contradictions** — take the more conservative view when specialists disagree
 6. **Map specialist findings to acceptance criteria:**
    - Security findings → non-functional requirements or explicit ACs with security validation
+   - When findings reference VCP standard names (via `vcp_rule` field), include the standard
+     name in the acceptance criterion (e.g., "Per VCP Data Flow Security: validate all
+     input at trust boundaries")
    - Technical constraints → `requirements.constraints` section
    - UX findings → acceptance criteria scenarios with user-facing behavior
    - Additional specialist findings → acceptance criteria or non-functional requirements as appropriate
@@ -135,6 +140,7 @@ If the specialist analyses are insufficient to produce complete acceptance crite
     "rice_score": { "reach": 0, "impact": 0, "confidence": 0, "effort": 0 }
   },
   "questions_resolved": ["List of clarified questions"],
+  "vcp_standards_referenced": [],
   "approved_by": "user",
   "approved_at": "ISO8601"
 }

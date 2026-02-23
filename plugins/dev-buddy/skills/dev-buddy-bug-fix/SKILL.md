@@ -36,7 +36,7 @@ You coordinate worker agents using Task tools to diagnose and fix a bug. The pip
 ### Step 1: Reset Pipeline
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd "${CLAUDE_PROJECT_DIR}"
 ```
 
 ### Step 1.1: Validate Pipeline Config & Spawn Session Managers
@@ -620,4 +620,4 @@ The session manager runs a V2 Agent SDK session with Read/Write/Edit/Bash — it
 1. **Check task state:** `TaskList()`
 2. **Check artifacts:** Read `.vcp/task/*.json` files
 3. **Check resolved config:** Read `resolved_config` from `.vcp/task/pipeline-tasks.json`
-4. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset`
+4. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd "${CLAUDE_PROJECT_DIR}"`

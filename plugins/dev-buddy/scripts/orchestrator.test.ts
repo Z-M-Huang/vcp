@@ -442,71 +442,125 @@ describe('lock behavior', () => {
   });
 });
 
-describe('.task/ → .vcp/task/ auto-migration', () => {
-  const migrationProject = join(import.meta.dir, '.test-project-migration');
-  const oldTaskDir = join(migrationProject, '.task');
-  const newTaskDir = join(migrationProject, '.vcp', 'task');
+describe('phase returns idle when .vcp/task/ does not exist', () => {
+  const emptyProject = join(import.meta.dir, '.test-project-empty');
 
   afterEach(() => {
-    rmSync(migrationProject, { recursive: true, force: true });
+    rmSync(emptyProject, { recursive: true, force: true });
   });
 
-  test('phase command auto-migrates .task/ to .vcp/task/', () => {
-    // Create old .task/ with pipeline artifacts
-    mkdirSync(oldTaskDir, { recursive: true });
-    writeFileSync(
-      join(oldTaskDir, 'pipeline-tasks.json'),
-      JSON.stringify(makeFeatureTasks())
-    );
-    writeFileSync(
-      join(oldTaskDir, 'user-story.json'),
-      JSON.stringify({ title: 'test' })
-    );
+  test('phase returns idle when .vcp/task/ does not exist', () => {
+    mkdirSync(emptyProject, { recursive: true });
 
     const result = Bun.spawnSync(['bun', join(import.meta.dir, 'orchestrator.ts'), 'phase'], {
-      env: { ...process.env, CLAUDE_PROJECT_DIR: migrationProject },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-
-    // Should migrate and report actual phase, not idle
-    const phase = result.stdout.toString().trim();
-    expect(phase).toBe('plan_drafting');
-    expect(result.stderr.toString()).toContain('Migrated .task/');
-    // Old dir gone, new dir exists
-    expect(existsSync(oldTaskDir)).toBe(false);
-    expect(existsSync(newTaskDir)).toBe(true);
-  });
-
-  test('status command auto-migrates .task/ to .vcp/task/', () => {
-    mkdirSync(oldTaskDir, { recursive: true });
-    writeFileSync(
-      join(oldTaskDir, 'pipeline-tasks.json'),
-      JSON.stringify(makeFeatureTasks())
-    );
-
-    const result = Bun.spawnSync(['bun', join(import.meta.dir, 'orchestrator.ts'), 'status'], {
-      env: { ...process.env, CLAUDE_PROJECT_DIR: migrationProject },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-
-    // Should migrate and show actual status, not "not started"
-    const output = result.stdout.toString();
-    expect(output).not.toContain('Pipeline not started');
-    expect(existsSync(oldTaskDir)).toBe(false);
-    expect(existsSync(newTaskDir)).toBe(true);
-  });
-
-  test('phase returns idle when neither .task/ nor .vcp/task/ exists', () => {
-    mkdirSync(migrationProject, { recursive: true });
-
-    const result = Bun.spawnSync(['bun', join(import.meta.dir, 'orchestrator.ts'), 'phase'], {
-      env: { ...process.env, CLAUDE_PROJECT_DIR: migrationProject },
+      env: { ...process.env, CLAUDE_PROJECT_DIR: emptyProject },
       stdout: 'pipe',
       stderr: 'pipe',
     });
 
     expect(result.stdout.toString().trim()).toBe('idle');
+  });
+});
+
+describe('--cwd flag', () => {
+  const cwdProject = join(import.meta.dir, '.test-project-cwd');
+  const cwdTaskDir = join(cwdProject, '.vcp', 'task');
+
+  beforeEach(() => {
+    mkdirSync(cwdTaskDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(cwdProject, { recursive: true, force: true });
+  });
+
+  test('--cwd overrides CLAUDE_PROJECT_DIR for phase', () => {
+    writeFileSync(
+      join(cwdTaskDir, 'pipeline-tasks.json'),
+      JSON.stringify(makeFeatureTasks())
+    );
+    writeFileSync(
+      join(cwdTaskDir, 'user-story.json'),
+      JSON.stringify({ title: 'test' })
+    );
+
+    const result = Bun.spawnSync(
+      ['bun', join(import.meta.dir, 'orchestrator.ts'), 'phase', '--cwd', cwdProject],
+      {
+        env: { ...process.env, CLAUDE_PROJECT_DIR: undefined },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+
+    expect(result.stdout.toString().trim()).toBe('plan_drafting');
+  });
+
+  test('reset via --cwd clears .vcp/task/ in the target project', () => {
+    writeFileSync(join(cwdTaskDir, 'some-artifact.json'), '{}');
+
+    const result = Bun.spawnSync(
+      ['bun', join(import.meta.dir, 'orchestrator.ts'), 'reset', '--cwd', cwdProject],
+      {
+        env: { ...process.env, CLAUDE_PROJECT_DIR: undefined },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    // Artifact removed, directory still exists (recreated empty)
+    expect(existsSync(join(cwdTaskDir, 'some-artifact.json'))).toBe(false);
+    expect(existsSync(cwdTaskDir)).toBe(true);
+  });
+
+  test('--cwd before command works (option-first ordering)', () => {
+    writeFileSync(
+      join(cwdTaskDir, 'pipeline-tasks.json'),
+      JSON.stringify(makeFeatureTasks())
+    );
+    writeFileSync(
+      join(cwdTaskDir, 'user-story.json'),
+      JSON.stringify({ title: 'test' })
+    );
+
+    const result = Bun.spawnSync(
+      ['bun', join(import.meta.dir, 'orchestrator.ts'), '--cwd', cwdProject, 'phase'],
+      {
+        env: { ...process.env, CLAUDE_PROJECT_DIR: undefined },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+
+    expect(result.stdout.toString().trim()).toBe('plan_drafting');
+  });
+
+  test('--cwd without value exits with error', () => {
+    const result = Bun.spawnSync(
+      ['bun', join(import.meta.dir, 'orchestrator.ts'), 'phase', '--cwd'],
+      {
+        env: { ...process.env, CLAUDE_PROJECT_DIR: undefined },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain('--cwd requires a directory path');
+  });
+
+  test('--cwd followed by another flag exits with error', () => {
+    const result = Bun.spawnSync(
+      ['bun', join(import.meta.dir, 'orchestrator.ts'), 'phase', '--cwd', '--dry-run'],
+      {
+        env: { ...process.env, CLAUDE_PROJECT_DIR: undefined },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain('--cwd requires a directory path');
   });
 });

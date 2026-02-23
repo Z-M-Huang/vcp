@@ -8,6 +8,9 @@
  *   bun orchestrator.ts reset     Reset pipeline (remove all artifacts)
  *   bun orchestrator.ts dry-run   Validate setup without running
  *   bun orchestrator.ts phase     Output current phase token (for scripting/testing)
+ *
+ * Options:
+ *   --cwd <dir>   Project directory (overrides CLAUDE_PROJECT_DIR / cwd)
  */
 
 import fs from 'fs';
@@ -20,6 +23,30 @@ import {
   type PhaseToken,
   type PhaseResult,
 } from './pipeline-utils.ts';
+
+// ─── Parse args ─────────────────────────────────────────────────────
+// Strip --cwd <dir> from argv, inject into env, then resolve command
+// from remaining positional args. This lets callers write either:
+//   bun orchestrator.ts reset --cwd /foo
+//   bun orchestrator.ts --cwd /foo reset
+
+const positionalArgs: string[] = [];
+{
+  const args = process.argv.slice(2); // skip 'bun' and script path
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--cwd') {
+      const val = args[i + 1];
+      if (!val || val.startsWith('-')) {
+        console.error('Error: --cwd requires a directory path');
+        process.exit(1);
+      }
+      process.env.CLAUDE_PROJECT_DIR = val;
+      i++; // skip value
+    } else {
+      positionalArgs.push(args[i]);
+    }
+  }
+}
 
 // ─── Paths ──────────────────────────────────────────────────────────
 
@@ -104,26 +131,10 @@ process.on('SIGTERM', () => { releaseLock(); process.exit(143); });
 
 function showStatus(): void {
   if (!fs.existsSync(TASK_DIR)) {
-    // Auto-migrate old .task/ directory to .vcp/task/
-    const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    const oldTaskDir = path.join(projectDir, '.task');
-    if (fs.existsSync(oldTaskDir)) {
-      try {
-        fs.mkdirSync(path.join(projectDir, '.vcp'), { recursive: true });
-        fs.renameSync(oldTaskDir, TASK_DIR);
-        logSuccess('Migrated .task/ → .vcp/task/');
-        // Fall through to show status from the migrated directory
-      } catch {
-        logWarn('Found .task/ in project root — this directory has moved to .vcp/task/.');
-        logWarn('Run: mkdir -p .vcp && mv .task .vcp/task');
-        return;
-      }
-    } else {
-      logInfo('No .vcp/task directory found. Pipeline not started.');
-      console.log('');
-      console.log('To start, invoke /dev-buddy-feature-implement or /dev-buddy-bug-fix with your request.');
-      return;
-    }
+    logInfo('No .vcp/task directory found. Pipeline not started.');
+    console.log('');
+    console.log('To start, invoke /dev-buddy-feature-implement or /dev-buddy-bug-fix with your request.');
+    return;
   }
 
   const progress = getProgress(TASK_DIR);
@@ -183,7 +194,7 @@ function showStatus(): void {
     logSuccess('Pipeline complete! All reviews approved.');
     console.log('');
     console.log('To reset for next task:');
-    console.log(`  bun "${PLUGIN_ROOT}/scripts/orchestrator.ts" reset`);
+    console.log(`  bun "${PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd <project-dir>`);
   // Dynamic phase tokens (prefix match for stage-indexed phases)
   } else if (phase.startsWith('plan_review_')) {
     const ptReview = getPipelineType(progress.pipelineTasks);
@@ -364,7 +375,7 @@ function resetPipeline(): void {
 
 // ─── Entry Point ────────────────────────────────────────────────────
 
-const command = process.argv[2] || 'run';
+const command = positionalArgs[0] || 'run';
 
 switch (command) {
   case 'run':
@@ -379,34 +390,17 @@ switch (command) {
     runDryRun();
     break;
   case 'phase': {
-    let phaseTaskDir = TASK_DIR;
-    if (!fs.existsSync(phaseTaskDir)) {
-      // Auto-migrate old .task/ directory
-      const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-      const oldTaskDir = path.join(projectDir, '.task');
-      if (fs.existsSync(oldTaskDir)) {
-        try {
-          fs.mkdirSync(path.join(projectDir, '.vcp'), { recursive: true });
-          fs.renameSync(oldTaskDir, phaseTaskDir);
-          console.error('[VCP] Migrated .task/ → .vcp/task/');
-        } catch {
-          console.error('[WARN] Found .task/ in project root — this directory has moved to .vcp/task/.');
-          console.error('[WARN] Run: mkdir -p .vcp && mv .task .vcp/task');
-          console.log('idle');
-          break;
-        }
-      } else {
-        console.log('idle');
-        break;
-      }
+    if (!fs.existsSync(TASK_DIR)) {
+      console.log('idle');
+      break;
     }
-    const progress = getProgress(phaseTaskDir);
+    const progress = getProgress(TASK_DIR);
     const { phase } = determinePhase(progress);
     console.log(phase);
     break;
   }
   default:
-    console.log('Usage: bun orchestrator.ts {run|status|reset|dry-run|phase}');
+    console.log('Usage: bun orchestrator.ts {run|status|reset|dry-run|phase} [--cwd <dir>]');
     console.log('');
     console.log('Commands:');
     console.log('  run       Show current pipeline status (default)');
@@ -414,5 +408,8 @@ switch (command) {
     console.log('  reset     Reset pipeline (remove all artifacts)');
     console.log('  dry-run   Validate setup without running');
     console.log('  phase     Output current phase token (for scripting/testing)');
+    console.log('');
+    console.log('Options:');
+    console.log('  --cwd <dir>  Project directory (overrides CLAUDE_PROJECT_DIR / cwd)');
     process.exit(1);
 }

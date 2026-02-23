@@ -93,7 +93,7 @@ User provides initial description via /dev-buddy-feature-implement
 |-----------|------------|
 | Technical Analyst | `.vcp/task/analysis-technical.json` |
 | UX/Domain Analyst | `.vcp/task/analysis-ux-domain.json` |
-| Security Analyst | `.vcp/task/analysis-security.json` |
+| Security Analyst | `.vcp/task/analysis-security.json` (VCP-enhanced when detected) |
 | Performance Analyst | `.vcp/task/analysis-performance.json` |
 | Architecture Analyst | `.vcp/task/analysis-architecture.json` |
 
@@ -108,6 +108,22 @@ User provides initial description via /dev-buddy-feature-implement
 ### Windows Compatibility
 
 In-process mode works on any terminal (Windows Terminal, VS Code, etc.). Use Shift+Up/Down to cycle between teammates. Split-pane mode requires tmux/iTerm2 (macOS/Linux only) but is not required.
+
+---
+
+### VCP-Aware Security Analysis
+
+When `.vcp/config.json` (or legacy `.vcp.json`) exists with a valid `pluginRoot`,
+the orchestrator runs `generate-context.ts` to get formatted VCP rules before
+spawning specialists. The Security Analyst receives the context as prompt input
+and uses VCP standards as a structured checklist alongside OWASP Top 10 analysis.
+
+Detection flow: read config (with `.vcp.json` fallback) → validate pluginRoot → Glob check → run CLI → inject into prompt.
+Any failure → silent fallback to generic OWASP analysis. Does not block the pipeline.
+Legacy `.vcp.json` is auto-migrated to `.vcp/config.json` when the CLI runs.
+
+The `vcp_standards_referenced` field in analysis-security.json lists the standard
+names that were evaluated. This flows through to user-story.json for downstream traceability.
 
 ---
 
@@ -550,7 +566,7 @@ If stuck:
 
 1. **Check task state:** `TaskList()` to see blocked tasks (requires pipeline team to be active)
 2. **Check artifacts:** Read `.vcp/task/*.json` files to understand progress
-3. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset`
+3. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd "${CLAUDE_PROJECT_DIR}"`
 4. **If TaskList() doesn't work:** Check that the pipeline team exists — team creation may need to be re-run
 
 ---

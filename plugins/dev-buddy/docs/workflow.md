@@ -146,7 +146,7 @@ When a review returns `needs_changes`:
 |---------|---------|
 | `bun orchestrator.ts` | Show current state and next action |
 | `bun orchestrator.ts status` | Show current state details |
-| `bun orchestrator.ts reset` | Reset pipeline to idle |
+| `bun orchestrator.ts reset --cwd <dir>` | Reset pipeline to idle |
 | `bun orchestrator.ts dry-run` | Validate setup |
 | `bun orchestrator.ts phase` | Output current phase token |
 
@@ -158,7 +158,7 @@ If stuck:
 
 1. **Check task state:** `TaskList()` to see blocked tasks (requires pipeline team to be active)
 2. **Check artifacts:** Read `.vcp/task/*.json` files to understand progress
-3. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset`
+3. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd "${CLAUDE_PROJECT_DIR}"`
 4. **Check phase:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" phase`
 
 ---
