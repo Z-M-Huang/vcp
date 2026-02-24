@@ -14,6 +14,34 @@ You coordinate worker agents using Task tools, handle user questions, and drive 
 
 ---
 
+## Orchestrator Execution Model
+
+**STRICT SEQUENTIAL EXECUTION.** You are a sequential orchestrator. You execute ONE step at a time, WAIT for its result, VERIFY the result, then proceed to the next step.
+
+### Execution Rules (MANDATORY)
+
+1. **ONE tool call per step.** Each numbered step produces exactly ONE tool call (or one batch where explicitly marked). Do NOT combine steps into a single response.
+2. **WAIT for return.** After each tool call, WAIT for the result before doing anything else. Do NOT start the next step while the current step is in flight.
+3. **VERIFY before proceeding.** After each step returns, CHECK the result. If it failed, follow the error handling for that step. Do NOT skip verification.
+4. **NEVER auto-recover.** If ANY operation fails or produces unexpected output: STOP and escalate to the user via `AskUserQuestion`. Do NOT decide to "proceed with what we have." The user decides recovery strategy.
+5. **NEVER run Bash polling loops alongside other operations.** File checks are their own step — not combined with agent spawning or message sending.
+6. **User interruption means FULL STOP.** If the user sends a message mid-pipeline, STOP. Read the user's message. Respond. Do NOT continue until the user explicitly says to.
+
+### Execution Markers
+
+Steps are annotated with execution markers:
+
+| Marker | Meaning |
+|--------|---------|
+| `[PARALLEL OK]` | Multiple independent tool calls MAY be issued in a single response |
+| `[INTERACTIVE LOOP]` | Sequential message relay loop. Each iteration follows a strict order: (1) receive messages, (2) AskUserQuestion, (3) WAIT for answer, (4) SendMessage. These calls are sequential within each iteration — NOT parallel. Only message-related calls allowed (AskUserQuestion, SendMessage, receiving messages). No Bash, no Task, no file operations during the loop. |
+| *(no marker)* | Strictly ONE tool call, WAIT, verify, then next step |
+
+Currently `[PARALLEL OK]` applies only to Step 2 (spawn specialists).
+Currently `[INTERACTIVE LOOP]` applies only to Step 3 (interactive exploration).
+
+---
+
 ## Architecture: Tasks + Hook Enforcement
 
 This pipeline uses a **task-based approach with hook enforcement**:
@@ -359,12 +387,15 @@ while pipeline not complete:
 
 ### Phase Cleanup Gate
 
-**After synthesis completes (requirements-gatherer returns):**
+**PRE-CONDITION:** Synthesis complete (Step 5 returned) AND user-story.json validated (Step 6 pre-condition check passed).
+
+**After user-story.json is confirmed valid:**
 1. Send `shutdown_request` to ALL specialist teammates via `SendMessage`
 2. Track which specialists have confirmed shutdown
 3. If any specialist has not confirmed after ~60 seconds (1-2 idle notifications without a shutdown confirmation), re-send `shutdown_request` to that specialist
 4. If a specialist still has not confirmed after the retry, **proceed anyway** — mark requirements task as completed. Unresponsive teammates will be cleaned up when the pipeline team is deleted at completion.
-5. Proceed to planning phase
+5. Mark requirements task as completed via TaskUpdate
+6. **Return control to the Main Loop.** Do NOT manually start the next stage — let the main loop call `TaskList()` to find the next unblocked task.
 
 **Rationale:** Teammates may go idle without processing the shutdown request (known edge case). The pipeline team deletion at the end of the pipeline (`TeamDelete`) will clean up any lingering teammates, so it is safe to proceed past unresponsive specialists.
 
@@ -407,7 +438,7 @@ Standards content fetched from this URL is injected into the analyst prompt with
 sanitization. This is consistent with VCP's existing trust model — `standards_url`
 is set by the developer during `/vcp-init` and points to a controlled repository.
 
-### Step 2: Spawn Specialist Teammates
+### Step 2: Spawn Specialist Teammates [PARALLEL OK]
 
 Read `team_name` from `.vcp/task/pipeline-tasks.json` and spawn specialist teammates:
 
@@ -508,34 +539,177 @@ Message key findings to lead as you discover them."
 )
 ```
 
-### Step 3: Interactive Loop
+**WAIT for ALL spawn calls to return before proceeding to Step 2.1.**
 
-While teammates explore:
-1. Receive messages from specialists
-2. Use AskUserQuestion with informed questions based on specialist findings
-3. Send user answers back to relevant specialists via SendMessage
+### Step 2.1: Spawn Verification Gate
 
-### Step 4: Wait for Completion
+After ALL Task spawn calls return, verify results:
 
-Wait for all specialists to complete their analysis files.
+1. Build `spawned_specialists` list: names of all specialists whose Task call returned successfully
+2. Build `failed_specialists` list: names of all specialists whose Task call returned an error or timed out
+
+**If ALL spawned successfully:** Set `approved_specialists = spawned_specialists`. Proceed to Step 3.
+
+**If ANY failed:** STOP. Do NOT proceed. Do NOT decide to "continue with remaining specialists." Escalate:
+
+```
+AskUserQuestion:
+  "{N} of {TOTAL} specialists failed to spawn: {failed names}.
+   Options:
+   1. Retry the failed specialists
+   2. Continue with {TOTAL - N} specialists (missing: {failed names})
+   3. Abort requirements gathering"
+```
+
+If user chooses retry: re-spawn only the failed ones, then re-verify.
+If user chooses continue: set `approved_specialists = spawned_specialists` (excluding failed). Record which are skipped — this determines the expected files in Step 4.1.
+
+**Carry forward:** The `approved_specialists` list is used by Step 4.1 and the synthesis prompt.
+
+**Name-to-filename mapping:**
+
+| Specialist Name | Expected File |
+|----------------|---------------|
+| `technical-analyst` | `analysis-technical.json` |
+| `ux-domain-analyst` | `analysis-ux-domain.json` |
+| `security-analyst` | `analysis-security.json` |
+| `performance-analyst` | `analysis-performance.json` |
+| `architecture-analyst` | `analysis-architecture.json` |
+
+For additional specialists, the pattern is `analysis-{type}.json` where `{type}` matches the specialist name prefix.
+
+**Note on stale files:** Step 1 runs `orchestrator.ts reset` which clears the entire `.vcp/task/` directory. Files from prior runs cannot exist when Step 4 runs.
+
+### Step 3: Interactive Loop [INTERACTIVE LOOP]
+
+Relay messages between specialists and the user. Each iteration follows a strict sequential order:
+
+1. Receive incoming messages from specialists (automatic)
+2. Summarize specialist questions → call `AskUserQuestion` to ask the user
+3. **WAIT** for the user's answer (your response ends here — user's answer starts your next turn)
+4. Call `SendMessage` to relay the user's answer to the relevant specialist(s)
+5. Repeat from (1)
+
+**Exit condition:** Specialists stop sending new messages AND analysis files should be ready.
+
+**Within each iteration, calls are SEQUENTIAL (receive → ask → wait → send). Do NOT issue AskUserQuestion and SendMessage in the same response.**
+
+**During this loop, do NOT:**
+- Spawn any new agents
+- Start synthesis (Step 5)
+- Run Bash file-check commands
+- Make any tool calls other than receiving messages, AskUserQuestion, and SendMessage
+
+### Step 4: Validate Analysis Files
+
+When the interactive loop winds down, validate the analysis files. Check both existence AND JSON shape:
+
+```bash
+bun -e "
+try {
+  const { readdirSync, readFileSync } = require('fs');
+  const { join } = require('path');
+  const dir = '${CLAUDE_PROJECT_DIR}/.vcp/task';
+  const files = readdirSync(dir).filter(f => f.startsWith('analysis-') && f.endsWith('.json'));
+  const results = files.map(f => {
+    try {
+      const data = JSON.parse(readFileSync(join(dir, f), 'utf-8'));
+      const valid = typeof data.specialist === 'string'
+        && Array.isArray(data.findings)
+        && data.findings.length > 0
+        && typeof data.findings[0].area === 'string';
+      return { file: f, valid, specialist: data.specialist, findings_count: data.findings?.length ?? 0 };
+    } catch (e) { return { file: f, valid: false, error: 'invalid JSON: ' + e.message }; }
+  });
+  console.log(JSON.stringify({ ok: true, found: files, validated: results }, null, 2));
+} catch (e) {
+  console.log(JSON.stringify({ ok: false, error: e.message }));
+}
+"
+```
+
+**WAIT** for the Bash result before proceeding.
+
+### Step 4.1: Completion Verification Gate
+
+Compare the validated files against `approved_specialists` from Step 2.1:
+
+For each specialist in `approved_specialists`, check that:
+1. The corresponding `analysis-{type}.json` file was found
+2. The file has valid JSON with `specialist` and `findings` fields
+
+**If ALL approved specialists have valid files:** Save the validation output. Proceed to Step 5.
+
+**If ANY approved specialist's file is missing or invalid:** STOP. Escalate:
+
+```
+AskUserQuestion:
+  "Analysis files incomplete:
+   - Missing: {list of missing files}
+   - Invalid: {list of files with bad JSON}
+   Approved specialists: {approved_specialists list}
+   Options:
+   1. Wait longer (I'll re-check in a moment)
+   2. Proceed with available valid analyses (missing: {list})
+   3. Abort requirements gathering"
+```
+
+If user chooses wait: re-run Step 4.
+If user chooses proceed: note the missing/invalid analyses for the synthesis prompt.
 
 ### Step 5: Synthesize via Requirements Gatherer
+
+**PRE-CONDITION:** Step 4.1 must have passed. All approved files confirmed valid (or user approved partial).
+
+**This is a single Task call.** Do NOT combine with any other operation.
+
+Include the validation output from Step 4 in the prompt:
 
 ```
 Task(
   subagent_type: "dev-buddy:requirements-gatherer",
   model: "opus",
-  prompt: "Synthesis mode: Read ALL analysis-*.json files in .vcp/task/. Validate scope with user via AskUserQuestion. Get explicit approval before writing user-story.json."
+  prompt: "Synthesis mode.
+    APPROVED SPECIALISTS: {approved_specialists list from Step 2.1}
+    VALIDATED ANALYSIS FILES (from Step 4):
+    {paste the validation JSON output here}
+    {if partial: 'MISSING/INVALID ANALYSES: {list}. Account for gaps in user story.'}
+    Read the validated analysis files from .vcp/task/.
+    Validate scope with user via AskUserQuestion.
+    Get explicit approval before writing user-story.json."
 )
 ```
 
+**WAIT** for the requirements-gatherer to return before proceeding to Step 6.
+
+**If the requirements-gatherer fails:** STOP. Escalate to user via AskUserQuestion.
+
 ### Step 6: Shut Down Specialist Teammates
 
-After synthesis:
-1. Send `shutdown_request` to ALL specialist teammates
-2. Wait for confirmations. If any specialist does not confirm after ~60 seconds, re-send `shutdown_request` once.
-3. If a specialist still does not confirm after the retry, proceed anyway — they will be cleaned up by TeamDelete at pipeline completion.
-4. Mark requirements task as completed
+**PRE-CONDITION:** Step 5 MUST have returned. Verify user-story.json exists and is valid:
+
+```bash
+bun -e "
+try {
+  const { readFileSync } = require('fs');
+  const data = JSON.parse(readFileSync('${CLAUDE_PROJECT_DIR}/.vcp/task/user-story.json', 'utf-8'));
+  const valid = typeof data.title === 'string' && Array.isArray(data.acceptance_criteria) && data.acceptance_criteria.length > 0;
+  console.log(JSON.stringify({ exists: true, valid, title: data.title, ac_count: data.acceptance_criteria?.length }));
+} catch (e) {
+  console.log(JSON.stringify({ exists: false, valid: false, error: e.message }));
+}
+"
+```
+
+**WAIT** for result. If file missing or invalid, STOP and escalate to user via AskUserQuestion.
+
+**If user-story.json is valid:**
+1. Send `shutdown_request` to ALL specialist teammates via SendMessage
+2. **WAIT** for confirmations (~60s)
+3. Re-send once to unresponsive specialists
+4. If still unresponsive, proceed — TeamDelete at pipeline end will clean up
+5. Mark requirements task completed via TaskUpdate
+6. **Return control to the Main Loop.** Do NOT manually start the next stage.
 
 ---
 
@@ -836,6 +1010,10 @@ curl -s --connect-timeout 5 --max-time 300 \
 12. **Task descriptions are execution context** — Every TaskCreate includes AGENT, MODEL, INPUT, OUTPUT. Main loop calls TaskGet() before spawning.
 13. **Progressive enrichment before completion** — Before marking a task completed, extract key context and TaskUpdate the next task's description.
 14. **Team-based execution is ONLY for requirements gathering** — Spawn specialist teammates (via `Task(team_name: ...)` and `SendMessage`) ONLY during the requirements gathering phase. ALL other phases (planning, plan-review, implementation, code-review, fix tasks, re-reviews) use sequential one-shot `Task()` calls WITHOUT `team_name`. Never spawn teammates outside requirements gathering. The pipeline team exists for task tool availability — not for spawning workers in every phase.
+15. **Orchestrator executes sequentially** — Each step is one response turn unless marked `[PARALLEL OK]` or `[INTERACTIVE LOOP]`. Make the tool call, WAIT for the result, VERIFY, then proceed.
+16. **NEVER auto-recover from failures** — If any operation fails, STOP and escalate to user via AskUserQuestion. The user decides recovery. Never "proceed with what we have" without asking.
+17. **Verification gates are mandatory** — Step 2.1 (spawn) and Step 4.1 (completion) MUST execute. Do NOT skip them.
+18. **User interruption means FULL STOP** — If the user sends a message mid-pipeline, stop current operations, respond to user, wait for explicit instruction to continue.
 
 ---
 

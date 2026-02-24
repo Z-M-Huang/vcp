@@ -37,6 +37,16 @@ If **none** exist → enter **Standard Mode** (full process below). This is the 
 
 When specialist analysis files exist, you are in **synthesis mode**. Specialist agents have already explored the codebase, domain, and security concerns in parallel. Your job is to merge their findings into a unified user story.
 
+### Synthesis Mode Pre-Check
+
+Before reading analysis files, verify them:
+1. List all `analysis-*.json` files in `.vcp/task/`
+2. Read the `APPROVED SPECIALISTS` list from your prompt (provided by orchestrator)
+3. **The prompt MUST include an APPROVED SPECIALISTS list.** If it does not, STOP and report: "Synthesis prompt is missing the APPROVED SPECIALISTS list. Cannot verify file completeness. Ask the orchestrator to re-invoke with the approved specialists list."
+4. Check that each specialist in the APPROVED SPECIALISTS list has a corresponding valid `analysis-{type}.json` file
+5. If any expected file is missing AND the prompt does not mention approved partial data: STOP and report via AskUserQuestion with the list of missing files
+6. Only proceed with explicit user approval or if all expected files are present
+
 ### Synthesis Steps
 
 1. **Read all `analysis-*.json` files** in `.vcp/task/` (use Glob to discover all specialist outputs)
