@@ -381,6 +381,23 @@ function buildOutput(rules: ScopedRules): string {
   return lines.join("\n");
 }
 
+export function buildReferenceSection(
+  entries: StandardEntry[],
+  fetched: Map<string, string>,
+): string {
+  const lines: string[] = [
+    "",
+    "### Standard References",
+    "Fetch any standard below for detailed guidance, code examples, and anti-patterns:",
+  ];
+  for (const entry of entries) {
+    if (fetched.has(entry.id) && !validateStandardsUrl(entry.url)) {
+      lines.push(`- ${entry.id}: ${entry.url}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 export function formatContext(rules: ScopedRules): string {
   const hasNonCore = Object.keys(rules).some((s) => s !== "core");
   const charBudget =
@@ -449,7 +466,7 @@ export async function generateContext(projectRoot: string): Promise<string> {
     const rules = extractRuleSummaries(standards, entries, config);
     if (Object.keys(rules).length === 0) return FALLBACK_MESSAGE;
 
-    return formatContext(rules);
+    return formatContext(rules) + "\n" + buildReferenceSection(entries, standards);
   } catch {
     return FALLBACK_MESSAGE;
   }

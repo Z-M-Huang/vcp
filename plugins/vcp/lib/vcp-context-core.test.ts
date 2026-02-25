@@ -19,6 +19,7 @@ import {
   parseIgnoreList,
   formatContext,
   flattenV2Manifest,
+  buildReferenceSection,
   FALLBACK_MESSAGE,
   CHARS_PER_TOKEN,
   CORE_TOKEN_BUDGET,
@@ -834,6 +835,63 @@ describe("loadConfig auto-migration", () => {
     } finally {
       await rm(dir, { recursive: true });
     }
+  });
+});
+
+// --- buildReferenceSection ---
+
+describe("buildReferenceSection", () => {
+  const makeEntry = (id: string, url: string): StandardEntry => ({
+    id,
+    url,
+    scope: "core",
+    severity: "high",
+    tags: [],
+    applies: "always",
+  });
+
+  test("includes only fetched standards", () => {
+    const entries = [
+      makeEntry("core-security", "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-security.md"),
+      makeEntry("core-architecture", "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-architecture.md"),
+      makeEntry("core-testing", "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-testing.md"),
+    ];
+    const fetched = new Map<string, string>([
+      ["core-security", "# Security"],
+      ["core-architecture", "# Architecture"],
+    ]);
+
+    const output = buildReferenceSection(entries, fetched);
+    expect(output).toContain("- core-security:");
+    expect(output).toContain("- core-architecture:");
+    expect(output).not.toContain("- core-testing:");
+  });
+
+  test("shows header but no entries when no standards fetched", () => {
+    const entries = [
+      makeEntry("core-security", "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-security.md"),
+    ];
+    const fetched = new Map<string, string>();
+
+    const output = buildReferenceSection(entries, fetched);
+    expect(output).toContain("### Standard References");
+    expect(output).not.toContain("- core-security:");
+  });
+
+  test("excludes entries with unsafe URLs even if fetched", () => {
+    const entries = [
+      makeEntry("core-security", "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-security.md"),
+      makeEntry("core-evil", "file:///etc/passwd"),
+    ];
+    const fetched = new Map<string, string>([
+      ["core-security", "# Security"],
+      ["core-evil", "# Evil"],
+    ]);
+
+    const output = buildReferenceSection(entries, fetched);
+    expect(output).toContain("- core-security:");
+    expect(output).not.toContain("- core-evil:");
+    expect(output).not.toContain("file:///etc/passwd");
   });
 });
 
