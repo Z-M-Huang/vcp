@@ -78,7 +78,7 @@ VCP ships two complementary plugins:
 
 | Plugin | What It Does | Install |
 |--------|-------------|---------|
-| **VCP** | Standards enforcement — 40 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
+| **VCP** | Standards enforcement — 41 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
 | **Dev Buddy** | Multi-AI pipeline — configurable stages, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
 
 Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.
@@ -123,7 +123,7 @@ Run `/vcp-context` to re-inject rules at any time (useful after context compacti
 
 ### Layer 2: On-Demand Scanning — Deep Analysis
 
-Skills scan code against 40 standards across 12 scopes using AI-driven analysis:
+Skills scan code against 41 standards across 12 scopes using AI-driven analysis:
 
 | Skill | What It Does |
 |-------|-------------|
@@ -268,7 +268,7 @@ The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. 
 
 ## Standards Coverage
 
-40 standards across 12 scopes:
+41 standards across 12 scopes:
 
 | Scope | Standards | What They Cover |
 |-------|-----------|----------------|
@@ -284,6 +284,7 @@ The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. 
 | **Compliance — GDPR** | 1 | Data deletion, retention, consent, PII handling |
 | **Compliance — PCI DSS** | 1 | Tokenization, card masking, CDE isolation |
 | **Compliance — HIPAA** | 1 | PHI encryption, audit logging, retention, minimum necessary |
+| **Compliance — Accessibility** | 1 | ADA, Section 508/504, EAA, PSBAR, AODA, ACA, EN 301 549, WCAG conformance mapping, accessibility statements, VPAT/ACR |
 
 All standards follow a consistent format: **WHY** (the principle), **WHAT** (numbered actionable rules), **HOW** (code examples and anti-patterns). See [`standards/README.md`](standards/README.md) for the format specification.
 
@@ -440,7 +441,7 @@ Full documentation is on the **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)
 
 ```
 vcp/
-├── standards/           # 40 AI-optimized principled standards across 12 scopes
+├── standards/           # 41 AI-optimized principled standards across 12 scopes
 │   ├── manifest.json    # Root manifest — full HTTPS URLs, org-customizable
 │   ├── scopes/          # Per-scope manifest files
 │   ├── core-*.md        # Universal: security, architecture, testing, etc.
@@ -451,7 +452,7 @@ vcp/
 │   ├── cli-*.md         # Shell injection, argument injection, exit codes
 │   ├── devops-*.md      # Containers, CI/CD, IaC, Kubernetes
 │   ├── agentic-ai-*.md  # Agent security, tool security, permissions, supply chain, communication
-│   └── compliance-*.md  # GDPR, PCI DSS, HIPAA
+│   └── compliance-*.md  # GDPR, PCI DSS, HIPAA, Accessibility
 ├── schemas/             # JSON schemas for config and manifest validation
 ├── plugins/vcp/         # VCP plugin — standards enforcement (skills, hooks, agents)
 ├── plugins/dev-buddy/   # Dev Buddy plugin — multi-AI pipeline orchestration
