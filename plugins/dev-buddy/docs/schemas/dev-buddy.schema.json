@@ -51,9 +51,27 @@
           "type": "string",
           "pattern": "^[a-zA-Z0-9._-]+$",
           "description": "Model name. Required. Must match /^[a-zA-Z0-9._-]+$/ to prevent shell metacharacter injection (CWE-78)."
+        },
+        "parallel": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, this stage runs in parallel with adjacent same-type stages that also have parallel: true. Only applies to plan-review and code-review types."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "parallel": { "const": true }
+        },
+        "required": ["parallel"]
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "enum": ["plan-review", "code-review"]
+          }
+        }
+      }
     }
   }
 }

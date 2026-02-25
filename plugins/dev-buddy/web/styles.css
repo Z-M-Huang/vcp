@@ -501,6 +501,29 @@ form input:focus, form select:focus {
   flex: 0 1 140px;
 }
 
+/* Parallel checkbox (review stages only) */
+.parallel-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.parallel-checkbox input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.parallel-label {
+  font-size: 11px;
+  color: #666;
+  white-space: nowrap;
+}
+
 /* Stage delete button */
 .stage-delete {
   flex-shrink: 0;

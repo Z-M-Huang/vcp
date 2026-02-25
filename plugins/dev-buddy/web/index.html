@@ -323,6 +323,14 @@
                       <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
                     </template>
                   </select>
+                  <label
+                    class="parallel-checkbox"
+                    x-show="stage.type === 'plan-review' || stage.type === 'code-review'"
+                    title="Run in parallel with adjacent same-type stages"
+                  >
+                    <input type="checkbox" x-model="stage.parallel">
+                    <span class="parallel-label">Parallel</span>
+                  </label>
                   <select x-model="stage.model" x-init="$nextTick(() => $el.value = stage.model || '')" class="stage-select model-select" required>
                     <option value="" disabled>Select model</option>
                     <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
@@ -385,6 +393,14 @@
                       <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
                     </template>
                   </select>
+                  <label
+                    class="parallel-checkbox"
+                    x-show="stage.type === 'plan-review' || stage.type === 'code-review'"
+                    title="Run in parallel with adjacent same-type stages"
+                  >
+                    <input type="checkbox" x-model="stage.parallel">
+                    <span class="parallel-label">Parallel</span>
+                  </label>
                   <select x-model="stage.model" x-init="$nextTick(() => $el.value = stage.model || '')" class="stage-select model-select" required>
                     <option value="" disabled>Select model</option>
                     <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">

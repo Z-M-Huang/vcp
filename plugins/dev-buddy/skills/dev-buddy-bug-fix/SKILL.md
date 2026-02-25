@@ -27,11 +27,205 @@ You coordinate worker agents using Task tools to diagnose and fix a bug. The pip
 
 **Bug-fix differentiator:** This pipeline does NOT use requirements-gatherer or planner agents. The orchestrator itself reads all RCA output files after the last consecutive RCA stage completes, consolidates findings, and writes `user-story.json` + `plan-refined.json` directly. This consolidation is an INLINE ORCHESTRATOR ACTION, not a task.
 
-**All stages execute SEQUENTIALLY.** There is NO parallel execution, even for consecutive RCA stages. Each task has `blockedBy` pointing to the previous task.
+**Stages execute SEQUENTIALLY by default.** Review stages (plan-review, code-review) can be configured for parallel execution via the `parallel` flag on each StageEntry. Non-review stages (rca, implementation) always run sequentially. Each task has `blockedBy` dependencies enforced via TaskUpdate.
 
 ---
 
 ## Pipeline Initialization
+
+### Step 0: Resume Detection
+
+Check if a previous pipeline run exists:
+
+```bash
+bun -e "
+  const fs = require('fs');
+  const p = '${CLAUDE_PROJECT_DIR}/.vcp/task/pipeline-tasks.json';
+  if (!fs.existsSync(p)) { console.log(JSON.stringify({exists:false})); process.exit(0); }
+  const data = JSON.parse(fs.readFileSync(p,'utf-8'));
+  const stages = data.stages || [];
+  const stageStatus = stages.map(s => {
+    const outPath = '${CLAUDE_PROJECT_DIR}/.vcp/task/' + s.output_file;
+    if (!fs.existsSync(outPath)) return {...s, file_status:'no_output_file'};
+    try {
+      const out = JSON.parse(fs.readFileSync(outPath,'utf-8'));
+      // RCA outputs lack 'status' field — detect completion via root_cause.summary
+      if (s.type === 'rca') {
+        const complete = out.root_cause && out.root_cause.summary && out.root_cause.root_file;
+        return {...s, file_status: complete ? 'complete' : 'unknown'};
+      }
+      return {...s, file_status: out.status || 'unknown'};
+    } catch { return {...s, file_status:'invalid'}; }
+  });
+  console.log(JSON.stringify({exists:true, ...data, stageStatus}, null, 2));
+"
+```
+
+**If `exists == false`** → Fresh run. Proceed to Step 1.
+
+**If `exists == true`** → Check pipeline type compatibility:
+- If `pipeline_type !== "bug-fix"` → AskUserQuestion: "Previous pipeline is a **{pipeline_type}** run, but you invoked `/dev-buddy-bug-fix`. Options: 1. Start fresh (reset and begin new bug-fix pipeline). 2. Cancel (use `/dev-buddy-feature-implement` to resume the existing pipeline)." If start fresh → proceed to Step 1. If cancel → stop.
+
+**If compatible** → Previous pipeline detected. Ask the user:
+
+```
+AskUserQuestion:
+  "Previous bug-fix pipeline detected:
+   Team: {team_name}
+   Progress: {completed}/{total} stages complete
+   Current phase: {determine from stageStatus}
+
+   1. Resume from where it left off
+   2. Start fresh (reset and begin new pipeline)
+   3. Show detailed status"
+```
+
+- **"Start fresh"** → Proceed to Step 1.
+- **"Show status"** → Display stageStatus table, re-ask.
+- **"Resume"** → Execute Step 0.1 through Step 0.5:
+
+#### Step 0.1: Safety Checks + Config Drift Detection
+
+```
+// Check orchestrator lock — prevent conflicting concurrent runs
+lockPath = "${CLAUDE_PROJECT_DIR}/.vcp/task/.orchestrator.lock"
+If lock file exists:
+  Read PID from lock, check if process alive (kill -0)
+  If alive → STOP: "Another pipeline session is running (PID {pid})"
+  If dead → remove stale lock, continue
+```
+
+Config drift detection:
+
+```bash
+bun -e "
+  import { loadPipelineConfig } from '${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts';
+  import { createHash } from 'crypto';
+  const stored = JSON.parse(require('fs').readFileSync('${CLAUDE_PROJECT_DIR}/.vcp/task/pipeline-tasks.json','utf-8'));
+  const storedHash = stored.config_hash || '';
+  let currentHash = '';
+  let loadError = null;
+  try {
+    const current = loadPipelineConfig();
+    currentHash = createHash('sha256').update(JSON.stringify(current)).digest('hex');
+  } catch (e) { loadError = e.message; }
+  console.log(JSON.stringify({match: !loadError && currentHash === storedHash, currentHash, storedHash, loadError}));
+"
+```
+
+If `loadError` is set OR hashes don't match:
+```
+AskUserQuestion:
+  "Pipeline config has changed since this pipeline started.
+   Resume will use the ORIGINAL config snapshot (from pipeline-tasks.json).
+   1. Resume with original config (safe — no dependency mismatch)
+   2. Start fresh with new config (reset pipeline)"
+```
+
+#### Step 0.2: Re-create Pipeline Team
+
+Claude Code teams are session-scoped — when a session terminates, the team is already gone. TeamDelete here is a cleanup no-op for stale metadata.
+
+```
+team_name = from pipeline-tasks.json.team_name
+TeamDelete(team_name)   ← ignore errors (expected: team already gone with dead session)
+TeamCreate(team_name, description: "Bug-fix pipeline (resumed)")
+TaskList()              ← verify returns [] (fresh team, no tasks yet)
+```
+
+#### Step 0.3: Spawn Session Managers (from snapshot)
+
+Only needed if `pipeline-tasks.json.resolved_config` has any API provider stages. Skip `validate` (original config was validated at pipeline creation). Do NOT use `pipeline-config.ts spawn` — it reads current disk config, which may have drifted. Instead, extract unique API presets from the stored snapshot and spawn session managers directly:
+
+```
+Read pipeline-tasks.json.stages
+For each unique provider name where providerType === 'api':
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/session-manager.ts" \
+    --preset "<provider_name>" \
+    --cwd "${CLAUDE_PROJECT_DIR}"
+```
+
+One session manager per unique API provider — no `--model` flag (matches non-resume `spawnSessionManagers` behavior). Model selection is per-task via the stage's `model` field, mapped through the provider's env vars at task dispatch time. This honors the "resume with original config" choice from Step 0.1.
+
+#### Step 0.4: Re-create Task Chain (Remaining Stages)
+
+**Two-pass approach** (ensures all task IDs exist before rewiring):
+
+```
+// Explicit initialization
+stages = pipeline-tasks.json.stages    // array from stored snapshot
+taskIdMap = {}                          // index → recreated task ID
+needsChangesList = []                   // indices needing fix+re-review in Pass 3
+statusMap = {}                          // index → target status ('completed' | 'pending')
+previousTaskId = null
+groupPredecessors = null
+
+// Normalize parallel_group_id (older snapshots may omit it)
+for each stage in stages:
+  stage.parallel_group_id = stage.parallel_group_id ?? null
+```
+
+**Join file_status into stages:** The Step 0 detection script outputs `stageStatus` (an array with `file_status` per stage). Before processing, merge it into `stages` so each stage entry carries its own `file_status`:
+```
+for i in 0..stages.length-1:
+  stages[i].file_status = stageStatus[i]?.file_status || 'no_output_file'
+```
+
+**Validate `parallel_group_id` integrity:** After normalization, verify stored `parallel_group_id` values are consistent:
+```
+for i in 0..stages.length-1:
+  gid = stages[i].parallel_group_id
+  if gid is null: continue
+  // Must be a review stage
+  if stages[i].type !== 'plan-review' AND stages[i].type !== 'code-review':
+    log warning: "Stage {i} has parallel_group_id={gid} but type={stages[i].type}; resetting to null"
+    stages[i].parallel_group_id = null
+    continue
+  // Must form contiguous runs of same type
+  if i > 0 AND stages[i-1].parallel_group_id === gid AND stages[i-1].type !== stages[i].type:
+    log warning: "Stage {i} has parallel_group_id={gid} but type differs from adjacent stage; resetting to null"
+    stages[i].parallel_group_id = null
+```
+
+**Pass 1 — Create all tasks (pending):** For each stage in `stages` (index 0..N), create a task as **pending** regardless of actual status. Store `taskIdMap[i] = task.id`. Determine target status using the `file_status` (now on each stage entry) from Step 0's detection script (which already handles stage-type-aware completion for RCA outputs via `root_cause.summary + root_cause.root_file`):
+
+- **`file_status === 'complete'` or `'approved'`**: `statusMap[i] = 'completed'`
+- **`file_status === 'needs_changes'`**: `statusMap[i] = 'completed'`. Append i to `needsChangesList`.
+- **`file_status === 'rejected'`**: AskUserQuestion: "Stage {type} {index} was rejected. Options: 1. Start fresh. 2. Treat as needs_changes." If start fresh → Step 1. If needs_changes → `statusMap[i] = 'completed'`, append i to `needsChangesList`.
+- **All other `file_status` values** (`'failed'`, `'needs_clarification'`, `'partial'`, `'pending'`, `'unknown'`, `'invalid'`, `'no_output_file'`): `statusMap[i] = 'pending'` (task stays pending, stage re-runs).
+
+This mapping works for all stage types because the Step 0 detection script already produces `'complete'` for valid RCA outputs that lack a `status` field (detected via `root_cause.summary` and `root_cause.root_file`).
+
+**Pass 2 — Restore dependency edges:** For each stage in `stages` (index 0..N), apply `blockedBy` using the same fan-out/fan-in logic as normal Step 2 task chain creation, using `stages[i].parallel_group_id`:
+
+- If `stages[i].parallel_group_id` is non-null AND same as previous stage's group → fan-out: `TaskUpdate(taskIdMap[i], addBlockedBy: predecessors)` (same predecessors as other group members)
+- If starting a new parallel group → compute predecessors from `previousTaskId` or `groupPredecessors`, apply to all group members
+- If sequential (null group ID) → `TaskUpdate(taskIdMap[i], addBlockedBy: [previousTaskId])` or fan-in from `groupPredecessors`
+- Track `previousTaskId` and `groupPredecessors` identically to the normal Step 2 task chain creation algorithm
+
+Then apply terminal statuses: for each i where `statusMap[i] === 'completed'`: `TaskUpdate(taskIdMap[i], status: 'completed')`.
+
+**Pass 3 — Rewire needs_changes stages:** For each index i in `needsChangesList`:
+- Create fix task: `parallel_group_id: null`, `blockedBy: [taskIdMap[i]]`
+- Create re-review task: `parallel_group_id: null`, `blockedBy: [fix_task.id]`
+- **Group-aware successor:** If `stages[i].parallel_group_id` is non-null, find the last index j where `stages[j].parallel_group_id === stages[i].parallel_group_id` (= groupEnd), then successor = groupEnd + 1. If null, successor = i + 1. If successor exists in `taskIdMap`: `TaskUpdate(taskIdMap[successor], addBlockedBy: [re_review_task.id])`. If no successor, skip.
+
+**Pass 4 — Update `pipeline-tasks.json` with new task IDs:** The main loop matches tasks by `task_id` for provider routing, parallel group lookup, and consolidation triggers. After recreating tasks, the stored IDs are stale. Rewrite:
+
+```
+for each i in 0..N:
+  stages[i].task_id = taskIdMap[i]
+// Atomically rewrite pipeline-tasks.json (preserving team_name, pipeline_type, config_hash, resolved_config)
+Write updated stages array back to .vcp/task/pipeline-tasks.json
+```
+
+**RCA completion detection:** RCA output files do NOT have a `status` field (unlike review/implementation outputs). The resume detection script detects RCA completion via `root_cause.summary` and `root_cause.root_file` — if both are populated, the stage is `complete`. If not, it's `unknown` (treated as pending, stage re-runs).
+
+**Bug-fix RCA edge case:** If all rca-*.json files are complete AND no user-story.json exists → run inline Orchestrator Consolidation first (before entering Main Loop).
+
+#### Step 0.5: Enter Main Loop
+
+Jump to existing Main Loop. `TaskList()` finds next unblocked task.
 
 ### Step 1: Reset Pipeline
 
@@ -83,7 +277,7 @@ Store the resulting `resolved` array and full `config` in memory. Each element h
 - `stageIndex` — 1-based index among stages of the same type
 - `outputFile` — computed output file name (e.g., 'rca-1.json', 'plan-review-1.json')
 - `arrayIndex` — 0-based position in the pipeline array
-- `providerType` — resolved provider type: `'subscription'`, `'api'`, or `'cli'`
+- `providerType` — resolved provider type: `'subscription'`, `'api'`, or `'cli'`. **Note:** This is the JSON-serialized field name used in `pipeline-tasks.json` stages. The TypeScript `ResolvedStage` interface uses `provider_type` (snake_case) internally; the orchestrator writes `providerType` (camelCase) to JSON.
 
 Identify RCA stages: all consecutive `rca` type entries at the beginning of the pipeline.
 
@@ -113,24 +307,76 @@ Stale tasks or tool error: Stop and report to user.
 
 **Task chain creation algorithm:**
 
-For each stage in the resolved `bugfix_pipeline` array (in order), create one task. ALL tasks are sequential — each blocked by the previous.
+For each stage in the resolved `bugfix_pipeline` array (in order), create one task. Non-review stages are always sequential (each blocked by the previous). Review stages with `parallel: true` form fan-out/fan-in groups — see Parallel Group Detection below.
 
 ```
-previousTaskId = null
-taskIds = []
-
-for i = 0 to bugfix_pipeline.length - 1:
+// ─── Parallel Group Detection ───────────────────────────────────────────
+// Identify groups of consecutive same-type review stages with parallel: true
+parallelGroups = []
+i = 0
+while i < resolved.length:
   stage = resolved[i]
-  subject = deriveSubject(stage)        // see Subject Derivation below
-  description = deriveDescription(stage) // see Description Rules below
+  if stage.type not in ['plan-review', 'code-review'] OR !stage.parallel:
+    i++
+    continue
+  j = i + 1
+  while j < resolved.length AND resolved[j].type === stage.type AND resolved[j].parallel === true:
+    j++
+  if (j - i) >= 2:  // 2+ consecutive = valid parallel group
+    parallelGroups.push({ start: i, end: j - 1, type: stage.type })
+  i = j
 
-  task = TaskCreate(subject: subject, activeForm: activeForm(stage), description: description)
-  taskIds[i] = task.id
+// ─── Task Chain Creation (with parallel group support) ──────────────────
+previousTaskId = null
+groupPredecessors = null  // array of task IDs from last parallel group
+parallelGroupCounter = 0
+taskIds = []
+stages = []  // parallel metadata for each stage (written to pipeline-tasks.json)
 
-  if previousTaskId is not null:
-    TaskUpdate(task.id, addBlockedBy: [previousTaskId])
+i = 0
+while i < resolved.length:
+  stage = resolved[i]
+  group = parallelGroups.find(g => g.start === i)
 
-  previousTaskId = task.id
+  if group:
+    // Parallel group: fan-out from predecessor, fan-in to successor
+    parallelGroupCounter++
+    groupTaskIds = []
+    predecessors = previousTaskId ? [previousTaskId]
+                 : groupPredecessors ? groupPredecessors
+                 : []
+
+    for k = group.start to group.end:
+      subject = deriveSubject(resolved[k])
+      description = deriveDescription(resolved[k])
+      task = TaskCreate(subject: subject, activeForm: activeForm(resolved[k]), description: description)
+      taskIds[k] = task.id
+      groupTaskIds.push(task.id)
+      stages[k] = { ...resolved[k], output_file: resolved[k].outputFile, task_id: task.id, parallel_group_id: parallelGroupCounter }
+      if predecessors.length > 0:
+        TaskUpdate(task.id, addBlockedBy: predecessors)
+
+    groupPredecessors = groupTaskIds
+    previousTaskId = null
+    i = group.end + 1
+
+  else:
+    // Sequential stage
+    subject = deriveSubject(stage)
+    description = deriveDescription(stage)
+    task = TaskCreate(subject: subject, activeForm: activeForm(stage), description: description)
+    taskIds[i] = task.id
+    stages[i] = { ...resolved[i], output_file: resolved[i].outputFile, task_id: task.id, parallel_group_id: null }
+
+    predecessors = previousTaskId ? [previousTaskId]
+                 : groupPredecessors ? groupPredecessors
+                 : []
+    if predecessors.length > 0:
+      TaskUpdate(task.id, addBlockedBy: predecessors)
+
+    groupPredecessors = null
+    previousTaskId = task.id
+    i++
 ```
 
 **Subject Derivation by stage type:**
@@ -217,6 +463,7 @@ COMPLETION: .vcp/task/code-review-{N}.json exists with status field
 {
   "team_name": "pipeline-myproject-a1b2c3",
   "pipeline_type": "bug-fix",
+  "config_hash": "<sha256-of-JSON.stringify(loadPipelineConfig())>",
   "resolved_config": {
     "feature_pipeline": [],
     "bugfix_pipeline": [],
@@ -224,18 +471,18 @@ COMPLETION: .vcp/task/code-review-{N}.json exists with status field
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "rca-1.json", "task_id": "4" },
-    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "rca-2.json", "task_id": "5" },
-    { "type": "plan-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "plan-review-1.json", "task_id": "6" },
-    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "7" },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "8" },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "9" },
-    { "type": "code-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "code-review-3.json", "task_id": "10" }
+    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "rca-1.json", "task_id": "4", "parallel_group_id": null },
+    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "rca-2.json", "task_id": "5", "parallel_group_id": null },
+    { "type": "plan-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "plan-review-1.json", "task_id": "6", "parallel_group_id": null },
+    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "7", "parallel_group_id": null },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "8", "parallel_group_id": null },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "9", "parallel_group_id": null },
+    { "type": "code-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "code-review-3.json", "task_id": "10", "parallel_group_id": null }
   ]
 }
 ```
 
-**Verify:** After creating all tasks, call `TaskList()`. You should see N tasks (where N = length of bugfix_pipeline) forming a LINEAR SEQUENTIAL CHAIN. ALL tasks are blocked — no parallel execution.
+**Verify:** After creating all tasks, call `TaskList()`. You should see N tasks (where N = length of bugfix_pipeline). Tasks form a chain with fan-out/fan-in at parallel groups (if configured). Non-review stages (rca, implementation) are always sequential.
 
 ---
 
@@ -246,8 +493,15 @@ Execute this data-driven loop until all tasks are completed:
 ```
 while pipeline not complete:
     1. Call TaskList() — returns array of all tasks with current status and blockedBy
-    2. Find the next task where: status == "pending" AND all blockedBy tasks have status == "completed"
-       (Only one task will be unblocked at a time — all tasks are sequential)
+    2. Find ALL tasks where: status == "pending" AND all blockedBy tasks have status == "completed"
+       If MULTIPLE unblocked tasks found:
+         Look up each task's parallel_group_id from pipeline-tasks.json stages (match by task_id)
+         If ALL share the SAME non-null parallel_group_id:
+           → [PARALLEL OK] Execute all simultaneously (see Parallel Execution below)
+         If group IDs differ OR any is null:
+           → Sort by stage index (look up each task_id in pipeline-tasks.json.stages to get its index), pick lowest index first, execute sequentially
+       If ONE unblocked task → execute it normally
+       If NO unblocked tasks and tasks remain → pipeline is stuck, report to user
     3. Call TaskGet(task.id) — read full description
     4. Call TaskUpdate(task.id, status: "in_progress")
     5. Execute task — ROUTE BY PROVIDER TYPE (from resolved stages, NOT from description alone):
@@ -272,18 +526,44 @@ while pipeline not complete:
          // Do NOT pass model parameter to Task tool. Model is passed via --model flag to cli-executor.ts.
 
        - Parse AGENT, MODEL, INPUT, OUTPUT from task description for the prompt content
-       - **NEVER use team_name when spawning agents.** All stages are one-shot sequential subagents, NOT teammates.
+       - **NEVER use team_name when spawning agents.** All stages are one-shot subagents, NOT teammates. Parallel review groups dispatch concurrent one-shot `Task()` calls — not team-spawned teammates.
     6. Check output file for result
     7. *** RCA CONSOLIDATION CHECK (inline, before handling result) ***
-       After completing a task, check if:
-         (a) The just-completed task is of type 'rca' (check stages[i].type === 'rca')
-         (b) The NEXT task in the pipeline is NOT of type 'rca' (or there is no next task)
+       After completing a task, look up `completedStageIndex` in pipeline-tasks.json stages (match by task_id):
+         (a) `completedStage = stages[completedStageIndex]` — check if `.type === 'rca'`
+         (b) `nextStage = stages[completedStageIndex + 1]` — check if null or `.type !== 'rca'`
        If BOTH conditions are true: run the Orchestrator Consolidation step BEFORE dispatching next task.
-       See "Orchestrator Consolidation" section below.
+       See "RCA Consolidation Trigger Detection" section below.
     8. Handle result (see Result Handling below)
-    9. Enrich next task (before marking completed — best-effort, see Progressive Enrichment)
+    9. Enrich next task (before marking completed — sequential tasks only, NOT parallel group members; see Parallel Execution step 5 for aggregated enrichment)
    10. Call TaskUpdate(task.id, status: "completed")
 ```
+
+### Parallel Execution [PARALLEL OK]
+
+When multiple tasks share the same non-null `parallel_group_id` and are all unblocked:
+
+1. For EACH task simultaneously: TaskGet, TaskUpdate(in_progress), dispatch agent
+2. Wait for ALL to return
+3. Handle each result independently:
+   - **approved** → mark completed
+   - **needs_changes** → mark review completed, create fix task (`parallel_group_id: null`, `blockedBy: [review_task.id]`), create re-review task (`parallel_group_id: null`, `blockedBy: [fix_task.id]`). **Group-aware successor lookup:** look up the task's `parallel_group_id` in `pipeline-tasks.json.stages`, find the last index with that same group ID (= groupEnd), then successor = groupEnd + 1. If successor exists in stages, call `TaskUpdate(stages[successor].task_id, addBlockedBy: [re_review_task.id])`. If no successor (last stage), skip rewiring.
+   - **rejected** → handle per Result Handling rules
+4. Dynamic fix/re-review tasks always have `parallel_group_id: null` → they always execute sequentially
+5. **Aggregated enrichment (replaces per-task step 9 for parallel members):** Do NOT enrich the successor task individually per parallel member — this causes last-write-wins races. Instead, after ALL parallel results are collected, build a single combined context block:
+   ```
+   context = ""
+   for each completed parallel task (approved or needs_changes):
+     read output file, extract key context (≤ 250 chars per member)
+     context += "FROM {stage.type} {stage.model}: {summary}\n"
+   // Find successor: compute group-aware successor index (groupEnd + 1)
+   if successor exists:
+     TaskGet(successor_task_id) → read current description
+     TaskUpdate(successor_task_id, description: append "CONTEXT FROM PRIOR PARALLEL GROUP:\n{context}")
+   ```
+   If enrichment fails, log and continue (best-effort).
+
+**IMPORTANT:** Only tasks from the original `pipeline-tasks.json.stages` with matching `parallel_group_id` may run in parallel. Dynamic tasks (fix, re-review) NEVER run in parallel.
 
 ### RCA Consolidation Trigger Detection
 
@@ -462,8 +742,8 @@ When a review returns `needs_changes`, the **same stage (same index)** re-review
 
 ```
 // stage = the pipeline stage entry that returned needs_changes
+// stageIndex = index of this stage in pipeline-tasks.json.stages[]
 // current_task_id = from main loop
-// next_task_id = next stage in pipeline (if any)
 // iteration = from TaskList: count existing "Fix {stage subject} v*" tasks + 1
 
 fix = TaskCreate(
@@ -478,8 +758,16 @@ rerev = TaskCreate(
                {if CLI stage: --output-file .vcp/task/{stage.output_file}}..."
 )
 TaskUpdate(rerev.id, addBlockedBy: [fix.id])
-if next_task_id is not null:
-  TaskUpdate(next_task_id, addBlockedBy: [rerev.id])
+
+// Group-aware successor lookup (same algorithm as Parallel Execution and Resume Pass 3):
+groupId = stage.parallel_group_id ?? null
+if groupId is not null:
+  groupEnd = max index j where stages[j].parallel_group_id === groupId
+  successorIndex = groupEnd + 1
+else:
+  successorIndex = stageIndex + 1
+if successorIndex < stages.length:
+  TaskUpdate(stages[successorIndex].task_id, addBlockedBy: [rerev.id])
 ```
 
 ### Iteration Tracking
@@ -559,7 +847,7 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
 ## Important Rules
 
 1. **Pipeline team first, then task chain** — Create team (Step 1.3), verify tools (Step 1.4), then create task chain.
-2. **All stages sequential** — NO parallel execution, even for RCA stages. Every task has `blockedBy` pointing to the previous task.
+2. **Non-review stages sequential** — RCA, implementation always execute sequentially. Review stages (plan-review, code-review) with `parallel: true` form parallel groups via fan-out/fan-in. Every non-parallel task has `blockedBy` pointing to the previous task.
 3. **Data-driven task chain** — Iterate over `bugfix_pipeline` array, create one task per entry.
 4. **RCA consolidation is inline** — NOT a task, NOT an agent call. The orchestrator reads all rca-*.json files and writes user-story.json + plan-refined.json directly. Fixed file names.
 5. **Consolidation trigger** — After completing an rca stage, check if next stage is non-rca (or no next stage). If yes, run consolidation immediately before dispatching next task.
@@ -569,7 +857,7 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
 9. **max_iterations from config** — Use resolved_config.max_iterations for fix/re-review cycle limit.
 10. **CLI stages pass --preset, --model, --output-file** — CLI provider stages MUST pass --preset, --model, and --output-file to cli-executor.ts.
 11. **Minimal fix principle** — Fix is the smallest possible change addressing root cause. No refactoring.
-12. **No teammate spawning** — The bug-fix pipeline does NOT use team-based parallel execution. ALL stages use sequential one-shot `Task()` calls WITHOUT `team_name`. Never spawn teammates with `Task(team_name: ...)`. The pipeline team exists solely for task tool availability (TaskCreate/TaskUpdate/TaskList), not for spawning workers.
+12. **No teammate spawning** — The bug-fix pipeline does NOT use team-based parallel execution. Never spawn teammates with `Task(team_name: ...)`. The pipeline team exists solely for task tool availability (TaskCreate/TaskUpdate/TaskList), not for spawning workers. Parallel review groups use concurrent one-shot `Task()` calls (without `team_name`), NOT team-spawned teammates.
 
 ---
 

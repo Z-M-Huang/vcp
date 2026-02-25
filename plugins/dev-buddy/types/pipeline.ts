@@ -21,6 +21,8 @@ export interface StageEntry {
   provider: string;
   /** Model name. Required. Validated against /^[a-zA-Z0-9._-]+$/. */
   model: string;
+  /** When true, this review stage runs in parallel with adjacent same-type parallel stages. Only applies to plan-review and code-review. */
+  parallel?: boolean;
 }
 
 /**

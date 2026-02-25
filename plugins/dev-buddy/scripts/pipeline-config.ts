@@ -147,6 +147,20 @@ export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' 
         implementationCount++;
       }
 
+      // Validate parallel flag type and applicability
+      if ('parallel' in entry && typeof entry.parallel !== 'boolean') {
+        throw new Error(
+          `${name}[${i}]: 'parallel' must be a boolean, got ${typeof entry.parallel}`
+        );
+      }
+      if (entry.parallel === true) {
+        if (entry.type !== 'plan-review' && entry.type !== 'code-review') {
+          throw new Error(
+            `${name}[${i}]: 'parallel' is only allowed on plan-review and code-review stages, not '${entry.type}'`
+          );
+        }
+      }
+
       // Validate provider (non-empty string)
       if (typeof entry.provider !== 'string' || entry.provider.trim() === '') {
         throw new Error(`${name}[${i}]: provider must be a non-empty string`);

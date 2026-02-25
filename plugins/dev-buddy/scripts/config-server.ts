@@ -447,7 +447,7 @@ const ALLOWED_TOP_LEVEL_FIELDS = new Set([
 ]);
 
 // Allowed stage entry fields
-const ALLOWED_STAGE_ENTRY_FIELDS = new Set(['type', 'provider', 'model']);
+const ALLOWED_STAGE_ENTRY_FIELDS = new Set(['type', 'provider', 'model', 'parallel']);
 
 /**
  * Validate a stage entry object for field allowlisting and structural correctness.
@@ -470,6 +470,9 @@ function validateStageEntry(entry: unknown, label: string): string | null {
   }
   if (typeof obj.model !== 'string' || obj.model.trim() === '') {
     return `${label}: model must be a non-empty string`;
+  }
+  if ('parallel' in obj && typeof obj.parallel !== 'boolean') {
+    return `${label}: parallel must be a boolean`;
   }
   return null;
 }

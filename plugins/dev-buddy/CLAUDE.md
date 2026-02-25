@@ -37,9 +37,10 @@ Multi-Session Orchestrator Pipeline (Task-Based Enforcement, Configurable)
   |     +-- planner agent
   |     -> .vcp/task/plan-refined.json
   |
-  +-- Plan Reviews (TASK-ENFORCED SEQUENTIAL)
+  +-- Plan Reviews (TASK-ENFORCED, SEQUENTIAL OR PARALLEL)
   |     +-- TaskCreate + TaskUpdate(addBlockedBy) for each plan-review stage in config
-  |     +-- e.g., Plan Review 1 → Plan Review 2 → Plan Review 3 (configurable count)
+  |     +-- Sequential by default; stages with parallel: true form parallel groups
+  |     +-- e.g., Plan Review 1 → (Plan Review 2 + Plan Review 3) parallel → sequential
   |     -> .vcp/task/plan-review-1.json, plan-review-2.json, ...
   |
   +-- Implementation
@@ -48,9 +49,10 @@ Multi-Session Orchestrator Pipeline (Task-Based Enforcement, Configurable)
   |     +-- Resume for iterative fixes
   |     -> .vcp/task/impl-result.json
   |
-  +-- Code Reviews (TASK-ENFORCED SEQUENTIAL)
+  +-- Code Reviews (TASK-ENFORCED, SEQUENTIAL OR PARALLEL)
   |     +-- TaskCreate + TaskUpdate(addBlockedBy) for each code-review stage in config
-  |     +-- e.g., Code Review 1 → Code Review 2 → Code Review 3 (configurable count)
+  |     +-- Sequential by default; stages with parallel: true form parallel groups
+  |     +-- e.g., Code Review 1 → (Code Review 2 + Code Review 3) parallel → sequential
   |     -> .vcp/task/code-review-1.json, code-review-2.json, ...
   |
   +-- Completion
@@ -186,14 +188,13 @@ When a review returns `needs_changes`, the orchestrator creates fix + re-review 
 3. `rerev = TaskCreate(subject: "Plan Review 2 v2", description: "AGENT: ... NOTE: Re-review after fix...")`
    - Subject format: `{Stage Type} {Index} v{N+1}` (e.g., "Code Review 3 v3")
 4. `TaskUpdate(rerev.id, addBlockedBy: [fix.id])`
-5. `if next_reviewer_id is not null: TaskUpdate(next_reviewer_id, addBlockedBy: [rerev.id])`
-   - Skip for last reviewer (no next reviewer)
+5. Group-aware successor rewiring: compute successor index (if stage is in a parallel group, successor = group end + 1; otherwise successor = stage index + 1). If successor exists: `TaskUpdate(successor_task_id, addBlockedBy: [rerev.id])`. Skip if last stage.
 6. `TaskUpdate(current_review_id, status: "completed")`
 7. After `max_iterations` re-reviews (from resolved config), escalates to user
 
-Re-review always targets **the same stage index** (not the next one). If Code Review 2 requests changes, fixes are validated by Code Review 2 again before Code Review 3 can proceed.
+Re-review always targets **the same stage index** (not the next one). If Code Review 2 requests changes, fixes are validated by Code Review 2 again before the successor stage can proceed.
 
-This maintains the sequential requirement and ensures the same reviewer validates fixes before proceeding.
+This maintains the dependency chain and ensures the same reviewer validates fixes before the next stage (or the stage after the parallel group) can proceed.
 
 ---
 
@@ -211,12 +212,12 @@ The pipeline will:
 1. **Reset, create pipeline team & task chain** with dependencies
 2. **Gather requirements** (team-based) - Specialist teammates explore in parallel, lead asks informed questions, then synthesize
 3. **Plan** (semi-interactive) - Custom agent with Architect expertise
-4. **Review plan** (task-enforced) - Sequential: Sonnet → Opus → Codex gate
+4. **Review plan** (task-enforced) - Per config: sequential by default, parallel groups where configured
 5. **Implement** - Iterates until reviews approve
-6. **Review code** (task-enforced) - Sequential: Sonnet → Opus → Codex gate
+6. **Review code** (task-enforced) - Per config: sequential by default, parallel groups where configured
 7. **Complete** - Report results
 
-**No phase skipping:** Every pipeline run executes ALL phases in order. Pre-existing plans or context from plan mode are input to the specialists, not a substitute for the pipeline. Never skip team-based requirements gathering.
+**No phase skipping:** Every pipeline run executes ALL phases in order. Exception: Resume path (Step 0) skips already-completed stages by creating pre-completed tasks. Pre-existing plans or context from plan mode are input to the specialists, not a substitute for the pipeline. Never skip team-based requirements gathering.
 
 ### Bug Fix (`/dev-buddy-bug-fix`)
 
@@ -226,14 +227,14 @@ The bug-fix pipeline uses a different early-phase approach optimized for diagnos
 2. **Inline Consolidation** — After the last RCA stage, the orchestrator consolidates findings inline, writes `user-story.json` + `plan-refined.json` (fixed canonical names)
 3. **Plan Validation** — Optional plan-review stage(s) for Codex RCA+plan validation
 4. **Implementation** — Minimal fix targeting the root cause
-5. **Code Reviews** (task-enforced) — Sequential per config
+5. **Code Reviews** (task-enforced) — Sequential by default, parallel groups where configured
 
 **Key differences from `/dev-buddy-feature-implement`:**
 - No requirements-gatherer or planner agents — RCA stages replace them
 - Orchestrator consolidates RCA findings inline (not via a separate task) before the next non-RCA stage
 - Output files: `rca-1.json`, `rca-2.json`, ..., `plan-review-1.json`, `code-review-1.json`, etc.
 - Fix plan emphasizes smallest possible change, not architectural design
-- All stages execute **sequentially** (per FR6) — no parallel execution, even for consecutive RCA stages
+- Non-review stages (RCA, implementation) execute **sequentially**. Review stages (plan-review, code-review) can be configured for parallel execution via `parallel: true` on each StageEntry.
 
 ### One-Shot Task (`/dev-buddy-once`)
 
@@ -286,11 +287,11 @@ Workers can be resumed with preserved context:
 - **Resume for context** - Maintains conversation history across iterations
 - **Fresh analysis** - Reviews start fresh for unbiased perspective
 
-### Task-Based Sequential Enforcement
+### Task-Based Dependency Enforcement
 
 Reviews are enforced via `blockedBy` dependencies:
-- Codex review **cannot start** until Opus review completes
-- Opus review **cannot start** until Sonnet review completes
+- Sequential stages: each review **cannot start** until the previous completes
+- Parallel groups: stages with matching `parallel_group_id` run concurrently, and the next stage waits for all group members
 - This is data-driven, not instruction-driven
 
 ### Codex as Final Gate
@@ -364,22 +365,23 @@ Max 10 re-reviews per reviewer before escalating to user.
 
 ### Pipeline Tasks (`.vcp/task/pipeline-tasks.json`)
 
-Format includes a `resolved_config` snapshot and a `stages` array with task IDs:
+Format includes a `resolved_config` snapshot, `config_hash` for resume drift detection, and a `stages` array with task IDs and `parallel_group_id`:
 
 ```json
 {
   "team_name": "pipeline-vibe-pipe-a1b2c3",
   "pipeline_type": "feature-implement",
+  "config_hash": "<sha256-of-JSON.stringify(loadPipelineConfig())>",
   "resolved_config": {
     "feature_pipeline": [
       { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
       { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
-      { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
-      { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus" },
+      { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet", "parallel": true },
+      { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus", "parallel": true },
       { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
       { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
-      { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" },
-      { "type": "code-review", "provider": "anthropic-subscription", "model": "opus" },
+      { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet", "parallel": true },
+      { "type": "code-review", "provider": "anthropic-subscription", "model": "opus", "parallel": true },
       { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" }
     ],
     "bugfix_pipeline": [...],
@@ -387,18 +389,21 @@ Format includes a `resolved_config` snapshot and a `stages` array with task IDs:
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "task_id": "task-id-1" },
-    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-refined.json", "task_id": "task-id-2" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-1.json", "task_id": "task-id-3" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-2.json", "task_id": "task-id-4" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-3.json", "task_id": "task-id-5" },
-    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "task-id-6" },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "task-id-7" },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "task-id-8" },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-3.json", "task_id": "task-id-9" }
+    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "task_id": "task-id-1", "parallel_group_id": null },
+    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-refined.json", "task_id": "task-id-2", "parallel_group_id": null },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-1.json", "task_id": "task-id-3", "parallel_group_id": 1 },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-2.json", "task_id": "task-id-4", "parallel_group_id": 1 },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-3.json", "task_id": "task-id-5", "parallel_group_id": null },
+    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "task-id-6", "parallel_group_id": null },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "task-id-7", "parallel_group_id": 2 },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "task-id-8", "parallel_group_id": 2 },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-3.json", "task_id": "task-id-9", "parallel_group_id": null }
   ]
 }
 ```
+
+- `config_hash`: SHA-256 of `JSON.stringify(loadPipelineConfig())` at pipeline creation time. Used for resume drift detection.
+- `parallel_group_id`: Integer for tasks in a parallel group (same ID = same group), `null` for sequential tasks. Dynamic fix/re-review tasks always get `null`.
 
 Hooks and phase detection read `resolved_config` from this file to derive dynamic stage lists — they never read `~/.vcp/dev-buddy.json` directly (prevents TOCTOU races).
 
@@ -426,12 +431,12 @@ The pipeline is driven by `~/.vcp/dev-buddy.json`. Two ordered arrays of stages 
   "feature_pipeline": [
     { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
     { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus" },
+    { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet", "parallel": true },
+    { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus", "parallel": true },
     { "type": "plan-review", "provider": "my-codex-preset", "model": "o3" },
     { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus" },
+    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet", "parallel": true },
+    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus", "parallel": true },
     { "type": "code-review", "provider": "my-codex-preset", "model": "o3" }
   ],
   "bugfix_pipeline": [
@@ -439,14 +444,16 @@ The pipeline is driven by `~/.vcp/dev-buddy.json`. Two ordered arrays of stages 
     { "type": "rca", "provider": "anthropic-subscription", "model": "opus" },
     { "type": "plan-review", "provider": "my-codex-preset", "model": "o3" },
     { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus" },
+    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet", "parallel": true },
+    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus", "parallel": true },
     { "type": "code-review", "provider": "my-codex-preset", "model": "o3" }
   ],
   "max_iterations": 10,
   "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
 }
 ```
+
+In the example above, plan-review stages 1+2 run in parallel, then stage 3 runs sequentially. Code-review stages 1+2 run in parallel, then stage 3 runs sequentially. The `parallel` field is optional (defaults to false) and only applies to `plan-review` and `code-review` types.
 
 See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 
@@ -457,6 +464,7 @@ See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 - `rca` is **bugfix-only** — not allowed in feature pipeline
 - Each pipeline must have **at least one** `implementation` stage
 - `model` is **required** on every stage entry — values must match `/^[a-zA-Z0-9._-]+$/` (prevents shell metacharacter injection)
+- `parallel` is **optional** (boolean, default false) — only meaningful on `plan-review` and `code-review` stages. Setting `parallel: true` on non-review stages fails validation. `parallel: false` (or omitted) is accepted on any stage type.
 
 ### Config Validation
 
@@ -465,6 +473,7 @@ See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 - Singleton constraints are enforced (e.g., at most 1 `requirements` stage)
 - Stage types are validated against the 6 allowed types
 - Pipeline-specific stage restrictions (e.g., `rca` only in bugfix)
+- `parallel: true` rejected on non-review stages
 - If the file is missing, factory defaults are returned
 
 ---
