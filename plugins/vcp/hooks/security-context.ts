@@ -23,7 +23,7 @@ await vcpLog(projectRoot, {
   source: "security-context",
   event: "SessionStart",
   decision: "info",
-  details: `Generated context (${output?.length ?? 0} chars)`,
+  details: `Generated context (${output?.length ?? 0} chars)\n--- BEGIN CONTEXT ---\n${output ?? "(empty)"}\n--- END CONTEXT ---`,
 }, debug);
 
 process.exit(0);
