@@ -17,7 +17,7 @@ All standard files are in the `standards/` root directory with a `{scope}-{topic
 | `cli` | `cli-security-and-quality.md` | CLI tool standards |
 | `devops` | `devops-container-security.md`, `devops-cicd-security.md`, `devops-iac-security.md`, `devops-kubernetes-security.md` | DevOps/infrastructure standards |
 | `agentic-ai` | `agentic-ai-agent-security.md`, `agentic-ai-tool-security.md`, `agentic-ai-permissions.md`, `agentic-ai-supply-chain.md`, `agentic-ai-communication.md` | AI agent security standards (OWASP ASI Top 10) |
-| `compliance` | `compliance-gdpr.md`, `compliance-pci-dss.md`, `compliance-hipaa.md` | Regulatory compliance standards |
+| `compliance` | `compliance-gdpr.md`, `compliance-pci-dss.md`, `compliance-hipaa.md`, `compliance-accessibility.md` | Regulatory compliance standards |
 
 ### Manifest Architecture
 
@@ -36,10 +36,11 @@ standards/
 │   ├── agentic-ai.json
 │   ├── compliance-gdpr.json
 │   ├── compliance-pci-dss.json
-│   └── compliance-hipaa.json
+│   ├── compliance-hipaa.json
+│   └── compliance-accessibility.json
 ├── core-security.md       # All .md files are flat in the root
 ├── core-architecture.md
-├── ...                    # (40 total standard files)
+├── ...                    # (41 total standard files)
 └── README.md
 ```
 

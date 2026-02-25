@@ -1,0 +1,6 @@
+{
+  "scope": "compliance",
+  "standards": [
+    { "id": "compliance-accessibility", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/compliance-accessibility.md", "severity": "critical", "tags": ["compliance", "accessibility", "ada", "section-508", "section-504", "aca", "aoda", "eaa", "en-301-549", "equality-act", "psbar", "web-accessibility-directive", "wcag", "a11y", "vpat"] }
+  ]
+}
