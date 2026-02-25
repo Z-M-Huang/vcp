@@ -39,7 +39,8 @@
             "mobile": { "type": "boolean" },
             "desktop": { "type": "boolean" },
             "cli": { "type": "boolean" },
-            "devops": { "type": "boolean" }
+            "devops": { "type": "boolean" },
+            "agentic-ai": { "type": "boolean" }
           },
           "additionalProperties": false
         },

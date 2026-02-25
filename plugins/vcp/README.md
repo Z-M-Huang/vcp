@@ -63,7 +63,7 @@ URL resolution order:
 ### Project Configuration
 
 Skills require `.vcp/config.json` (project) with a `pluginRoot` field (set by `/vcp-init`). Global config (`~/.vcp/config.json`) is auto-created if missing (from project config + defaults), so users don't need to run `/vcp-init` again after upgrading. The project config determines:
-- Which scopes apply (web-frontend, web-backend, database, mobile, desktop, cli, devops)
+- Which scopes apply (web-frontend, web-backend, database, mobile, desktop, cli, devops, agentic-ai)
 - Which compliance frameworks are active (GDPR, PCI DSS, HIPAA)
 - What paths to exclude from scanning
 - The minimum severity threshold for reporting

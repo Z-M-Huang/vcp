@@ -70,6 +70,7 @@ Based on what you find, determine:
    - `desktop`: the project builds desktop applications. Detection hints: `electron` or `@electron/` or `tauri` or `@tauri-apps/` in dependencies, `electron-builder` config, `tauri.conf.json`
    - `cli`: the project is a command-line tool. Detection hints: `bin` field in `package.json`, `commander` / `yargs` / `inquirer` / `oclif` in Node.js deps, `argparse` / `click` / `typer` / `fire` in Python deps, `cobra` / `urfave/cli` in Go deps, `clap` in Rust deps
    - `devops`: the project contains infrastructure/deployment configuration. Detection hints: `Dockerfile`, `.github/workflows/` directory, `*.tf` files (Terraform), `k8s/` or `kubernetes/` or `helm/` directories, `docker-compose.yml`, `Jenkinsfile`, `.gitlab-ci.yml`, `pulumi/` directory
+   - `agentic-ai`: the project develops AI agents, MCP servers, or multi-agent systems. Detection hints: `@anthropic-ai/claude-agent-sdk` or `@anthropic-ai/sdk` or `claude-code` in dependencies, `mcp` / `@modelcontextprotocol/sdk` in dependencies, `mcpServers` in config files, `agents/` or `mcp-servers/` directories, `.claude/agents/` directory, `langchain` / `langgraph` / `crewai` / `autogen` / `semantic-kernel` in dependencies, files referencing `tool_use` or `tool_call` patterns
 3. **Exclude patterns** — which paths should be skipped during scanning (build output, vendored code, generated files)
 
 Use your judgment. Do not rely on a fixed lookup table — understand the project and decide what applies.

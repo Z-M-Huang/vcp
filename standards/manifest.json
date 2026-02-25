@@ -10,6 +10,7 @@
     "desktop": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/desktop.json", "applies": "desktop" },
     "cli": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/cli.json", "applies": "cli" },
     "devops": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/devops.json", "applies": "devops" },
+    "agentic-ai": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/agentic-ai.json", "applies": "agentic-ai" },
     "compliance-gdpr": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/compliance-gdpr.json", "applies": "compliance:gdpr" },
     "compliance-pci-dss": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/compliance-pci-dss.json", "applies": "compliance:pci-dss" },
     "compliance-hipaa": { "manifest": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/scopes/compliance-hipaa.json", "applies": "compliance:hipaa" }

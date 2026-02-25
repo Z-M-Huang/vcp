@@ -104,6 +104,7 @@ Group applicable standards into domains. Only create domains where standards exi
 | `desktop` | desktop-security |
 | `cli` | cli-security-and-quality |
 | `devops` | devops-container-security, devops-cicd-security, devops-iac-security, devops-kubernetes-security |
+| `agentic-ai` | agentic-ai-agent-security, agentic-ai-tool-security, agentic-ai-permissions, agentic-ai-supply-chain, agentic-ai-communication |
 
 **Every standard in `applicableStandards` must be assigned to exactly one domain.** If a future standard does not fit any domain above, add it to the most relevant domain or create a new one. Never silently drop a standard.
 
@@ -140,6 +141,20 @@ Wait for all scanner agents to report back. Messages are delivered automatically
 - The orchestrator may scan the failed domain's standards directly as a fallback.
 
 Once all available results are collected, aggregate all findings.
+
+### Existing-File Secrets Scan
+
+In addition to standard-based scanning, the `backend` domain scanner must also check for secrets already committed to the repository:
+
+1. **Scan `.env*` files** (`.env`, `.env.local`, `.env.production`, etc.) for actual secret values. Skip placeholders like `YOUR_API_KEY_HERE`, `changeme`, `xxx`, `TODO`, or empty values.
+2. **Scan config files** (`config.json`, `config.yaml`, `settings.py`, `application.properties`, etc.) for embedded credentials — API keys, passwords, connection strings with credentials, bearer tokens.
+3. **Check for files that should not be committed:** `.env`, `credentials.json`, `*.pem`, `*.key`, `*.p12`, `service-account.json`, `.htpasswd`.
+
+**False positive controls:**
+- Respect the `exclude` patterns from config. Skip files matching exclusion globs.
+- Skip files in `test/`, `tests/`, `__tests__/`, `fixtures/`, `examples/`, `sample/` directories — test fixtures often contain dummy secrets.
+- Map all secrets findings to **CWE-798** so that `"ignore": ["CWE-798"]` in `.vcp/config.json` suppresses them consistently with security-gate behavior.
+- Only flag values that look like real secrets (high entropy strings, known API key prefixes like `sk_live_`, `AKIA`, `ghp_`, `glpat-`).
 
 ## Step 4: Validate Findings
 

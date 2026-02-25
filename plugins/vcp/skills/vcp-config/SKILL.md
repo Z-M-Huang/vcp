@@ -122,7 +122,7 @@ The manifest `scopes` is an object where each key maps to `{ "manifest": "<full-
 
 ### Scopes
 
-Valid values: `web-frontend`, `web-backend`, `database`, `mobile`, `desktop`, `cli`, `devops`. Reject anything else.
+Valid values: `web-frontend`, `web-backend`, `database`, `mobile`, `desktop`, `cli`, `devops`, `agentic-ai`. Reject anything else.
 
 ### Compliance frameworks
 

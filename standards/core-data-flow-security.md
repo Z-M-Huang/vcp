@@ -29,7 +29,7 @@ Every security vulnerability is a data flow problem: untrusted data from a sourc
 
 ### Source Identification
 
-1. **Identify all sources of untrusted input.** Sources include: HTTP request bodies (`req.body`, `request.json()`), query parameters (`req.query`, `request.args`), URL path parameters (`req.params`), HTTP headers (including `Host`, `Referer`, `X-Forwarded-For`), cookies, form data, file uploads (name, content, MIME type), WebSocket messages, CLI arguments (`process.argv`, `sys.argv`), environment variables from untrusted contexts, data read from files written by external processes, database values that originated from user input, and messages from external APIs or message queues. (CWE-20)
+1. **Identify all sources of untrusted input.** Sources include: HTTP request bodies (`req.body`, `request.json()`), query parameters (`req.query`, `request.args`), URL path parameters (`req.params`), HTTP headers (including `Host`, `Referer`, `X-Forwarded-For`), cookies, form data, file uploads (name, content, MIME type), WebSocket messages, CLI arguments (`process.argv`, `sys.argv`), environment variables from untrusted contexts, data read from files written by external processes, database values that originated from user input, and messages from external APIs or message queues. **Framework-specific sources** — Django: `request.GET`, `request.POST`, `request.body`, `request.META`; Express: `req.body`, `req.params`, `req.query`, `req.headers`, `req.cookies`; Flask: `request.args`, `request.form`, `request.json`, `request.files`. Note: import aliasing (e.g., `from django.http import QueryDict as QD`) does not reduce risk — the renamed import carries the same taint. (CWE-20)
 
 2. **Treat data as tainted until explicitly validated.** A variable assigned from a source is tainted. A variable assigned from a tainted variable is tainted. A function return value is tainted if any of its inputs are tainted. Taint propagates through: variable assignments, function parameters, return values, string concatenation, template literals, array/object spreading, and destructuring.
 
@@ -47,6 +47,7 @@ Every security vulnerability is a data flow problem: untrusted data from a sourc
    - **Regular expression construction:** `new RegExp()`, `re.compile()` with user input (CWE-1333)
    - **LDAP queries:** string-built LDAP filters (CWE-90)
    - **XPath queries:** `.xpath()` with string concatenation (CWE-643)
+   - **Framework-specific dangerous sinks** — Django: `mark_safe()` with user input, `.extra()`, `RawSQL()`, `cursor.execute()` with string formatting; Flask: `Markup()` with user input, `make_response()` with unescaped content; Express: `res.send()` with unescaped HTML
 
 ### Path Tracing
 

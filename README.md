@@ -16,8 +16,8 @@
 ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 
-![35 Standards](https://img.shields.io/badge/Standards-35-blue?style=flat-square)
-![11 Scopes](https://img.shields.io/badge/Scopes-11-green?style=flat-square)
+![40 Standards](https://img.shields.io/badge/Standards-40-blue?style=flat-square)
+![12 Scopes](https://img.shields.io/badge/Scopes-12-green?style=flat-square)
 ![OWASP Top 10](https://img.shields.io/badge/OWASP_Top_10-Covered-critical?style=flat-square)
 ![14 Skills](https://img.shields.io/badge/Skills-14-blue?style=flat-square)
 ![8 Agents](https://img.shields.io/badge/Agents-8-green?style=flat-square)
@@ -78,7 +78,7 @@ VCP ships two complementary plugins:
 
 | Plugin | What It Does | Install |
 |--------|-------------|---------|
-| **VCP** | Standards enforcement — 35 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
+| **VCP** | Standards enforcement — 40 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
 | **Dev Buddy** | Multi-AI pipeline — configurable stages, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
 
 Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.
@@ -123,7 +123,7 @@ Run `/vcp-context` to re-inject rules at any time (useful after context compacti
 
 ### Layer 2: On-Demand Scanning — Deep Analysis
 
-Skills scan code against 35 standards across 11 scopes using AI-driven analysis:
+Skills scan code against 40 standards across 12 scopes using AI-driven analysis:
 
 | Skill | What It Does |
 |-------|-------------|
@@ -161,6 +161,7 @@ A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking da
 VCP standards are mapped against authoritative security frameworks:
 
 - **OWASP Top 10:2025** — All 10 categories covered
+- **OWASP Agentic AI Security Top 10 (ASI)** — All 10 categories covered (ASI01–ASI10)
 - **CWE Top 25:2024** — 19/25 covered (6 uncovered are memory-safety, out of scope for managed languages)
 - **OWASP API Security Top 10:2023** — All 10 categories addressed
 - **OWASP ASVS v5.0** — 15/17 chapters covered
@@ -267,7 +268,7 @@ The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. 
 
 ## Standards Coverage
 
-35 standards across 11 scopes:
+40 standards across 12 scopes:
 
 | Scope | Standards | What They Cover |
 |-------|-----------|----------------|
@@ -279,6 +280,7 @@ The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. 
 | **Desktop** | 1 | Electron context isolation, Tauri capabilities, IPC validation, code signing |
 | **CLI** | 1 | Shell injection, argument injection, exit codes, signal handling |
 | **DevOps** | 4 | Containers, CI/CD, Infrastructure as Code, Kubernetes |
+| **Agentic AI** | 5 | Agent security (prompt injection, code execution, memory poisoning), tool security (MCP vetting, allowlists), permissions (least privilege, rogue detection), supply chain (MCP integrity, model provenance), communication (inter-agent auth, cascading failures) — OWASP ASI Top 10 |
 | **Compliance — GDPR** | 1 | Data deletion, retention, consent, PII handling |
 | **Compliance — PCI DSS** | 1 | Tokenization, card masking, CDE isolation |
 | **Compliance — HIPAA** | 1 | PHI encryption, audit logging, retention, minimum necessary |
@@ -438,7 +440,7 @@ Full documentation is on the **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)
 
 ```
 vcp/
-├── standards/           # 32 AI-optimized principled standards across 11 scopes
+├── standards/           # 40 AI-optimized principled standards across 12 scopes
 │   ├── manifest.json    # Root manifest — full HTTPS URLs, org-customizable
 │   ├── scopes/          # Per-scope manifest files
 │   ├── core-*.md        # Universal: security, architecture, testing, etc.
@@ -448,6 +450,7 @@ vcp/
 │   ├── desktop-*.md     # Electron/Tauri isolation, IPC security
 │   ├── cli-*.md         # Shell injection, argument injection, exit codes
 │   ├── devops-*.md      # Containers, CI/CD, IaC, Kubernetes
+│   ├── agentic-ai-*.md  # Agent security, tool security, permissions, supply chain, communication
 │   └── compliance-*.md  # GDPR, PCI DSS, HIPAA
 ├── schemas/             # JSON schemas for config and manifest validation
 ├── plugins/vcp/         # VCP plugin — standards enforcement (skills, hooks, agents)
@@ -471,7 +474,7 @@ vcp/
 
 ### Frameworks
 
-- [OWASP Top 10:2025](https://owasp.org/Top10/2025/) — [OWASP ASVS v5.0](https://owasp.org/www-project-application-security-verification-standard/) — [OWASP API Security Top 10:2023](https://owasp.org/API-Security/) — [CWE Top 25:2024](https://cwe.mitre.org/top25/)
+- [OWASP Top 10:2025](https://owasp.org/Top10/2025/) — [OWASP ASVS v5.0](https://owasp.org/www-project-application-security-verification-standard/) — [OWASP API Security Top 10:2023](https://owasp.org/API-Security/) — [CWE Top 25:2024](https://cwe.mitre.org/top25/) — [OWASP Agentic AI Security Top 10 (Dec 2025)](https://genai.owasp.org/2025/12/09/owasp-genai-security-project-releases-top-10-risks-and-mitigations-for-agentic-ai-security/)
 
 ---
 

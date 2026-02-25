@@ -3,7 +3,7 @@ id: core-security
 title: Security
 scope: core
 severity: critical
-tags: [security, owasp, cwe, input-validation, authentication, cryptography, cwe-208, cwe-321, cwe-1321, cwe-209]
+tags: [security, owasp, cwe, input-validation, authentication, cryptography, cwe-208, cwe-321, cwe-1321, cwe-209, cwe-295]
 references:
   - title: OWASP Top 10 2025
     url: https://owasp.org/Top10/2025/
@@ -74,6 +74,8 @@ AI-generated code has a **2.74x higher security vulnerability rate** than human-
 15. **Validate schema before deserialization.** Validate the structure and schema of untrusted data BEFORE deserializing into application objects. Use JSON Schema, Zod, Pydantic, or equivalent. This prevents type confusion and injection through unexpected fields. This complements Rule 8 with a defense-in-depth approach. (CWE-502)
 
 16. **Handle exceptions securely.** Never expose stack traces, internal file paths, database schema, query strings, or framework versions in error responses sent to clients. Log the full error server-side with a correlation ID, and return a generic message to the client. This complements [core-error-handling](core-error-handling) Rule 7 with security-specific guidance. (CWE-209)
+
+17. **Never disable TLS certificate verification.** Do not set `verify=False` (Python requests/httpx), `rejectUnauthorized: false` (Node.js), `NODE_TLS_REJECT_UNAUTHORIZED=0`, `InsecureSkipVerify: true` (Go), or `-k`/`--insecure` (curl) in production code. Disabling certificate verification allows man-in-the-middle attacks on encrypted connections, making TLS meaningless. (CWE-295)
 
 ## Patterns
 
@@ -435,6 +437,44 @@ def get_user(user_id: int):
 ```
 
 **Why it's wrong:** Stack traces reveal internal file paths, framework versions, and code structure. Database errors reveal schema, table names, and column names. Attackers use this information to map the application's internals and craft targeted exploits.
+
+#### TLS Certificate Verification (Rule 17)
+
+##### Do This
+
+```python
+import httpx
+
+# TLS verification enabled (default — never override)
+client = httpx.Client(verify=True)
+response = client.get("https://api.example.com/data")
+```
+
+```javascript
+// Node.js — default TLS verification (never disable)
+const https = require("node:https");
+const response = await fetch("https://api.example.com/data");
+// Do NOT set NODE_TLS_REJECT_UNAUTHORIZED=0 in env
+```
+
+##### Not This
+
+```python
+import requests
+
+# Disabling TLS verification — allows MITM (CWE-295)
+response = requests.get("https://api.example.com/data", verify=False)
+```
+
+```javascript
+// Disabling TLS verification globally — all HTTPS connections are vulnerable (CWE-295)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+// Or per-request — equally dangerous
+const agent = new https.Agent({ rejectUnauthorized: false });
+```
+
+**Why it's wrong:** Disabling certificate verification removes the authentication guarantee of TLS. An attacker on the network can intercept, read, and modify all traffic — including credentials, tokens, and PII — despite the connection appearing "encrypted" via HTTPS. This is Bandit B501 and one of the most common security misconfigurations in AI-generated code.
 
 ## Exceptions
 

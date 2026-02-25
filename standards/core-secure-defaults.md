@@ -29,7 +29,7 @@ Applications must be secure by default. Every configuration that affects securit
 
 5. **Fail-secure enforcement.** When a security check fails or errors, deny the operation. Never fall through to allowing access because the auth service timed out or the policy engine threw an exception. (CWE-636)
 
-6. **No debug features in production.** Debug endpoints, verbose error responses, profiling tools, and stack traces must be disabled in production. Gate them behind `NODE_ENV !== "production"` or equivalent. (CWE-489)
+6. **No debug features in production.** Debug endpoints, verbose error responses, profiling tools, and stack traces must be disabled in production. Gate them behind `NODE_ENV !== "production"` or equivalent. Never deploy with `DEBUG=True` (Django/Flask), `debug: true` (Express/Spring), or `NODE_ENV=development` — debug mode typically disables CSRF protection, enables verbose error pages with source code, and exposes internal state. Verify the debug flag is off in production configs, not just in code. (CWE-489)
 
 7. **Environment-specific configuration.** Separate dev/staging/prod configs. Never reuse development secrets in production. Use different database credentials, API keys, and signing keys per environment. (CWE-1188)
 

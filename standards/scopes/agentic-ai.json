@@ -1,0 +1,10 @@
+{
+  "scope": "agentic-ai",
+  "standards": [
+    { "id": "agentic-ai-agent-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/agentic-ai-agent-security.md", "severity": "critical", "tags": ["security", "agentic-ai", "prompt-injection", "code-execution", "memory-poisoning", "trust", "owasp-asi", "asi01", "asi05", "asi06", "asi09"] },
+    { "id": "agentic-ai-tool-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/agentic-ai-tool-security.md", "severity": "critical", "tags": ["security", "agentic-ai", "mcp", "tool-use", "tool-vetting", "allowlist", "owasp-asi", "asi02"] },
+    { "id": "agentic-ai-permissions", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/agentic-ai-permissions.md", "severity": "critical", "tags": ["security", "agentic-ai", "permissions", "least-privilege", "credentials", "isolation", "owasp-asi", "asi03", "asi10"] },
+    { "id": "agentic-ai-supply-chain", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/agentic-ai-supply-chain.md", "severity": "critical", "tags": ["security", "agentic-ai", "supply-chain", "mcp", "plugins", "model-provenance", "tool-registry", "owasp-asi", "asi04"] },
+    { "id": "agentic-ai-communication", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/agentic-ai-communication.md", "severity": "high", "tags": ["security", "agentic-ai", "multi-agent", "communication", "cascading-failures", "circuit-breaker", "owasp-asi", "asi07", "asi08"] }
+  ]
+}

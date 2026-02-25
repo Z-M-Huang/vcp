@@ -46,6 +46,10 @@
         "devops": {
           "type": "boolean",
           "description": "DevOps and infrastructure (Docker, Kubernetes, Terraform, CI/CD pipelines)."
+        },
+        "agentic-ai": {
+          "type": "boolean",
+          "description": "AI agent development (MCP servers, multi-agent systems, LLM tool use)."
         }
       },
       "additionalProperties": false

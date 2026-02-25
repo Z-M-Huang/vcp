@@ -1,7 +1,7 @@
 {
   "scope": "core",
   "standards": [
-    { "id": "core-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-security.md", "severity": "critical", "tags": ["security", "owasp", "cwe", "input-validation", "authentication", "cryptography"] },
+    { "id": "core-security", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-security.md", "severity": "critical", "tags": ["security", "owasp", "cwe", "input-validation", "authentication", "cryptography", "cwe-208", "cwe-321", "cwe-1321", "cwe-209", "cwe-295"] },
     { "id": "core-architecture", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-architecture.md", "severity": "high", "tags": ["architecture", "srp", "separation-of-concerns", "dependency-direction", "duplication"] },
     { "id": "core-root-cause-analysis", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-root-cause-analysis.md", "severity": "high", "tags": ["root-cause", "debugging", "death-spiral", "bug-fixing", "tracing"] },
     { "id": "core-code-quality", "url": "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/core-code-quality.md", "severity": "high", "tags": ["quality", "duplication", "dead-code", "consistency", "naming", "churn"] },
