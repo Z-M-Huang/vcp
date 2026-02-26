@@ -95,7 +95,7 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
   --task "<task_text>"
 ```
 
-**Bash timeout:** Set to 600000 (10 minutes) or match the preset's `timeout_ms` if known.
+**Bash timeout:** Read the preset's `timeout_ms` from `~/.vcp/presets.json`. Set the Bash tool timeout to `timeout_ms + 60000` (task timeout plus 60s buffer for startup/shutdown). If `timeout_ms` is not set or lookup fails, default to 600000 (10 minutes).
 
 The script:
 1. Spawns a session manager for the API preset
@@ -121,7 +121,7 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
   --task "<task_text>"
 ```
 
-**Bash timeout:** Set to 600000 (10 minutes) or match the preset's `timeout_ms` if known.
+**Bash timeout:** Read the preset's `timeout_ms` from `~/.vcp/presets.json`. Set the Bash tool timeout to `timeout_ms + 60000` (task timeout plus 60s buffer for startup/shutdown). If `timeout_ms` is not set or lookup fails, default to 1260000 (21 minutes — matches the script's 20-minute default CLI timeout plus buffer).
 
 The CLI tool runs directly in the project directory (e.g., Codex `exec --full-auto`). Its output streams to the terminal.
 

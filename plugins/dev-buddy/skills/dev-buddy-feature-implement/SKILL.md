@@ -616,7 +616,9 @@ while pipeline not complete:
 
        **If providerType is 'api':**
          Read .vcp/task/session-ports.json → find entry where preset_name matches stage.provider
-         curl -s --connect-timeout 5 --max-time 300 \
+         Derive timeout: read `~/.vcp/presets.json` → find preset by stage.provider name → read `timeout_ms` → compute TIMEOUT_SECONDS = Math.ceil(timeout_ms / 1000) (default: 300 if not set or lookup fails)
+         Set Bash tool timeout parameter to timeout_ms + 30000 (default: 330000 if timeout_ms not set or lookup fails)
+         curl -s --connect-timeout 10 --max-time {TIMEOUT_SECONDS} \
            -X POST "http://localhost:{PORT}/tasks/send" \
            -H "Authorization: Bearer {TOKEN}" \
            -H "Content-Type: application/json" \
@@ -1273,9 +1275,12 @@ Task(subagent_type: "dev-buddy:<agent-name>", model: "<model>", prompt: "...")
 // Do NOT add team_name or name parameters. This is a one-shot subagent, NOT a teammate.
 ```
 
-**If provider type is `api`:** Use curl to the session manager port from `.vcp/task/session-ports.json`:
+**If provider type is `api`:** Use curl to the session manager port from `.vcp/task/session-ports.json`.
+
+**Derive timeout:** Read `~/.vcp/presets.json` → find the preset matching the stage's `provider` name → read `timeout_ms`. Compute `TIMEOUT_SECONDS = Math.ceil(timeout_ms / 1000)` (default: 300 if `timeout_ms` is not set or preset lookup fails). Set the Bash tool's `timeout` parameter to `timeout_ms + 30000` (or 330000 if not set or lookup fails) so the Bash tool outlives the curl request.
+
 ```bash
-curl -s --connect-timeout 5 --max-time 300 \
+curl -s --connect-timeout 10 --max-time {TIMEOUT_SECONDS} \
   -X POST "http://localhost:{PORT}/tasks/send" \
   -H "Authorization: Bearer {TOKEN}" \
   -H "Content-Type: application/json" \
