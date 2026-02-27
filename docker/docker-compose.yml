@@ -1,0 +1,15 @@
+services:
+  ai-dev:
+    image: zhironghuang/vcp:latest
+    container_name: vcp-docker
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ${HOST_PROJECTS_DIR}:/app
+      - ${HOST_SSH_DIR}:/home/devuser/.ssh:ro
+      - ${HOST_CLAUDE_DATA_DIR}:/home/devuser/.claude
+      - ${HOST_TMP_DIR}:/home/devuser/tmp
+    network_mode: host

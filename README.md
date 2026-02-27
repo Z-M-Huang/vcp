@@ -16,7 +16,7 @@
 ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 
-![40 Standards](https://img.shields.io/badge/Standards-40-blue?style=flat-square)
+![41 Standards](https://img.shields.io/badge/Standards-41-blue?style=flat-square)
 ![12 Scopes](https://img.shields.io/badge/Scopes-12-green?style=flat-square)
 ![OWASP Top 10](https://img.shields.io/badge/OWASP_Top_10-Covered-critical?style=flat-square)
 ![14 Skills](https://img.shields.io/badge/Skills-14-blue?style=flat-square)
@@ -69,6 +69,20 @@ Other tools scan code *after* your AI writes it. VCP prevents bad code *before* 
 ```
 
 That's it. Standards are injected at session start, dangerous patterns are blocked on every write, and 10 scanning skills are available on demand.
+
+### Docker
+
+Prefer a containerized environment? VCP provides a ready-to-use Docker image with Claude Code, Codex CLI, Gemini CLI, and all dependencies pre-installed:
+
+```bash
+cd docker/
+cp .env.example .env
+# Edit .env with your API keys and host paths
+docker compose up -d
+docker exec -it vcp-docker bash
+```
+
+See [`docker/README.md`](docker/README.md) for full setup instructions, volume mounts, and platform-specific configuration.
 
 ---
 
@@ -456,6 +470,7 @@ vcp/
 ├── schemas/             # JSON schemas for config and manifest validation
 ├── plugins/vcp/         # VCP plugin — standards enforcement (skills, hooks, agents)
 ├── plugins/dev-buddy/   # Dev Buddy plugin — multi-AI pipeline orchestration
+├── docker/              # Docker image — Claude Code, Codex CLI, Gemini CLI
 └── .claude-plugin/      # Marketplace manifest
 ```
 
