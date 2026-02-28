@@ -488,6 +488,8 @@ The config server (`scripts/config-server.ts`) exposes these REST endpoints:
 | GET | `/api/presets/:name` | Get preset (masked, or `?reveal=true` for full key) |
 | PUT | `/api/presets/:name` | Create or update a preset |
 | DELETE | `/api/presets/:name` | Remove a preset |
+| POST | `/api/presets/:name/test` | Test a saved preset's connectivity (reads credentials from disk) |
+| POST | `/api/test-preset` | Test unsaved preset credentials from form data (accepts credentials in body) |
 | GET | `/api/stage-definitions` | Return all 6 stage type definitions from registry |
 | GET | `/api/pipeline-config` | Get current pipeline config |
 | PUT | `/api/pipeline-config` | Save pipeline config |

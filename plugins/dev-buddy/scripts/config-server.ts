@@ -65,6 +65,316 @@ function logRevealAudit(presetName: string, req: Request): void {
   console.error(`[AUDIT] API key revealed for preset "${presetName}" at ${new Date().toISOString()} from ${userAgent}`);
 }
 
+// Test rate limiting: Map<presetName, Array<timestamp>>
+const testTimestamps = new Map<string, number[]>();
+const TEST_MAX_PER_MINUTE = 5;
+
+function isTestRateLimited(presetName: string): { limited: boolean; retryAfterSeconds?: number } {
+  const now = Date.now();
+  const windowMs = 60_000;
+  const timestamps = testTimestamps.get(presetName) || [];
+  const recent = timestamps.filter(t => now - t < windowMs);
+  testTimestamps.set(presetName, recent);
+  if (recent.length >= TEST_MAX_PER_MINUTE) {
+    const oldestInWindow = Math.min(...recent);
+    const retryAfterSeconds = Math.ceil((oldestInWindow + windowMs - now) / 1000);
+    return { limited: true, retryAfterSeconds };
+  }
+  return { limited: false };
+}
+
+function recordTest(presetName: string): void {
+  const timestamps = testTimestamps.get(presetName) || [];
+  timestamps.push(Date.now());
+  testTimestamps.set(presetName, timestamps);
+}
+
+function logTestAudit(presetName: string, presetType: string, summary: string): void {
+  console.error(`[AUDIT] TEST ${presetName} (${presetType}): ${summary} at ${new Date().toISOString()}`);
+}
+
+type ErrorCategory = 'auth_failed' | 'not_found' | 'rate_limited' | 'server_error' | 'connection_failed' | 'timeout' | 'tls_error' | 'invalid_response' | 'invalid_request';
+
+interface ModelTestResult {
+  model: string;
+  success: boolean;
+  latency_ms: number;
+  attempts: number;
+  error_category?: ErrorCategory;
+}
+
+function classifyError(err: unknown, statusCode?: number): { category: ErrorCategory; retryable: boolean } {
+  if (statusCode) {
+    if (statusCode === 401 || statusCode === 403) return { category: 'auth_failed', retryable: false };
+    if (statusCode === 404) return { category: 'not_found', retryable: false };
+    if (statusCode === 422) return { category: 'invalid_request', retryable: false };
+    if (statusCode === 429) return { category: 'rate_limited', retryable: true };
+    if (statusCode >= 500) return { category: 'server_error', retryable: true };
+  }
+  if (err instanceof Error) {
+    if (err.name === 'AbortError') return { category: 'timeout', retryable: true };
+    const msg = err.message.toLowerCase();
+    if (msg.includes('econnrefused') || msg.includes('connection refused') || msg.includes('fetch failed') || msg.includes('dns')) {
+      return { category: 'connection_failed', retryable: true };
+    }
+    if (msg.includes('certificate') || msg.includes('ssl') || msg.includes('tls')) {
+      return { category: 'tls_error', retryable: false };
+    }
+  }
+  return { category: 'invalid_response', retryable: false };
+}
+
+async function testApiModel(baseUrl: string, apiKey: string, model: string): Promise<ModelTestResult> {
+  const MAX_ATTEMPTS = 3;
+  const BACKOFF_DELAYS = [0, 1000, 2000]; // first attempt immediate, then 1s, 2s
+  const TIMEOUT_MS = 15_000;
+  const startTime = Date.now();
+  let lastCategory: ErrorCategory = 'invalid_response';
+
+  let nextDelay: number | null = null; // allows Retry-After to override default backoff
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Apply delay: use Retry-After override if set, otherwise default backoff
+    if (attempt > 0) {
+      const delay = nextDelay !== null ? nextDelay : BACKOFF_DELAYS[attempt];
+      nextDelay = null; // reset override
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    try {
+      const resp = await fetchWithTimeout(
+        `${baseUrl}/v1/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'anthropic-version': '2023-06-01',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'Hi' }],
+          }),
+        },
+        TIMEOUT_MS
+      );
+
+      if (resp.ok) {
+        return { model, success: true, latency_ms: Date.now() - startTime, attempts: attempt + 1 };
+      }
+
+      const { category, retryable } = classifyError(null, resp.status);
+      lastCategory = category;
+
+      if (!retryable || attempt >= MAX_ATTEMPTS - 1) {
+        return { model, success: false, latency_ms: Date.now() - startTime, attempts: attempt + 1, error_category: category };
+      }
+
+      // On 429, check Retry-After header to override next iteration's backoff delay
+      if (resp.status === 429) {
+        const retryAfter = resp.headers.get('Retry-After');
+        if (retryAfter) {
+          const delaySec = parseInt(retryAfter, 10);
+          if (!isNaN(delaySec) && delaySec > 0 && delaySec <= 30) {
+            nextDelay = delaySec * 1000;
+          }
+        }
+      }
+      // continue to next attempt (delay applied at top of loop)
+    } catch (err) {
+      const { category, retryable } = classifyError(err);
+      lastCategory = category;
+      if (!retryable || attempt >= MAX_ATTEMPTS - 1) {
+        return { model, success: false, latency_ms: Date.now() - startTime, attempts: attempt + 1, error_category: category };
+      }
+    }
+  }
+
+  return { model, success: false, latency_ms: Date.now() - startTime, attempts: MAX_ATTEMPTS, error_category: lastCategory };
+}
+
+async function handleTestPreset(
+  presetName: string,
+  corsHeaders: Record<string, string>
+): Promise<Response> {
+  // Rate limit check
+  const rateCheck = isTestRateLimited(presetName);
+  if (rateCheck.limited) {
+    logTestAudit(presetName, 'unknown', 'rate limited');
+    return jsonResponse(
+      { error: { code: 'RATE_LIMITED', message: `Test rate limit exceeded. Try again in ${rateCheck.retryAfterSeconds} seconds.` } },
+      429,
+      { ...corsHeaders, 'Retry-After': String(rateCheck.retryAfterSeconds) }
+    );
+  }
+
+  // Read preset from disk
+  const config = readPresets();
+  const preset = config.presets[presetName];
+  if (!preset) {
+    logTestAudit(presetName, 'unknown', 'preset not found');
+    return jsonResponse(
+      { error: { code: 'NOT_FOUND', message: 'Preset not found' } },
+      404,
+      corsHeaders
+    );
+  }
+
+  // Record the test attempt for rate limiting
+  recordTest(presetName);
+
+  if (preset.type === 'api') {
+    const models = Array.isArray(preset.models) ? preset.models : [];
+    const results = await Promise.allSettled(
+      models.map(model => testApiModel(preset.base_url, preset.api_key, model))
+    );
+    const modelResults: ModelTestResult[] = results.map((r, i) =>
+      r.status === 'fulfilled'
+        ? r.value
+        : { model: models[i], success: false, latency_ms: 0, attempts: 1, error_category: 'invalid_response' as ErrorCategory }
+    );
+    const passed = modelResults.filter(r => r.success).length;
+    logTestAudit(presetName, 'api', `${passed}/${modelResults.length} models passed`);
+    return jsonResponse({ type: 'api', results: modelResults }, 200, corsHeaders);
+  }
+
+  if (preset.type === 'cli') {
+    let commandPath: string | null = null;
+    let found = false;
+    try {
+      commandPath = Bun.which(preset.command);
+      found = commandPath !== null;
+    } catch {
+      // Bun.which() threw (e.g., runtime incompatibility) -- treat as not found
+      found = false;
+    }
+    const results = found
+      ? [{ command: preset.command, found: true, path: commandPath }]
+      : [{ command: preset.command, found: false }];
+    logTestAudit(presetName, 'cli', found ? `command found at ${commandPath}` : 'command not found');
+    return jsonResponse({ type: 'cli', results }, 200, corsHeaders);
+  }
+
+  if (preset.type === 'subscription') {
+    logTestAudit(presetName, 'subscription', 'informational response');
+    return jsonResponse(
+      { type: 'subscription', status: 'ok', message: 'Subscription presets use your Claude plan directly. No connectivity test needed.' },
+      200,
+      corsHeaders
+    );
+  }
+
+  return jsonResponse(
+    { error: { code: 'BAD_REQUEST', message: 'Unknown preset type' } },
+    400,
+    corsHeaders
+  );
+}
+
+/**
+ * Handle inline preset test — accepts credentials in request body (not from disk).
+ * Reuses testApiModel() and Bun.which() directly.
+ */
+async function handleTestPresetInline(
+  req: Request,
+  corsHeaders: Record<string, string>
+): Promise<Response> {
+  const body = await parseJsonBody(req);
+  const { type } = body;
+
+  if (!type || !['api', 'cli', 'subscription'].includes(type as string)) {
+    return jsonResponse(
+      { error: { code: 'INVALID_REQUEST', message: 'type must be api, cli, or subscription' } },
+      400, corsHeaders
+    );
+  }
+
+  // Rate limit: per-type buckets
+  const rateLimitKey = `__inline_${type}_test__`;
+  const rateCheck = isTestRateLimited(rateLimitKey);
+  if (rateCheck.limited) {
+    logTestAudit('inline-test', type as string, 'rate limited');
+    return jsonResponse(
+      { error: { code: 'RATE_LIMITED', message: `Test rate limit exceeded. Try again in ${rateCheck.retryAfterSeconds} seconds.` } },
+      429, { ...corsHeaders, 'Retry-After': String(rateCheck.retryAfterSeconds) }
+    );
+  }
+  recordTest(rateLimitKey);
+
+  if (type === 'subscription') {
+    logTestAudit('inline-test', 'subscription', 'informational');
+    return jsonResponse(
+      { type: 'subscription', status: 'ok', message: 'Subscription presets use your Claude plan directly. No connectivity test needed.' },
+      200, corsHeaders
+    );
+  }
+
+  if (type === 'cli') {
+    const command = body.command;
+    if (typeof command !== 'string' || !command.trim()) {
+      return jsonResponse(
+        { error: { code: 'INVALID_REQUEST', message: 'command is required for CLI presets' } },
+        400, corsHeaders
+      );
+    }
+    try {
+      const commandPath = Bun.which(command.trim());
+      const found = commandPath !== null;
+      const results = found
+        ? [{ command: command.trim(), found: true, path: commandPath }]
+        : [{ command: command.trim(), found: false }];
+      logTestAudit('inline-test', 'cli', found ? 'command found' : 'command not found');
+      return jsonResponse({ type: 'cli', results }, 200, corsHeaders);
+    } catch {
+      logTestAudit('inline-test', 'cli', 'command check failed');
+      return jsonResponse(
+        { type: 'cli', results: [{ command: command.trim(), found: false }] },
+        200, corsHeaders
+      );
+    }
+  }
+
+  if (type === 'api') {
+    const base_url = body.base_url;
+    const api_key = body.api_key;
+    const models = body.models;
+    if (typeof base_url !== 'string' || !base_url.trim()) {
+      return jsonResponse(
+        { error: { code: 'INVALID_REQUEST', message: 'base_url is required' } },
+        400, corsHeaders
+      );
+    }
+    if (typeof api_key !== 'string' || !api_key.trim()) {
+      return jsonResponse(
+        { error: { code: 'INVALID_REQUEST', message: 'api_key is required' } },
+        400, corsHeaders
+      );
+    }
+    if (!Array.isArray(models) || models.length === 0 || !models.every(m => typeof m === 'string' && m.trim())) {
+      return jsonResponse(
+        { error: { code: 'INVALID_REQUEST', message: 'models must be a non-empty array of strings' } },
+        400, corsHeaders
+      );
+    }
+
+    const results = await Promise.allSettled(
+      (models as string[]).map(model => testApiModel(base_url.trim(), api_key, model.trim()))
+    );
+    const modelResults: ModelTestResult[] = results.map((r, i) =>
+      r.status === 'fulfilled'
+        ? r.value
+        : { model: (models as string[])[i], success: false, latency_ms: 0, attempts: 1, error_category: 'invalid_response' as ErrorCategory }
+    );
+    logTestAudit('inline-test', 'api', `${modelResults.filter(r => r.success).length}/${modelResults.length} passed`);
+    return jsonResponse({ type: 'api', results: modelResults }, 200, corsHeaders);
+  }
+
+  return jsonResponse(
+    { error: { code: 'INVALID_REQUEST', message: 'Unsupported type' } },
+    400, corsHeaders
+  );
+}
+
 /**
  * Validate preset fields against the allowlist (CWE-915).
  */
@@ -142,7 +452,7 @@ async function startConfigServer(cwd: string, idleTimeoutMinutes: number): Promi
       const corsHeaders: Record<string, string> = origin === serverOrigin
         ? {
             'Access-Control-Allow-Origin': serverOrigin,
-            'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type',
           }
         : {};
@@ -238,6 +548,18 @@ async function handleApiRequest(
       if (req.method === 'GET') {
         return handleGetPresets(corsHeaders);
       }
+    }
+
+    // --- Inline preset test (form data, not saved to disk) ---
+    if (pathname === '/api/test-preset' && req.method === 'POST') {
+      return await handleTestPresetInline(req, corsHeaders);
+    }
+
+    // --- Preset test route (must match BEFORE generic /api/presets/:name) ---
+    const testMatch = pathname.match(/^\/api\/presets\/([^/]+)\/test$/);
+    if (testMatch && req.method === 'POST') {
+      const presetName = decodeURIComponent(testMatch[1]);
+      return handleTestPreset(presetName, corsHeaders);
     }
 
     if (pathname.startsWith('/api/presets/')) {

@@ -615,6 +615,128 @@ form input:focus, form select:focus {
   margin-bottom: 16px;
 }
 
+/* ---- Test Result Panel ---- */
+.test-result-panel {
+  position: relative;
+  margin-top: 12px;
+  padding: 14px 16px;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+}
+
+.test-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  font-size: 0.85rem;
+  color: #6e6e73;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.test-dismiss:hover {
+  background: #e5e5e5;
+  color: #1d1d1f;
+}
+
+.test-summary {
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+
+.test-summary.test-success {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.test-summary.test-error {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.test-summary.test-pending {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.test-result-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 0.85rem;
+  border-bottom: 1px solid #f0f0f0;
+  flex-wrap: wrap;
+}
+
+.test-result-row:last-child {
+  border-bottom: none;
+}
+
+.test-result-row.test-info {
+  color: #1565c0;
+  background: #e3f2fd;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border-bottom: none;
+}
+
+.test-model-name {
+  font-weight: 500;
+  min-width: 100px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.82rem;
+}
+
+.test-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.test-badge.test-success {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.test-badge.test-error {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.test-badge.test-pending {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.test-latency {
+  color: #6e6e73;
+  font-size: 0.8rem;
+}
+
+.test-attempts {
+  color: #e65100;
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
+.test-error-category {
+  color: #c62828;
+  font-size: 0.75rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
   .tab-content {

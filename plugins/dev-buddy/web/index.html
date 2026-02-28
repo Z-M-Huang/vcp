@@ -102,6 +102,11 @@
               Task Timeout (minutes, optional)
               <input type="number" x-model="newPreset.timeout_minutes" placeholder="5" min="1" step="1">
             </label>
+            <button type="button" class="btn-secondary btn-sm"
+              x-on:click="testFormPreset()"
+              x-bind:disabled="!canTestFormPreset()"
+              x-bind:aria-label="'Test connectivity'"
+            ><span x-text="formTesting ? 'Testing...' : 'Test Connectivity'"></span></button>
           </div>
         </template>
 
@@ -161,6 +166,67 @@
               Models (comma-separated)
               <input type="text" x-model="newPreset.cli_models_str" placeholder="e.g. o3,o4-mini" required>
             </label>
+            <button type="button" class="btn-secondary btn-sm"
+              x-on:click="testFormPreset()"
+              x-bind:disabled="!canTestFormPreset()"
+              x-bind:aria-label="'Test command'"
+            ><span x-text="formTesting ? 'Testing...' : 'Test Command'"></span></button>
+          </div>
+        </template>
+
+        <!-- In-form test results -->
+        <template x-if="formTestResults">
+          <div class="test-result-panel" role="status" aria-live="polite">
+            <button type="button" class="test-dismiss" x-on:click="formTestResults = null" aria-label="Dismiss test results">x</button>
+
+            <!-- Error responses (429, validation, network) -->
+            <template x-if="formTestResults.type === 'error'">
+              <div class="test-summary test-error">
+                <span x-text="formTestResults.message"></span>
+              </div>
+            </template>
+
+            <!-- API results -->
+            <template x-if="formTestResults.type === 'api'">
+              <div>
+                <div class="test-summary" x-bind:class="{
+                  'test-success': formTestResults.results.every(r => r.success),
+                  'test-error': formTestResults.results.every(r => !r.success),
+                  'test-pending': formTestResults.results.some(r => r.success) && formTestResults.results.some(r => !r.success)
+                }">
+                  <span x-text="formTestResults.results.filter(r => r.success).length + ' of ' + formTestResults.results.length + ' models passed'"></span>
+                </div>
+                <template x-for="result in formTestResults.results" x-bind:key="result.model">
+                  <div class="test-result-row">
+                    <span class="test-model-name" x-text="result.model"></span>
+                    <span class="test-badge" x-bind:class="result.success ? 'test-success' : 'test-error'" x-text="result.success ? 'Pass' : 'Fail'"></span>
+                    <span class="test-latency" x-text="result.latency_ms + 'ms'"></span>
+                    <span class="test-attempts" x-text="'attempt ' + result.attempts + '/3'"></span>
+                    <span class="test-error-category" x-show="result.error_category" x-text="result.error_category"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- CLI results -->
+            <template x-if="formTestResults.type === 'cli'">
+              <div>
+                <template x-for="result in formTestResults.results" x-bind:key="result.command">
+                  <div class="test-result-row">
+                    <span class="test-model-name" x-text="result.command"></span>
+                    <span class="test-badge" x-bind:class="result.found ? 'test-success' : 'test-error'" x-text="result.found ? 'Found' : 'Not Found'"></span>
+                    <span class="test-latency" x-show="result.path" x-text="result.path"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- Subscription info -->
+            <template x-if="formTestResults.type === 'subscription'">
+              <div class="test-result-row test-info">
+                <span x-text="formTestResults.message"></span>
+              </div>
+            </template>
           </div>
         </template>
 
@@ -188,6 +254,13 @@
                 <span class="badge" x-bind:class="'badge-' + preset.type" x-text="preset.type"></span>
               </div>
               <div>
+                <button
+                  class="btn-secondary btn-sm"
+                  x-show="editingPresetKey !== name"
+                  x-on:click="testPreset(name)"
+                  x-bind:disabled="testing[name]"
+                  x-bind:aria-label="'Test connectivity for ' + name"
+                ><span x-text="testing[name] ? 'Testing...' : 'Test'"></span></button>
                 <button class="btn-secondary btn-sm" x-on:click="editPreset(name)">Edit</button>
                 <button class="btn-danger btn-sm" x-on:click="deletePreset(name)">Remove</button>
               </div>
@@ -255,6 +328,55 @@
                     <span class="label">Models:</span>
                     <span x-text="Array.isArray(preset.models) ? preset.models.join(', ') : ''"></span>
                   </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Test result panel -->
+            <div class="test-result-panel" x-show="testResults[name]" role="status" aria-live="polite">
+              <button class="test-dismiss" x-on:click="dismissTest(name)" aria-label="Dismiss test results">x</button>
+
+              <!-- API preset results -->
+              <template x-if="testResults[name] && testResults[name].type === 'api'">
+                <div>
+                  <div class="test-summary"
+                    x-bind:class="{
+                      'test-success': testResults[name].results.filter(r => r.success).length === testResults[name].results.length,
+                      'test-error': testResults[name].results.filter(r => r.success).length === 0,
+                      'test-pending': testResults[name].results.filter(r => r.success).length > 0 && testResults[name].results.filter(r => r.success).length < testResults[name].results.length
+                    }"
+                  >
+                    <span x-text="testResults[name].results.filter(r => r.success).length + ' of ' + testResults[name].results.length + ' models passed'"></span>
+                  </div>
+                  <template x-for="result in testResults[name].results" x-bind:key="result.model">
+                    <div class="test-result-row">
+                      <span class="test-model-name" x-text="result.model"></span>
+                      <span class="test-badge" x-bind:class="result.success ? 'test-success' : 'test-error'" x-text="result.success ? 'Pass' : 'Fail'"></span>
+                      <span class="test-latency" x-text="result.latency_ms + 'ms'"></span>
+                      <span class="test-attempts" x-text="'attempt ' + result.attempts + '/3'"></span>
+                      <span class="test-error-category" x-show="result.error_category" x-text="result.error_category"></span>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <!-- CLI preset results -->
+              <template x-if="testResults[name] && testResults[name].type === 'cli'">
+                <div>
+                  <template x-for="result in testResults[name].results" x-bind:key="result.command">
+                    <div class="test-result-row">
+                      <span class="test-model-name" x-text="result.command"></span>
+                      <span class="test-badge" x-bind:class="result.found ? 'test-success' : 'test-error'" x-text="result.found ? 'Found' : 'Not Found'"></span>
+                      <span class="test-latency" x-show="result.path" x-text="result.path"></span>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <!-- Subscription preset results -->
+              <template x-if="testResults[name] && testResults[name].type === 'subscription'">
+                <div class="test-result-row test-info">
+                  <span x-text="testResults[name].message"></span>
                 </div>
               </template>
             </div>

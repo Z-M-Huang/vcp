@@ -34,6 +34,14 @@ function devBuddyApp() {
     // Reveal state (client-side only, no server call to hide)
     revealedKeys: {},
 
+    // Test connectivity results (keyed by preset name, ephemeral)
+    testResults: {},
+    testing: {},
+
+    // In-form test state (for add/edit form)
+    formTesting: false,
+    formTestResults: null,
+
     // UI state
     loading: { presets: false, pipeline: false, sessions: false },
     saving: { pipeline: false },
@@ -238,6 +246,46 @@ function devBuddyApp() {
     },
 
     /**
+     * Test preset connectivity via POST /api/presets/:name/test.
+     * Results stored in testResults[name] with spread-and-reassign for reactivity.
+     */
+    async testPreset(name) {
+      // Set testing state (prevents double-click)
+      this.testing = { ...this.testing, [name]: true };
+      // Clear previous results
+      this.testResults = { ...this.testResults, [name]: null };
+      try {
+        const resp = await fetch(`/api/presets/${encodeURIComponent(name)}/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (resp.status === 429) {
+          const err = await resp.json().catch(() => ({ error: { message: 'Rate limit exceeded' } }));
+          this.showError(err.error?.message || 'Test rate limit exceeded');
+          return;
+        }
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: { message: 'Test request failed' } }));
+          this.showError(err.error?.message || 'Test failed');
+          return;
+        }
+        const data = await resp.json();
+        this.testResults = { ...this.testResults, [name]: data };
+      } catch (e) {
+        this.showError('Network error testing preset');
+      } finally {
+        this.testing = { ...this.testing, [name]: false };
+      }
+    },
+
+    /**
+     * Dismiss test results for a preset.
+     */
+    dismissTest(name) {
+      this.testResults = { ...this.testResults, [name]: null };
+    },
+
+    /**
      * Populate the add-preset form from an existing preset and open in edit mode.
      */
     async editPreset(name) {
@@ -279,8 +327,61 @@ function devBuddyApp() {
       this.showAddPreset = true;
     },
 
+    /**
+     * Check if the in-form test button should be enabled.
+     */
+    canTestFormPreset() {
+      if (this.formTesting) return false;
+      if (this.newPreset.type === 'api') {
+        const hasUrl = this.newPreset.base_url.trim().length > 0;
+        const hasKey = this.newPreset.api_key.trim().length > 0;
+        const models = this.newPreset.models_str.split(',').map(m => m.trim()).filter(Boolean);
+        return hasUrl && hasKey && models.length > 0;
+      }
+      if (this.newPreset.type === 'cli') {
+        return this.newPreset.command.trim().length > 0;
+      }
+      return false;
+    },
+
+    /**
+     * Test connectivity from the add/edit form using unsaved credentials.
+     * Calls POST /api/test-preset with form data.
+     */
+    async testFormPreset() {
+      this.formTesting = true;
+      this.formTestResults = null;
+      try {
+        const body = { type: this.newPreset.type };
+        if (this.newPreset.type === 'api') {
+          body.base_url = this.newPreset.base_url;
+          body.api_key = this.newPreset.api_key;
+          body.models = this.newPreset.models_str.split(',').map(m => m.trim()).filter(Boolean);
+        } else if (this.newPreset.type === 'cli') {
+          body.command = this.newPreset.command;
+        }
+        const resp = await fetch('/api/test-preset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (!resp.ok && data.error) {
+          this.formTestResults = { type: 'error', message: data.error.message || 'Test failed' };
+        } else {
+          this.formTestResults = data;
+        }
+      } catch (err) {
+        this.formTestResults = { type: 'error', message: 'Network error' };
+      } finally {
+        this.formTesting = false;
+      }
+    },
+
     resetNewPreset() {
       this.editingPresetKey = null;
+      this.formTesting = false;
+      this.formTestResults = null;
       this.newPreset = {
         key: '',
         type: 'subscription',
