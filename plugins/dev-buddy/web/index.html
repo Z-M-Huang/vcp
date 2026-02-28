@@ -300,7 +300,7 @@
           <p class="hint">Drag to reorder stages. Each stage uses a provider preset and optional model override.</p>
 
           <div id="feature-pipeline-list" class="pipeline-list">
-            <template x-for="(stage, idx) in pipelineConfig.feature_pipeline" x-bind:key="idx">
+            <template x-for="(stage, idx) in pipelineConfig.feature_pipeline" x-bind:key="stage._id">
               <div class="stage-card" x-bind:data-index="idx">
                 <div class="drag-handle" title="Drag to reorder">
                   <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor">
@@ -370,7 +370,7 @@
           <p class="hint">Drag to reorder stages. RCA stages run sequentially; orchestrator consolidates automatically after the last RCA.</p>
 
           <div id="bugfix-pipeline-list" class="pipeline-list">
-            <template x-for="(stage, idx) in pipelineConfig.bugfix_pipeline" x-bind:key="idx">
+            <template x-for="(stage, idx) in pipelineConfig.bugfix_pipeline" x-bind:key="stage._id">
               <div class="stage-card" x-bind:data-index="idx">
                 <div class="drag-handle" title="Drag to reorder">
                   <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor">

@@ -28,6 +28,9 @@ function devBuddyApp() {
     // SortableJS instances
     _sortableInstances: {},
 
+    // Counter for generating stable stage IDs (used as x-for keys)
+    _stageIdCounter: 0,
+
     // Reveal state (client-side only, no server call to hide)
     revealedKeys: {},
 
@@ -357,6 +360,8 @@ function devBuddyApp() {
 
         // Now assign config — Alpine renders selects with options already present
         this.pipelineConfig = data.config;
+        this._assignStageIds(this.pipelineConfig.feature_pipeline);
+        this._assignStageIds(this.pipelineConfig.bugfix_pipeline);
 
         // Init sortable after DOM renders
         this.$nextTick(() => {
@@ -398,6 +403,23 @@ function devBuddyApp() {
     },
 
     /**
+     * Stamp each stage with a non-enumerable _id for stable x-for keys.
+     * Non-enumerable so JSON.stringify() omits it (server rejects unknown fields).
+     */
+    _assignStageIds(pipeline) {
+      for (const stage of pipeline) {
+        if (!Object.prototype.hasOwnProperty.call(stage, '_id')) {
+          Object.defineProperty(stage, '_id', {
+            value: ++this._stageIdCounter,
+            writable: true,
+            enumerable: false,
+            configurable: true,
+          });
+        }
+      }
+    },
+
+    /**
      * Initialize SortableJS on a pipeline list container.
      * Syncs DOM reorder back to Alpine data array.
      */
@@ -423,7 +445,20 @@ function devBuddyApp() {
           const newIndex = evt.newIndex;
           if (oldIndex === newIndex) return;
 
-          // Sync reorder back to Alpine data array
+          // Revert SortableJS's DOM mutation — let Alpine own rendering exclusively.
+          // SortableJS skips <template> elements in its index calculation, but
+          // parent.children includes Alpine's <template x-for> at index 0.
+          // Remove the item first, then re-insert at oldIndex among stage cards.
+          const parent = evt.from;
+          evt.item.remove();
+          const cards = parent.querySelectorAll(':scope > .stage-card');
+          if (oldIndex >= cards.length) {
+            parent.appendChild(evt.item);
+          } else {
+            parent.insertBefore(evt.item, cards[oldIndex]);
+          }
+
+          // Now update data — Alpine handles DOM rendering
           const pipeline = pipelineType === 'feature'
             ? self.pipelineConfig.feature_pipeline
             : self.pipelineConfig.bugfix_pipeline;
@@ -472,6 +507,7 @@ function devBuddyApp() {
       const firstPreset = Object.keys(this.presets)[0] || 'anthropic-subscription';
 
       pipeline.push({ type: stageType, provider: firstPreset, model: undefined });
+      this._assignStageIds(pipeline);
 
       // Reset the "add stage" select
       this.newStageType[pipelineType] = '';
@@ -534,8 +570,10 @@ function devBuddyApp() {
         // and settings (max_iterations, team_name_pattern) untouched.
         if (pipelineType === 'feature') {
           this.pipelineConfig.feature_pipeline = defaultConfig.feature_pipeline;
+          this._assignStageIds(this.pipelineConfig.feature_pipeline);
         } else {
           this.pipelineConfig.bugfix_pipeline = defaultConfig.bugfix_pipeline;
+          this._assignStageIds(this.pipelineConfig.bugfix_pipeline);
         }
 
         // Re-initialise sortable for the affected list after the DOM updates
