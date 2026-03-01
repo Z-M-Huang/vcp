@@ -116,17 +116,17 @@ When a review returns `needs_changes`:
 
 ---
 
-## Output Files (Type-Indexed Naming)
+## Output Files (Versioned Naming)
 
 | File Pattern | Stage Type | Description |
 |------|-------------|-------------|
 | `.vcp/task/user-story.json` | requirements | Approved requirements (singleton) |
 | `.vcp/task/plan-refined.json` | planning | Implementation plan (singleton) |
-| `.vcp/task/plan-review-{N}.json` | plan-review | Plan review N (e.g., plan-review-1.json, plan-review-3.json) |
+| `.vcp/task/plan-review-{provider}-{model}-{N}-v{V}.json` | plan-review | Plan review (e.g., `plan-review-anthropic-subscription-sonnet-1-v1.json`) |
 | `.vcp/task/impl-result.json` | implementation | Implementation result (singleton) |
-| `.vcp/task/code-review-{N}.json` | code-review | Code review N (e.g., code-review-1.json, code-review-2.json) |
-| `.vcp/task/rca-{N}.json` | rca | Root cause analysis N (e.g., rca-1.json, rca-2.json) |
-| `.vcp/task/pipeline-tasks.json` | (meta) | Team name + Task IDs + `resolved_config` snapshot |
+| `.vcp/task/code-review-{provider}-{model}-{N}-v{V}.json` | code-review | Code review (e.g., `code-review-anthropic-subscription-opus-2-v1.json`) |
+| `.vcp/task/rca-{provider}-{model}-{N}-v{V}.json` | rca | Root cause analysis (e.g., `rca-anthropic-subscription-sonnet-1-v1.json`) |
+| `.vcp/task/pipeline-tasks.json` | (meta) | Team name + Task IDs + `resolved_config` + `stages[]` with `current_version` |
 
 ---
 

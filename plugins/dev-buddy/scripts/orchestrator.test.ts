@@ -29,25 +29,25 @@ function runDeterminePhase(): string {
 // ── pipeline-tasks.json helpers ─────────────────────────────────────────────
 
 const DEFAULT_FEATURE_STAGES = [
-  { type: 'requirements', provider: 'anthropic-subscription', output_file: 'user-story.json' },
-  { type: 'planning', provider: 'anthropic-subscription', output_file: 'plan-refined.json' },
-  { type: 'plan-review', provider: 'anthropic-subscription', output_file: 'plan-review-1.json' },
-  { type: 'plan-review', provider: 'anthropic-subscription', output_file: 'plan-review-2.json' },
-  { type: 'plan-review', provider: 'anthropic-subscription', output_file: 'plan-review-3.json' },
-  { type: 'implementation', provider: 'anthropic-subscription', output_file: 'impl-result.json' },
-  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-1.json' },
-  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-2.json' },
-  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-3.json' },
+  { type: 'requirements', provider: 'anthropic-subscription', output_file: 'user-story.json', current_version: 1 },
+  { type: 'planning', provider: 'anthropic-subscription', output_file: 'plan-refined.json', current_version: 1 },
+  { type: 'plan-review', provider: 'anthropic-subscription', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json', current_version: 1 },
+  { type: 'plan-review', provider: 'anthropic-subscription', output_file: 'plan-review-anthropic-subscription-opus-2-v1.json', current_version: 1 },
+  { type: 'plan-review', provider: 'anthropic-subscription', output_file: 'plan-review-anthropic-subscription-sonnet-3-v1.json', current_version: 1 },
+  { type: 'implementation', provider: 'anthropic-subscription', output_file: 'impl-result.json', current_version: 1 },
+  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-anthropic-subscription-sonnet-1-v1.json', current_version: 1 },
+  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-anthropic-subscription-opus-2-v1.json', current_version: 1 },
+  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-anthropic-subscription-sonnet-3-v1.json', current_version: 1 },
 ];
 
 const DEFAULT_BUGFIX_STAGES = [
-  { type: 'rca', provider: 'anthropic-subscription', output_file: 'rca-1.json' },
-  { type: 'rca', provider: 'anthropic-subscription', output_file: 'rca-2.json' },
-  { type: 'plan-review', provider: 'anthropic-subscription', output_file: 'plan-review-1.json' },
-  { type: 'implementation', provider: 'anthropic-subscription', output_file: 'impl-result.json' },
-  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-1.json' },
-  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-2.json' },
-  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-3.json' },
+  { type: 'rca', provider: 'anthropic-subscription', output_file: 'rca-anthropic-subscription-sonnet-1-v1.json', current_version: 1 },
+  { type: 'rca', provider: 'anthropic-subscription', output_file: 'rca-anthropic-subscription-opus-2-v1.json', current_version: 1 },
+  { type: 'plan-review', provider: 'anthropic-subscription', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json', current_version: 1 },
+  { type: 'implementation', provider: 'anthropic-subscription', output_file: 'impl-result.json', current_version: 1 },
+  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-anthropic-subscription-sonnet-1-v1.json', current_version: 1 },
+  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-anthropic-subscription-opus-2-v1.json', current_version: 1 },
+  { type: 'code-review', provider: 'anthropic-subscription', output_file: 'code-review-anthropic-subscription-sonnet-3-v1.json', current_version: 1 },
 ];
 
 function makeFeatureTasks() {
@@ -60,6 +60,7 @@ function makeFeatureTasks() {
       max_iterations: 10,
       team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
     },
+    stages: DEFAULT_FEATURE_STAGES,
   };
 }
 
@@ -73,6 +74,7 @@ function makeBugFixTasks() {
       max_iterations: 10,
       team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
     },
+    stages: DEFAULT_BUGFIX_STAGES,
   };
 }
 
@@ -149,13 +151,13 @@ describe('orchestrator.ts determine_phase', () => {
     writeFileSync(join(TEST_TASK_DIR, 'pipeline-tasks.json'), JSON.stringify(makeFeatureTasks()));
     writeFileSync(join(TEST_TASK_DIR, 'user-story.json'), JSON.stringify({ title: 'test' }));
     writeFileSync(join(TEST_TASK_DIR, 'plan-refined.json'), JSON.stringify({ title: 'plan' }));
-    writeFileSync(join(TEST_TASK_DIR, 'plan-review-1.json'), JSON.stringify({ status: 'approved' }));
-    writeFileSync(join(TEST_TASK_DIR, 'plan-review-2.json'), JSON.stringify({ status: 'approved' }));
-    writeFileSync(join(TEST_TASK_DIR, 'plan-review-3.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'plan-review-anthropic-subscription-sonnet-1-v1.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'plan-review-anthropic-subscription-opus-2-v1.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'plan-review-anthropic-subscription-sonnet-3-v1.json'), JSON.stringify({ status: 'approved' }));
     writeFileSync(join(TEST_TASK_DIR, 'impl-result.json'), JSON.stringify({ status: 'complete' }));
-    writeFileSync(join(TEST_TASK_DIR, 'code-review-1.json'), JSON.stringify({ status: 'approved' }));
-    writeFileSync(join(TEST_TASK_DIR, 'code-review-2.json'), JSON.stringify({ status: 'approved' }));
-    writeFileSync(join(TEST_TASK_DIR, 'code-review-3.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'code-review-anthropic-subscription-sonnet-1-v1.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'code-review-anthropic-subscription-opus-2-v1.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'code-review-anthropic-subscription-sonnet-3-v1.json'), JSON.stringify({ status: 'approved' }));
     const phase = runDeterminePhase();
     expect(phase).toBe('complete');
   });
@@ -198,7 +200,7 @@ describe('bug-fix pipeline phases via orchestrator.ts phase', () => {
       JSON.stringify(makeBugFixTasks())
     );
     writeFileSync(
-      join(TEST_TASK_DIR, 'rca-1.json'),
+      join(TEST_TASK_DIR, 'rca-anthropic-subscription-sonnet-1-v1.json'),
       JSON.stringify({ status: 'complete', root_cause: { summary: 'test' } })
     );
     const phase = runDeterminePhase();
@@ -226,7 +228,7 @@ describe('bug-fix pipeline phases via orchestrator.ts phase', () => {
     );
     writeFileSync(join(TEST_TASK_DIR, 'user-story.json'), JSON.stringify({ title: 'Fix: bug' }));
     writeFileSync(join(TEST_TASK_DIR, 'plan-refined.json'), JSON.stringify({ steps: [] }));
-    writeFileSync(join(TEST_TASK_DIR, 'plan-review-1.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'plan-review-anthropic-subscription-sonnet-1-v1.json'), JSON.stringify({ status: 'approved' }));
     const phase = runDeterminePhase();
     expect(phase).toBe('implementation');
   });
@@ -238,12 +240,12 @@ describe('bug-fix pipeline phases via orchestrator.ts phase', () => {
     );
     writeFileSync(join(TEST_TASK_DIR, 'user-story.json'), JSON.stringify({ title: 'Fix: bug' }));
     writeFileSync(join(TEST_TASK_DIR, 'plan-refined.json'), JSON.stringify({ steps: [] }));
-    // Bug-fix uses plan-review-1.json, not review-codex.json
-    writeFileSync(join(TEST_TASK_DIR, 'plan-review-1.json'), JSON.stringify({ status: 'approved' }));
+    // Bug-fix uses versioned plan-review, not review-codex.json
+    writeFileSync(join(TEST_TASK_DIR, 'plan-review-anthropic-subscription-sonnet-1-v1.json'), JSON.stringify({ status: 'approved' }));
     writeFileSync(join(TEST_TASK_DIR, 'impl-result.json'), JSON.stringify({ status: 'complete' }));
-    writeFileSync(join(TEST_TASK_DIR, 'code-review-1.json'), JSON.stringify({ status: 'approved' }));
-    writeFileSync(join(TEST_TASK_DIR, 'code-review-2.json'), JSON.stringify({ status: 'approved' }));
-    writeFileSync(join(TEST_TASK_DIR, 'code-review-3.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'code-review-anthropic-subscription-sonnet-1-v1.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'code-review-anthropic-subscription-opus-2-v1.json'), JSON.stringify({ status: 'approved' }));
+    writeFileSync(join(TEST_TASK_DIR, 'code-review-anthropic-subscription-sonnet-3-v1.json'), JSON.stringify({ status: 'approved' }));
     const phase = runDeterminePhase();
     expect(phase).toBe('complete');
   });

@@ -41,7 +41,7 @@ Multi-Session Orchestrator Pipeline (Task-Based Enforcement, Configurable)
   |     +-- TaskCreate + TaskUpdate(addBlockedBy) for each plan-review stage in config
   |     +-- Sequential by default; stages with parallel: true form parallel groups
   |     +-- e.g., Plan Review 1 → (Plan Review 2 + Plan Review 3) parallel → sequential
-  |     -> .vcp/task/plan-review-1.json, plan-review-2.json, ...
+  |     -> .vcp/task/plan-review-{provider}-{model}-{N}-v{V}.json (versioned, append-only)
   |
   +-- Implementation
   |     +-- TaskUpdate(addBlockedBy) blocks until last plan review completes
@@ -53,7 +53,7 @@ Multi-Session Orchestrator Pipeline (Task-Based Enforcement, Configurable)
   |     +-- TaskCreate + TaskUpdate(addBlockedBy) for each code-review stage in config
   |     +-- Sequential by default; stages with parallel: true form parallel groups
   |     +-- e.g., Code Review 1 → (Code Review 2 + Code Review 3) parallel → sequential
-  |     -> .vcp/task/code-review-1.json, code-review-2.json, ...
+  |     -> .vcp/task/code-review-{provider}-{model}-{N}-v{V}.json (versioned, append-only)
   |
   +-- Completion
   |     +-- Report results
@@ -167,10 +167,10 @@ T9 = TaskCreate(subject: "Code Review 3", description: "...")      → TaskUpdat
 
 **Number of tasks = length of the configured pipeline array** — adding/removing stages adds/removes tasks.
 
-**Output file naming:**
+**Output file naming (versioned, append-only):**
 - Singleton stages: canonical names (`user-story.json`, `plan-refined.json`, `impl-result.json`)
-- Multi-instance stages: type-indexed names (`plan-review-1.json`, `plan-review-2.json`, `code-review-1.json`, etc.)
-- RCA stages: `rca-1.json`, `rca-2.json`, etc.
+- Multi-instance stages: `{type}-{provider}-{model}-{index}-v{version}.json` (e.g., `plan-review-anthropic-subscription-sonnet-1-v1.json`)
+- Re-reviews create new files with incremented version (e.g., `...-v2.json`), preserving all previous versions
 
 **CLI preset stages** (e.g., Codex): the task description instructs the `cli-executor` agent to call `cli-executor.ts` with `--preset <preset_name>`, `--model <model>`, and `--output-file <computed_path>` so the output lands in the correct type-indexed file.
 
@@ -232,7 +232,7 @@ The bug-fix pipeline uses a different early-phase approach optimized for diagnos
 **Key differences from `/dev-buddy-feature-implement`:**
 - No requirements-gatherer or planner agents — RCA stages replace them
 - Orchestrator consolidates RCA findings inline (not via a separate task) before the next non-RCA stage
-- Output files: `rca-1.json`, `rca-2.json`, ..., `plan-review-1.json`, `code-review-1.json`, etc.
+- Output files: `rca-{provider}-{model}-{N}-v{V}.json`, `plan-review-{provider}-{model}-{N}-v{V}.json`, `code-review-{provider}-{model}-{N}-v{V}.json` (versioned naming)
 - Fix plan emphasizes smallest possible change, not architectural design
 - Non-review stages (RCA, implementation) execute **sequentially**. Review stages (plan-review, code-review) can be configured for parallel execution via `parallel: true` on each StageEntry.
 
@@ -389,15 +389,15 @@ Format includes a `resolved_config` snapshot, `config_hash` for resume drift det
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "task_id": "task-id-1", "parallel_group_id": null },
-    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-refined.json", "task_id": "task-id-2", "parallel_group_id": null },
-    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-1.json", "task_id": "task-id-3", "parallel_group_id": 1 },
-    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-2.json", "task_id": "task-id-4", "parallel_group_id": 1 },
-    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-3.json", "task_id": "task-id-5", "parallel_group_id": null },
-    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "task-id-6", "parallel_group_id": null },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "task-id-7", "parallel_group_id": 2 },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "task-id-8", "parallel_group_id": 2 },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-3.json", "task_id": "task-id-9", "parallel_group_id": null }
+    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "current_version": 1, "task_id": "task-id-1", "parallel_group_id": null },
+    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-refined.json", "current_version": 1, "task_id": "task-id-2", "parallel_group_id": null },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-anthropic-subscription-sonnet-1-v1.json", "current_version": 1, "task_id": "task-id-3", "parallel_group_id": 1 },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-anthropic-subscription-opus-2-v1.json", "current_version": 1, "task_id": "task-id-4", "parallel_group_id": 1 },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-anthropic-subscription-sonnet-3-v1.json", "current_version": 1, "task_id": "task-id-5", "parallel_group_id": null },
+    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "current_version": 1, "task_id": "task-id-6", "parallel_group_id": null },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-anthropic-subscription-sonnet-1-v1.json", "current_version": 1, "task_id": "task-id-7", "parallel_group_id": 2 },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-anthropic-subscription-opus-2-v1.json", "current_version": 1, "task_id": "task-id-8", "parallel_group_id": 2 },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-anthropic-subscription-sonnet-3-v1.json", "current_version": 1, "task_id": "task-id-9", "parallel_group_id": null }
   ]
 }
 ```
@@ -419,10 +419,10 @@ The pipeline is driven by `~/.vcp/dev-buddy.json`. Two ordered arrays of stages 
 |------|-----------|-----------|-------|---------------------|
 | `requirements` | yes | feature | requirements-gatherer | `user-story.json` |
 | `planning` | yes | feature | planner | `plan-refined.json` |
-| `plan-review` | no | feature, bugfix | plan-reviewer | `plan-review-{index}.json` |
+| `plan-review` | no | feature, bugfix | plan-reviewer | `plan-review-{provider}-{model}-{index}-v{version}.json` |
 | `implementation` | yes | feature, bugfix | implementer | `impl-result.json` |
-| `code-review` | no | feature, bugfix | code-reviewer | `code-review-{index}.json` |
-| `rca` | no | bugfix | root-cause-analyst | `rca-{index}.json` |
+| `code-review` | no | feature, bugfix | code-reviewer | `code-review-{provider}-{model}-{index}-v{version}.json` |
+| `rca` | no | bugfix | root-cause-analyst | `rca-{provider}-{model}-{index}-v{version}.json` |
 
 ### Config Structure
 

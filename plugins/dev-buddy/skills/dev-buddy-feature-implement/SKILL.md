@@ -312,7 +312,7 @@ const typeCounters = {};
 const resolved = pipeline.map((entry, arrayIndex) => {
   typeCounters[entry.type] = (typeCounters[entry.type] || 0) + 1;
   const stageIndex = typeCounters[entry.type];
-  const outputFile = getOutputFileName(entry.type, stageIndex);
+  const outputFile = getOutputFileName(entry.type, stageIndex, entry.provider, entry.model, 1);
   const providerType = presets.presets[entry.provider]?.type ?? 'subscription';
   return { ...entry, stageIndex, outputFile, arrayIndex, providerType };
 });
@@ -326,7 +326,7 @@ Store the resulting `resolved` array and full `config` in memory. Each element h
 - `provider` — preset name
 - `model` — model identifier (required)
 - `stageIndex` — 1-based index among stages of the same type
-- `outputFile` — computed output file name (e.g., 'plan-review-1.json', 'impl-result.json')
+- `outputFile` — computed output file name (e.g., 'plan-review-anthropic-subscription-sonnet-1-v1.json', 'impl-result.json')
 - `arrayIndex` — 0-based position in the pipeline array
 - `providerType` — resolved provider type: `'subscription'`, `'api'`, or `'cli'`. **Note:** This is the JSON-serialized field name used in `pipeline-tasks.json` stages. The TypeScript `ResolvedStage` interface uses `provider_type` (snake_case) internally; the orchestrator writes `providerType` (camelCase) to JSON.
 
@@ -428,7 +428,7 @@ while i < resolved.length:
       task = TaskCreate(subject: subject, activeForm: activeForm(resolved[k]), description: description)
       taskIds[k] = task.id
       groupTaskIds.push(task.id)
-      stages[k] = { ...resolved[k], output_file: resolved[k].outputFile, task_id: task.id, parallel_group_id: parallelGroupCounter }
+      stages[k] = { ...resolved[k], output_file: resolved[k].outputFile, task_id: task.id, parallel_group_id: parallelGroupCounter, current_version: 1 }
       if predecessors.length > 0:
         TaskUpdate(task.id, addBlockedBy: predecessors)
 
@@ -442,7 +442,7 @@ while i < resolved.length:
     description = deriveDescription(stage)
     task = TaskCreate(subject: subject, activeForm: activeForm(stage), description: description)
     taskIds[i] = task.id
-    stages[i] = { ...resolved[i], output_file: resolved[i].outputFile, task_id: task.id, parallel_group_id: null }
+    stages[i] = { ...resolved[i], output_file: resolved[i].outputFile, task_id: task.id, parallel_group_id: null, current_version: 1 }
 
     predecessors = previousTaskId ? [previousTaskId]
                  : groupPredecessors ? groupPredecessors
@@ -567,15 +567,15 @@ COMPLETION: .vcp/task/code-review-{N}.json exists with status field
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "output_file": "user-story.json", "task_id": "4", "parallel_group_id": null },
-    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "output_file": "plan-refined.json", "task_id": "5", "parallel_group_id": null },
-    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-1.json", "task_id": "6", "parallel_group_id": null },
-    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-2.json", "task_id": "7", "parallel_group_id": null },
-    { "type": "plan-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "plan-review-3.json", "task_id": "8", "parallel_group_id": null },
-    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "output_file": "impl-result.json", "task_id": "9", "parallel_group_id": null },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "10", "parallel_group_id": null },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "11", "parallel_group_id": null },
-    { "type": "code-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "code-review-3.json", "task_id": "12", "parallel_group_id": null }
+    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "task_id": "4", "parallel_group_id": null, "current_version": 1 },
+    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-refined.json", "task_id": "5", "parallel_group_id": null, "current_version": 1 },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-anthropic-subscription-sonnet-1-v1.json", "task_id": "6", "parallel_group_id": null, "current_version": 1 },
+    { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-anthropic-subscription-opus-2-v1.json", "task_id": "7", "parallel_group_id": null, "current_version": 1 },
+    { "type": "plan-review", "provider": "my-codex-preset", "providerType": "cli", "model": "o3", "output_file": "plan-review-my-codex-preset-o3-3-v1.json", "task_id": "8", "parallel_group_id": null, "current_version": 1 },
+    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "9", "parallel_group_id": null, "current_version": 1 },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-anthropic-subscription-sonnet-1-v1.json", "task_id": "10", "parallel_group_id": null, "current_version": 1 },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-anthropic-subscription-opus-2-v1.json", "task_id": "11", "parallel_group_id": null, "current_version": 1 },
+    { "type": "code-review", "provider": "my-codex-preset", "providerType": "cli", "model": "o3", "output_file": "code-review-my-codex-preset-o3-3-v1.json", "task_id": "12", "parallel_group_id": null, "current_version": 1 }
   ]
 }
 ```
@@ -1028,12 +1028,13 @@ When a review returns `needs_changes`, the **same stage (same index)** must re-r
 
 **CRITICAL: Re-review returns to the SAME STAGE INDEX, not the next stage.**
 
-If stage index 2 (code-review-2.json) returns `needs_changes`:
+If stage index 2 (e.g., `code-review-anthropic-subscription-opus-2-v1.json`) returns `needs_changes`:
 - Fix task targets the code issue
-- Re-review task creates a new code-review-2 (overwrites the same output file)
+- Re-review creates a **NEW versioned file** (`code-review-anthropic-subscription-opus-2-v2.json`)
+- `stages[].output_file` is updated AFTER re-review completes (two-phase update)
 - Stage index 3 is NOT started until stage index 2 approves
 
-### needs_changes → Fix Task
+### needs_changes → Fix + Re-Review (Two-Phase Update)
 
 ```
 // stage = the pipeline stage entry that returned needs_changes (from stages[] in pipeline-tasks.json)
@@ -1042,6 +1043,11 @@ If stage index 2 (code-review-2.json) returns `needs_changes`:
 // iteration = derived from TaskList: count existing "Fix [subject] v*" tasks + 1
 
 issues = read stage.output_file → extract blockers + critical/high findings (≤ 500 chars)
+
+// PHASE 1: Compute next version output file (stages[] NOT updated yet — keeps old output_file
+// pointing to v{N} with needs_changes status so determinePhase() still detects "fix" phase)
+nextVersion = stages[stageIndex].current_version + 1
+nextOutputFile = getOutputFileName(stage.type, stage.stageIndex, stage.provider, stage.model, nextVersion)
 
 fix = TaskCreate(
   subject: "Fix {stage subject} v{iteration}",
@@ -1062,11 +1068,11 @@ rerev = TaskCreate(
   description: "PHASE: Re-review (iteration {iteration+1})
 AGENT: {same agent as original stage}
 INPUT: {same INPUT as original stage}
-OUTPUT: .vcp/task/{stage.output_file}  ← SAME OUTPUT FILE (overwrite)
-NOTE: Re-review after fix. Same stage index ({stage.stageIndex}), same output file.
-{if CLI stage: pass --output-file .vcp/task/{stage.output_file} and optional --model}
+OUTPUT: .vcp/task/{nextOutputFile}  ← NEW VERSION FILE (append-only, old versions preserved)
+NOTE: Re-review after fix. Same stage index ({stage.stageIndex}), new version file.
+{if CLI stage: pass --output-file .vcp/task/{nextOutputFile} and optional --model}
 RESULT HANDLING: Same as original stage
-COMPLETION: .vcp/task/{stage.output_file} exists with updated status"
+COMPLETION: .vcp/task/{nextOutputFile} exists with updated status"
 )
 TaskUpdate(rerev.id, addBlockedBy: [fix.id])
 
@@ -1079,6 +1085,11 @@ else:
   successorIndex = stageIndex + 1
 if successorIndex < stages.length:
   TaskUpdate(stages[successorIndex].task_id, addBlockedBy: [rerev.id])
+
+// PHASE 2: After re-review agent completes and orchestrator reads its result:
+stages[stageIndex].current_version = nextVersion
+stages[stageIndex].output_file = nextOutputFile
+// Write updated pipeline-tasks.json to disk
 ```
 
 ### Iteration Tracking
@@ -1117,13 +1128,13 @@ The pipeline is now data-driven. The agent reference depends on the resolved pip
 |-------|-------|-------|-------------|
 | Requirements (T1) | requirements-gatherer | opus | user-story.json |
 | Planning (T2) | planner | opus | plan-refined.json |
-| Plan Review 1 (T3) | plan-reviewer | sonnet | plan-review-1.json |
-| Plan Review 2 (T4) | plan-reviewer | opus | plan-review-2.json |
-| Plan Review 3 (T5) | cli-executor | external (CLI) | plan-review-3.json |
+| Plan Review 1 (T3) | plan-reviewer | sonnet | plan-review-anthropic-subscription-sonnet-1-v1.json |
+| Plan Review 2 (T4) | plan-reviewer | opus | plan-review-anthropic-subscription-opus-2-v1.json |
+| Plan Review 3 (T5) | cli-executor | external (CLI) | plan-review-my-codex-preset-o3-3-v1.json |
 | Implementation (T6) | implementer | sonnet | impl-result.json |
-| Code Review 1 (T7) | code-reviewer | sonnet | code-review-1.json |
-| Code Review 2 (T8) | code-reviewer | opus | code-review-2.json |
-| Code Review 3 (T9) | cli-executor | external (CLI) | code-review-3.json |
+| Code Review 1 (T7) | code-reviewer | sonnet | code-review-anthropic-subscription-sonnet-1-v1.json |
+| Code Review 2 (T8) | code-reviewer | opus | code-review-anthropic-subscription-opus-2-v1.json |
+| Code Review 3 (T9) | cli-executor | external (CLI) | code-review-my-codex-preset-o3-3-v1.json |
 
 For custom pipelines, the agent reference is dynamically derived from the `stages` array in pipeline-tasks.json.
 
@@ -1198,8 +1209,8 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "...", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "task_id": "4", "parallel_group_id": null },
-    { "type": "plan-review", "provider": "...", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-1.json", "task_id": "7", "parallel_group_id": 1 }
+    { "type": "requirements", "provider": "...", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "task_id": "4", "parallel_group_id": null, "current_version": 1 },
+    { "type": "plan-review", "provider": "...", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-...-sonnet-1-v1.json", "task_id": "7", "parallel_group_id": 1, "current_version": 1 }
   ]
 }
 ```
@@ -1297,8 +1308,8 @@ curl -s --connect-timeout 10 --max-time {TIMEOUT_SECONDS} \
 2. **Tasks are primary** — Create tasks with `blockedBy` for structural enforcement
 3. **No phase skipping** — ALL phases execute in order. Exception: Resume path (Step 0) skips already-completed stages by creating pre-completed tasks. Pre-existing plans are INPUT, not substitutes.
 4. **Data-driven task chain** — Iterate over `feature_pipeline` array, create one task per entry. Number of tasks = length of pipeline array.
-5. **Type-indexed file naming** — Multi-instance stages: plan-review-1.json, code-review-2.json. Singleton stages: user-story.json, plan-refined.json, impl-result.json.
-6. **Same-stage re-review** — After fix, the SAME stage index (not the next one) re-reviews. Re-review overwrites the same output file.
+5. **Versioned file naming** — Multi-instance stages: `{type}-{provider}-{model}-{index}-v{version}.json` (e.g., `code-review-anthropic-subscription-sonnet-1-v1.json`). Singleton stages: `user-story.json`, `plan-refined.json`, `impl-result.json`. Re-reviews create new versioned files (append-only).
+6. **Same-stage re-review (two-phase)** — After fix, the SAME stage index re-reviews with a new version file. `stages[].output_file` is updated AFTER re-review completes (not before) to preserve phase detection during fix phase.
 7. **resolved_config snapshot** — pipeline-tasks.json includes full PipelineConfig. Hooks read this snapshot, never ~/.vcp/dev-buddy.json.
 8. **max_iterations from config** — Use resolved_config.max_iterations for the fix/re-review cycle limit.
 9. **CLI stages pass --preset, --model, --output-file** — CLI provider stages MUST pass --preset, --model, and --output-file to cli-executor.ts.

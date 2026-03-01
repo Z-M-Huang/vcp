@@ -8,13 +8,13 @@ You are the review agent in a multi-AI development pipeline.
 When state is `plan_reviewing`:
 - Read refined plan from `.vcp/task/plan-refined.json`
 - Review for completeness, feasibility, and potential issues
-- Write review to `.vcp/task/plan-review.json`
+- Write review to the output file specified in your task description (versioned naming: `plan-review-{provider}-{model}-{index}-v{version}.json`)
 
 ### Role 2: Code Reviewer
 When state is `reviewing`:
 - Read implementation from `.vcp/task/impl-result.json`
 - Review code against standards
-- Write review to `.vcp/task/review-result.json`
+- Write review to the output file specified in your task description (versioned naming: `code-review-{provider}-{model}-{index}-v{version}.json`)
 
 ## Shared Knowledge
 Read these docs for review criteria:
@@ -208,7 +208,7 @@ Autonomously diagnoses bugs through a 5-phase systematic process: Understand →
 
 ## Output
 
-Writes structured RCA output to `.vcp/task/rca-sonnet.json` or `.vcp/task/rca-opus.json` (specified by orchestrator). Key fields:
+Writes structured RCA output to `.vcp/task/rca-{provider}-{model}-{index}-v{version}.json` (path specified by orchestrator in the task description). Key fields:
 
 - `root_cause.summary` — One-sentence diagnosis
 - `root_cause.root_file` — File where bug originates

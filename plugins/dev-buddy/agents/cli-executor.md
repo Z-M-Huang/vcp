@@ -76,7 +76,7 @@ bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" \
 - `--model` — model name (e.g., `o3`, `o4-mini`)
 
 **Optional flags:**
-- `--output-file` — override output file path (type-indexed naming)
+- `--output-file` — override output file path (versioned naming: `{type}-{provider}-{model}-{index}-v{version}.json`)
 - `--resume` — force resume mode
 - `--changes-summary` — summary of fixes for re-review
 
@@ -84,7 +84,7 @@ bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" \
 
 Linux/macOS:
 ```bash
-bun "/home/user/.claude/plugins/dev-buddy/scripts/cli-executor.ts" --type plan --plugin-root "/home/user/.claude/plugins/dev-buddy" --preset "codex-cli" --model "o3" --output-file "/path/to/project/.vcp/task/plan-review-1.json"
+bun "/home/user/.claude/plugins/dev-buddy/scripts/cli-executor.ts" --type plan --plugin-root "/home/user/.claude/plugins/dev-buddy" --preset "codex-cli" --model "o3" --output-file "/path/to/project/.vcp/task/plan-review-codex-cli-o3-1-v1.json"
 ```
 
 Windows:
@@ -116,7 +116,7 @@ The script outputs JSON events to stdout. Check the final event:
   "status": "approved|needs_changes|needs_clarification|rejected",
   "summary": "...",
   "needs_clarification": false,
-  "output_file": ".vcp/task/plan-review-1.json",
+  "output_file": ".vcp/task/plan-review-codex-cli-o3-1-v1.json",
   "session_marker_created": true
 }
 ```
@@ -205,10 +205,10 @@ You are a **thin wrapper**. You exist solely to invoke `cli-executor.ts` via Bas
 
 ```bash
 # Plan review with explicit output file and model
-bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type plan --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o3" --output-file "{PROJECT_DIR}/.vcp/task/plan-review-1.json"
+bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type plan --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o3" --output-file "{PROJECT_DIR}/.vcp/task/plan-review-codex-cli-o3-1-v1.json"
 
 # Code review
-bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o4-mini" --output-file "{PROJECT_DIR}/.vcp/task/code-review-3.json"
+bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o4-mini" --output-file "{PROJECT_DIR}/.vcp/task/code-review-codex-cli-o4-mini-3-v1.json"
 
 # Resume with changes summary
 bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o3" --resume --changes-summary "Fixed SQL injection"

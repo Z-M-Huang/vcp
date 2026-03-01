@@ -8,7 +8,8 @@
 import fs from 'fs';
 import path from 'path';
 import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
-import { getOutputFileName, type StageType } from '../types/stage-definitions.ts';
+import { isValidStageEntry } from '../types/stage-definitions.ts';
+import type { StageType } from '../types/stage-definitions.ts';
 
 // ─── Phase Token Contract ───────────────────────────────────────────
 
@@ -44,9 +45,10 @@ export interface PipelineProgress {
   pipelineTasks: unknown | null;
   analysisFiles: AnalysisFile[];
   implResult: { status: string } | null;
-  /** Dynamic stage output map keyed by output file name (e.g., 'plan-review-1.json').
-   *  Populated by iterating resolved_config from pipeline-tasks.json.
-   *  Empty object when no resolved_config present (fallback to idle). */
+  /** Dynamic stage output map keyed by output file name.
+   *  Populated from stages[] array in pipeline-tasks.json (preferred),
+   *  or derived from resolved_config with legacy naming (fallback).
+   *  Empty object when neither source is present (fallback to idle). */
   stageOutputs: Record<string, StageOutputEntry>;
 }
 
@@ -119,39 +121,77 @@ export function discoverAnalysisFiles(taskDir: string): AnalysisFile[] {
   }
 }
 
+/** Compute legacy output file name for backward-compatible pipelines without stages[].
+ *  Singletons return canonical names; multi-instance returns {type}-{index}.json. */
+function getLegacyOutputFileName(type: StageType, index: number): string {
+  switch (type) {
+    case 'requirements': return 'user-story.json';
+    case 'planning': return 'plan-refined.json';
+    case 'implementation': return 'impl-result.json';
+    default: return `${type}-${index}.json`;
+  }
+}
+
 /** Get progress from artifact files */
 export function getProgress(taskDir: string): PipelineProgress {
   const pipelineTasks = readJson(path.join(taskDir, 'pipeline-tasks.json'));
   const stageOutputs: Record<string, StageOutputEntry> = {};
 
-  // Populate stageOutputs dynamically from resolved_config in pipeline-tasks.json.
-  // Output file names are derived from stage definitions + per-type index.
+  // Populate stageOutputs from pipeline-tasks.json.
+  // Prefer stages[] array (new format with provider-model-version naming),
+  // fall back to resolved_config derivation (legacy {type}-{index} naming).
   if (pipelineTasks && typeof pipelineTasks === 'object') {
     const pt = pipelineTasks as Record<string, unknown>;
-    const resolvedConfig = pt.resolved_config as PipelineConfig | undefined;
+    const rawStages = pt.stages;
 
-    if (resolvedConfig) {
-      const pipelineType = typeof pt.pipeline_type === 'string' ? pt.pipeline_type : 'feature-implement';
-      const pipeline = pipelineType === 'bug-fix'
-        ? resolvedConfig.bugfix_pipeline
-        : resolvedConfig.feature_pipeline;
+    // Validate stages[] entries: every entry must be a known stage type with a safe output filename.
+    // If any entry is malformed, discard the entire array and fall back to legacy.
+    const stagesArray = Array.isArray(rawStages) && rawStages.length > 0
+      && rawStages.every(isValidStageEntry)
+      ? rawStages as Array<{ type: string; output_file: string }>
+      : undefined;
 
-      if (Array.isArray(pipeline)) {
-        const typeCounters: Partial<Record<StageType, number>> = {};
-        for (const stage of pipeline) {
-          const stageType = stage.type as StageType;
-          typeCounters[stageType] = (typeCounters[stageType] || 0) + 1;
-          const outputFile = getOutputFileName(stageType, typeCounters[stageType]);
-          const data = readJson(path.join(taskDir, outputFile)) as Record<string, unknown> | null;
-          if (data && typeof data.status === 'string') {
-            stageOutputs[outputFile] = {
-              status: data.status,
-              clarification_questions: Array.isArray(data.clarification_questions)
-                ? data.clarification_questions as string[]
-                : undefined,
-            };
-          } else {
-            stageOutputs[outputFile] = null;
+    if (stagesArray) {
+      // New path: read output_file directly from stages array
+      for (const stage of stagesArray) {
+        const data = readJson(path.join(taskDir, stage.output_file)) as Record<string, unknown> | null;
+        if (data && typeof data.status === 'string') {
+          stageOutputs[stage.output_file] = {
+            status: data.status,
+            clarification_questions: Array.isArray(data.clarification_questions)
+              ? data.clarification_questions as string[]
+              : undefined,
+          };
+        } else {
+          stageOutputs[stage.output_file] = null;
+        }
+      }
+    } else {
+      // Legacy fallback: derive from resolved_config + old {type}-{index}.json naming
+      const resolvedConfig = pt.resolved_config as PipelineConfig | undefined;
+      if (resolvedConfig) {
+        const pipelineType = typeof pt.pipeline_type === 'string' ? pt.pipeline_type : 'feature-implement';
+        const pipeline = pipelineType === 'bug-fix'
+          ? resolvedConfig.bugfix_pipeline
+          : resolvedConfig.feature_pipeline;
+
+        if (Array.isArray(pipeline)) {
+          const typeCounters: Partial<Record<StageType, number>> = {};
+          for (const stage of pipeline) {
+            const stageType = stage.type as StageType;
+            typeCounters[stageType] = (typeCounters[stageType] || 0) + 1;
+            const outputFile = getLegacyOutputFileName(stageType, typeCounters[stageType]!);
+            const data = readJson(path.join(taskDir, outputFile)) as Record<string, unknown> | null;
+            if (data && typeof data.status === 'string') {
+              stageOutputs[outputFile] = {
+                status: data.status,
+                clarification_questions: Array.isArray(data.clarification_questions)
+                  ? data.clarification_questions as string[]
+                  : undefined,
+              };
+            } else {
+              stageOutputs[outputFile] = null;
+            }
           }
         }
       }
@@ -279,34 +319,53 @@ export function determinePhase(progress: PipelineProgress): PhaseResult {
     };
   }
 
-  // ── LAYER 2: Generic stage iteration from resolved_config ──────────
+  // ── LAYER 2: Generic stage iteration ──────────────────────────────
 
-  // Extract resolved_config from pipeline-tasks.json
+  // Build stage iteration list: prefer stages[] (new format), fall back to resolved_config (legacy)
   const pt = progress.pipelineTasks as Record<string, unknown>;
-  const resolvedConfig = pt.resolved_config as PipelineConfig | undefined;
+  const rawStages2 = pt.stages;
 
-  // No resolved_config — fall back to idle
-  if (!resolvedConfig) {
-    return {
-      phase: 'idle',
-      message: '**Phase: Unknown**\nPipeline tasks file has no resolved_config (old format). Reset pipeline to continue.'
-    };
+  // Validate stages[] entries: every entry must be a known stage type with a safe output filename.
+  // If any entry is malformed, discard entirely and fall back to legacy.
+  const validStages = Array.isArray(rawStages2) && rawStages2.length > 0
+    && rawStages2.every(isValidStageEntry)
+    ? rawStages2 as Array<{ type: string; output_file: string }>
+    : undefined;
+
+  let stageList: Array<{ type: StageType; outputFile: string }>;
+
+  if (validStages) {
+    // New path: stage type + output file read directly from stages[]
+    stageList = validStages.map(s => ({ type: s.type as StageType, outputFile: s.output_file }));
+  } else {
+    // Legacy fallback: derive from resolved_config + old {type}-{index}.json naming
+    const resolvedConfig = pt.resolved_config as PipelineConfig | undefined;
+
+    if (!resolvedConfig) {
+      return {
+        phase: 'idle',
+        message: '**Phase: Unknown**\nPipeline tasks file has no resolved_config or stages (old format). Reset pipeline to continue.'
+      };
+    }
+
+    const activePipeline = getActivePipeline(resolvedConfig, pipelineType);
+    const legacyCounters: Partial<Record<StageType, number>> = {};
+    stageList = activePipeline.map(stage => {
+      const t = stage.type as StageType;
+      legacyCounters[t] = (legacyCounters[t] || 0) + 1;
+      return { type: t, outputFile: getLegacyOutputFileName(t, legacyCounters[t]!) };
+    });
   }
 
-  const activePipeline = getActivePipeline(resolvedConfig, pipelineType);
-
-  // Iterate stages in order, skipping layer-1 stages (requirements, planning, rca)
-  // that are already handled above. Start from the first non-layer-1 stage.
-  // Per-type counters derive output file names and phase tokens.
+  // Iterate stages in order. Per-type counters generate phase tokens.
+  // Layer-1 stages (requirements, planning, rca) are skipped (handled above).
   const typeCounters: Partial<Record<StageType, number>> = {};
-  for (let i = 0; i < activePipeline.length; i++) {
-    const stage = activePipeline[i];
-    const stageType = stage.type as StageType;
+  for (let i = 0; i < stageList.length; i++) {
+    const { type: stageType, outputFile } = stageList[i];
 
     // Track per-type index for ALL stages (including skipped ones) so counters stay correct
     typeCounters[stageType] = (typeCounters[stageType] || 0) + 1;
     const typeIndex = typeCounters[stageType]!;
-    const outputFile = getOutputFileName(stageType, typeIndex);
 
     // Skip layer-1 stage types (handled above)
     if (stageType === 'requirements' || stageType === 'planning' || stageType === 'rca') {

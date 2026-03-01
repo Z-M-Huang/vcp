@@ -29,7 +29,8 @@ export interface StageDefinition {
   /**
    * Output file name pattern.
    * Singletons: exact file name (e.g. 'user-story.json').
-   * Multi-instance: pattern with {index} placeholder (e.g. 'plan-review-{index}.json').
+   * Multi-instance: pattern with {provider}, {model}, {index}, and {version} placeholders
+   * (e.g. 'plan-review-{provider}-{model}-{index}-v{version}.json').
    */
   output_file_pattern: string;
 }
@@ -57,7 +58,7 @@ export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
     singleton: false,
     allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'plan-reviewer',
-    output_file_pattern: 'plan-review-{index}.json',
+    output_file_pattern: 'plan-review-{provider}-{model}-{index}-v{version}.json',
   },
   implementation: {
     singleton: true,
@@ -69,15 +70,35 @@ export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
     singleton: false,
     allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'code-reviewer',
-    output_file_pattern: 'code-review-{index}.json',
+    output_file_pattern: 'code-review-{provider}-{model}-{index}-v{version}.json',
   },
   rca: {
     singleton: false,
     allowed_pipelines: ['bugfix'],
     agent_type: 'root-cause-analyst',
-    output_file_pattern: 'rca-{index}.json',
+    output_file_pattern: 'rca-{provider}-{model}-{index}-v{version}.json',
   },
 };
+
+// ─── Filename Sanitization ────────────────────────────────────────────────────
+
+/**
+ * Sanitize a string for safe use in filenames.
+ * Lowercase, replace spaces/underscores with hyphens, strip unsafe chars.
+ * Throws on empty or dangerous results (empty, '.', '..').
+ */
+export function sanitizeForFilename(input: string): string {
+  const result = input
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9.-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  if (!result || result === '.' || result === '..') {
+    throw new Error(`Cannot sanitize '${input}' to a valid filename component`);
+  }
+  return result;
+}
 
 // ─── Output File Naming ───────────────────────────────────────────────────────
 
@@ -86,16 +107,48 @@ export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
  *
  * @param type - The stage type.
  * @param index - The 1-based index of this stage within its type (ignored for singletons).
- * @returns The output file name (e.g. 'plan-review-1.json', 'impl-result.json').
+ * @param provider - The provider/preset name (required for multi-instance, sanitized for filename safety).
+ * @param model - The model name (required for multi-instance, sanitized for filename safety).
+ * @param version - The version/round number (required for multi-instance, starts at 1).
+ * @returns The output file name (e.g. 'code-review-anthropic-subscription-sonnet-1-v1.json').
  */
-export function getOutputFileName(type: StageType, index: number): string {
+export function getOutputFileName(
+  type: StageType,
+  index: number,
+  provider: string,
+  model: string,
+  version: number,
+): string {
   const def = STAGE_DEFINITIONS[type];
   if (def.singleton) {
-    // Singleton stages use canonical file names — index is ignored
     return def.output_file_pattern;
   }
-  // Multi-instance stages use type-indexed names
-  return def.output_file_pattern.replace('{index}', String(index));
+  return def.output_file_pattern
+    .replace('{index}', String(index))
+    .replace('{provider}', sanitizeForFilename(provider))
+    .replace('{model}', sanitizeForFilename(model))
+    .replace('{version}', String(version));
+}
+
+// ─── Stages Array Validation ─────────────────────────────────────────────────
+
+/** Runtime set of valid stage type strings (derived from STAGE_DEFINITIONS keys). */
+export const VALID_STAGE_TYPES: ReadonlySet<string> = new Set(Object.keys(STAGE_DEFINITIONS));
+
+/** Output filenames must be safe basenames: no path separators, no traversal. */
+const SAFE_FILENAME_RE = /^[a-z0-9][a-z0-9._-]*\.json$/;
+
+/** Validate a single stages[] entry from pipeline-tasks.json.
+ *  Checks: type is a known StageType, output_file is a safe JSON basename. */
+export function isValidStageEntry(entry: unknown): entry is { type: string; output_file: string } {
+  if (!entry || typeof entry !== 'object') return false;
+  const e = entry as Record<string, unknown>;
+  return (
+    typeof e.type === 'string' &&
+    VALID_STAGE_TYPES.has(e.type) &&
+    typeof e.output_file === 'string' &&
+    SAFE_FILENAME_RE.test(e.output_file)
+  );
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────

@@ -261,7 +261,7 @@ const typeCounters = {};
 const resolved = pipeline.map((entry, arrayIndex) => {
   typeCounters[entry.type] = (typeCounters[entry.type] || 0) + 1;
   const stageIndex = typeCounters[entry.type];
-  const outputFile = getOutputFileName(entry.type, stageIndex);
+  const outputFile = getOutputFileName(entry.type, stageIndex, entry.provider, entry.model, 1);
   const providerType = presets.presets[entry.provider]?.type ?? 'subscription';
   return { ...entry, stageIndex, outputFile, arrayIndex, providerType };
 });
@@ -275,7 +275,7 @@ Store the resulting `resolved` array and full `config` in memory. Each element h
 - `provider` — preset name
 - `model` — model identifier (required)
 - `stageIndex` — 1-based index among stages of the same type
-- `outputFile` — computed output file name (e.g., 'rca-1.json', 'plan-review-1.json')
+- `outputFile` — computed output file name (e.g., 'rca-anthropic-subscription-sonnet-1-v1.json', 'plan-review-my-codex-preset-o3-1-v1.json')
 - `arrayIndex` — 0-based position in the pipeline array
 - `providerType` — resolved provider type: `'subscription'`, `'api'`, or `'cli'`. **Note:** This is the JSON-serialized field name used in `pipeline-tasks.json` stages. The TypeScript `ResolvedStage` interface uses `provider_type` (snake_case) internally; the orchestrator writes `providerType` (camelCase) to JSON.
 
@@ -352,7 +352,7 @@ while i < resolved.length:
       task = TaskCreate(subject: subject, activeForm: activeForm(resolved[k]), description: description)
       taskIds[k] = task.id
       groupTaskIds.push(task.id)
-      stages[k] = { ...resolved[k], output_file: resolved[k].outputFile, task_id: task.id, parallel_group_id: parallelGroupCounter }
+      stages[k] = { ...resolved[k], output_file: resolved[k].outputFile, task_id: task.id, parallel_group_id: parallelGroupCounter, current_version: 1 }
       if predecessors.length > 0:
         TaskUpdate(task.id, addBlockedBy: predecessors)
 
@@ -366,7 +366,7 @@ while i < resolved.length:
     description = deriveDescription(stage)
     task = TaskCreate(subject: subject, activeForm: activeForm(stage), description: description)
     taskIds[i] = task.id
-    stages[i] = { ...resolved[i], output_file: resolved[i].outputFile, task_id: task.id, parallel_group_id: null }
+    stages[i] = { ...resolved[i], output_file: resolved[i].outputFile, task_id: task.id, parallel_group_id: null, current_version: 1 }
 
     predecessors = previousTaskId ? [previousTaskId]
                  : groupPredecessors ? groupPredecessors
@@ -471,13 +471,13 @@ COMPLETION: .vcp/task/code-review-{N}.json exists with status field
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "rca-1.json", "task_id": "4", "parallel_group_id": null },
-    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "rca-2.json", "task_id": "5", "parallel_group_id": null },
-    { "type": "plan-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "plan-review-1.json", "task_id": "6", "parallel_group_id": null },
-    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "7", "parallel_group_id": null },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-1.json", "task_id": "8", "parallel_group_id": null },
-    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-2.json", "task_id": "9", "parallel_group_id": null },
-    { "type": "code-review", "provider": "my-codex-preset", "providerType": "cli", "output_file": "code-review-3.json", "task_id": "10", "parallel_group_id": null }
+    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "rca-anthropic-subscription-sonnet-1-v1.json", "task_id": "4", "parallel_group_id": null, "current_version": 1 },
+    { "type": "rca", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "rca-anthropic-subscription-opus-2-v1.json", "task_id": "5", "parallel_group_id": null, "current_version": 1 },
+    { "type": "plan-review", "provider": "my-codex-preset", "providerType": "cli", "model": "o3", "output_file": "plan-review-my-codex-preset-o3-1-v1.json", "task_id": "6", "parallel_group_id": null, "current_version": 1 },
+    { "type": "implementation", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "impl-result.json", "task_id": "7", "parallel_group_id": null, "current_version": 1 },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "code-review-anthropic-subscription-sonnet-1-v1.json", "task_id": "8", "parallel_group_id": null, "current_version": 1 },
+    { "type": "code-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "code-review-anthropic-subscription-opus-2-v1.json", "task_id": "9", "parallel_group_id": null, "current_version": 1 },
+    { "type": "code-review", "provider": "my-codex-preset", "providerType": "cli", "model": "o3", "output_file": "code-review-my-codex-preset-o3-3-v1.json", "task_id": "10", "parallel_group_id": null, "current_version": 1 }
   ]
 }
 ```
@@ -595,8 +595,8 @@ This is an INLINE ORCHESTRATOR ACTION. It is NOT a task, NOT delegated to an age
 Find all rca-*.json files from `stages` array entries with `type === 'rca'`:
 ```
 rcaFiles = stages.filter(s => s.type === 'rca').map(s => s.output_file)
-// e.g., ['rca-1.json', 'rca-2.json']
-Read each: Read(".vcp/task/rca-1.json"), Read(".vcp/task/rca-2.json"), ...
+// e.g., ['rca-anthropic-subscription-sonnet-1-v1.json', 'rca-anthropic-subscription-opus-2-v1.json']
+Read each file from .vcp/task/ using the output_file from stages[]
 ```
 
 ### Step 2: Consolidate Findings
@@ -699,10 +699,10 @@ Before marking each task completed, read its output file, extract key context (�
 
 | Completed Stage | Enrich Next Stage | Extract From Output |
 |----------------|-------------------|---------------------|
-| rca-N.json | rca-(N+1).json or plan-review-1.json | root cause summary, confidence, affected files |
-| plan-review-N.json | implementation or next plan-review | validation status, concerns, AC count |
-| impl-result.json | code-review-1.json | files modified/created, test results |
-| code-review-N.json | code-review-(N+1).json | status, findings, AC verified/total |
+| rca-{P}-{M}-N-vV.json | next rca or plan-review stage | root cause summary, confidence, affected files |
+| plan-review-{P}-{M}-N-vV.json | implementation or next plan-review | validation status, concerns, AC count |
+| impl-result.json | first code-review stage | files modified/created, test results |
+| code-review-{P}-{M}-N-vV.json | next code-review stage | status, findings, AC verified/total |
 
 ---
 
@@ -735,18 +735,23 @@ Before marking each task completed, read its output file, extract key context (�
 
 When a review returns `needs_changes`, the **same stage (same index)** re-reviews the fix.
 
-**CRITICAL: Re-review returns to the SAME STAGE INDEX, not the next stage.** If code-review-2.json returns `needs_changes`:
+**CRITICAL: Re-review returns to the SAME STAGE INDEX, not the next stage.** If stage index 2 (e.g., `code-review-anthropic-subscription-opus-2-v1.json`) returns `needs_changes`:
 - Fix task targets the code issue
-- Re-review targets stage index 2 (same output file code-review-2.json)
+- Re-review creates a **NEW versioned file** (`code-review-anthropic-subscription-opus-2-v2.json`)
+- `stages[].output_file` is updated AFTER re-review completes (two-phase update)
 - Stage index 3 is NOT started until stage index 2 approves
 
-### needs_changes → Fix Task
+### needs_changes → Fix + Re-Review (Two-Phase Update)
 
 ```
 // stage = the pipeline stage entry that returned needs_changes
 // stageIndex = index of this stage in pipeline-tasks.json.stages[]
 // current_task_id = from main loop
 // iteration = from TaskList: count existing "Fix {stage subject} v*" tasks + 1
+
+// PHASE 1: Compute next version (stages[] NOT updated yet — preserves phase detection)
+nextVersion = stages[stageIndex].current_version + 1
+nextOutputFile = getOutputFileName(stage.type, stage.stageIndex, stage.provider, stage.model, nextVersion)
 
 fix = TaskCreate(
   subject: "Fix {stage subject} v{iteration}",
@@ -756,8 +761,8 @@ TaskUpdate(fix.id, addBlockedBy: [current_task_id])
 
 rerev = TaskCreate(
   subject: "{stage subject} v{iteration+1}",
-  description: "...SAME OUTPUT FILE: .vcp/task/{stage.output_file}
-               {if CLI stage: --output-file .vcp/task/{stage.output_file}}..."
+  description: "...OUTPUT: .vcp/task/{nextOutputFile}  ← NEW VERSION FILE
+               {if CLI stage: --output-file .vcp/task/{nextOutputFile}}..."
 )
 TaskUpdate(rerev.id, addBlockedBy: [fix.id])
 
@@ -770,6 +775,11 @@ else:
   successorIndex = stageIndex + 1
 if successorIndex < stages.length:
   TaskUpdate(stages[successorIndex].task_id, addBlockedBy: [rerev.id])
+
+// PHASE 2: After re-review completes and orchestrator reads result:
+stages[stageIndex].current_version = nextVersion
+stages[stageIndex].output_file = nextOutputFile
+// Write updated pipeline-tasks.json to disk
 ```
 
 ### Iteration Tracking
@@ -802,13 +812,13 @@ Task(
 
 | Stage | Agent | Model | Output File |
 |-------|-------|-------|-------------|
-| RCA 1 | root-cause-analyst | sonnet | rca-1.json |
-| RCA 2 | root-cause-analyst | opus | rca-2.json |
-| Plan Review 1 | cli-executor | external (CLI) | plan-review-1.json |
+| RCA 1 | root-cause-analyst | sonnet | rca-anthropic-subscription-sonnet-1-v1.json |
+| RCA 2 | root-cause-analyst | opus | rca-anthropic-subscription-opus-2-v1.json |
+| Plan Review 1 | cli-executor | external (CLI) | plan-review-my-codex-preset-o3-1-v1.json |
 | Implementation | implementer | sonnet | impl-result.json |
-| Code Review 1 | code-reviewer | sonnet | code-review-1.json |
-| Code Review 2 | code-reviewer | opus | code-review-2.json |
-| Code Review 3 | cli-executor | external (CLI) | code-review-3.json |
+| Code Review 1 | code-reviewer | sonnet | code-review-anthropic-subscription-sonnet-1-v1.json |
+| Code Review 2 | code-reviewer | opus | code-review-anthropic-subscription-opus-2-v1.json |
+| Code Review 3 | cli-executor | external (CLI) | code-review-my-codex-preset-o3-3-v1.json |
 
 For custom pipelines, derive agent reference dynamically from `stages` in pipeline-tasks.json.
 
@@ -842,7 +852,7 @@ The `guidance-hook.ts` reads `pipeline-tasks.json.resolved_config` to determine 
 
 ### SubagentStop Hook (Enforcement)
 
-The `review-validator.ts` derives review file lists dynamically from `resolved_config` in pipeline-tasks.json. Validates reviewer outputs and can block invalid reviews.
+The `review-validator.ts` derives review file lists dynamically from pipeline-tasks.json (stages[] preferred, resolved_config fallback). Validates reviewer outputs and can block invalid reviews.
 
 ---
 
@@ -853,8 +863,8 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
 3. **Data-driven task chain** — Iterate over `bugfix_pipeline` array, create one task per entry.
 4. **RCA consolidation is inline** — NOT a task, NOT an agent call. The orchestrator reads all rca-*.json files and writes user-story.json + plan-refined.json directly. Fixed file names.
 5. **Consolidation trigger** — After completing an rca stage, check if next stage is non-rca (or no next stage). If yes, run consolidation immediately before dispatching next task.
-6. **Type-indexed file naming** — rca-1.json, rca-2.json, plan-review-1.json, code-review-1.json, etc.
-7. **Same-stage re-review** — After fix, SAME stage index re-reviews (not the next stage).
+6. **Versioned file naming** — `{type}-{provider}-{model}-{index}-v{version}.json` (e.g., `rca-anthropic-subscription-sonnet-1-v1.json`). Re-reviews create new versioned files (append-only).
+7. **Same-stage re-review (two-phase)** — After fix, SAME stage index re-reviews with a new version file. `stages[].output_file` updated AFTER re-review completes.
 8. **resolved_config snapshot** — pipeline-tasks.json includes full PipelineConfig. Hooks read this, never ~/.vcp/dev-buddy.json.
 9. **max_iterations from config** — Use resolved_config.max_iterations for fix/re-review cycle limit.
 10. **CLI stages pass --preset, --model, --output-file** — CLI provider stages MUST pass --preset, --model, and --output-file to cli-executor.ts.

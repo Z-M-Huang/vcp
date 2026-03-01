@@ -17,57 +17,70 @@ import type { PipelineProgress, StageOutputEntry } from '../scripts/pipeline-uti
 
 // ── Helpers for building test PipelineProgress objects ─────────────────
 
-/** Build a minimal feature-implement pipeline-tasks snapshot with a resolved_config.
- *  Stages are the pipeline entries including output_file for each. */
-function makeFeaturePipelineTasks(stages: Array<{ type: string; output_file: string; provider?: string }> = []) {
+/** Build a minimal feature-implement pipeline-tasks snapshot.
+ *  Includes top-level stages[] (new format) so tests exercise the primary code path. */
+function makeFeaturePipelineTasks(stages: Array<{ type: string; output_file: string; provider?: string; current_version?: number }> = []) {
   return {
     pipeline_type: 'feature-implement',
     team_name: 'pipeline-test-abc123',
     resolved_config: {
-      feature_pipeline: stages.map(s => ({ type: s.type, provider: s.provider ?? 'anthropic-subscription', output_file: s.output_file })),
+      feature_pipeline: stages.map(s => ({ type: s.type, provider: s.provider ?? 'anthropic-subscription', model: 'sonnet' })),
       bugfix_pipeline: [],
       max_iterations: 10,
       team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
     },
+    stages: stages.map(s => ({
+      type: s.type,
+      provider: s.provider ?? 'anthropic-subscription',
+      output_file: s.output_file,
+      current_version: s.current_version ?? 1,
+    })),
   };
 }
 
-/** Build a minimal bug-fix pipeline-tasks snapshot with a resolved_config. */
-function makeBugFixPipelineTasks(stages: Array<{ type: string; output_file: string; provider?: string }> = []) {
+/** Build a minimal bug-fix pipeline-tasks snapshot.
+ *  Includes top-level stages[] (new format) so tests exercise the primary code path. */
+function makeBugFixPipelineTasks(stages: Array<{ type: string; output_file: string; provider?: string; current_version?: number }> = []) {
   return {
     pipeline_type: 'bug-fix',
     team_name: 'pipeline-test-abc123',
     resolved_config: {
       feature_pipeline: [],
-      bugfix_pipeline: stages.map(s => ({ type: s.type, provider: s.provider ?? 'anthropic-subscription', output_file: s.output_file })),
+      bugfix_pipeline: stages.map(s => ({ type: s.type, provider: s.provider ?? 'anthropic-subscription', model: 'sonnet' })),
       max_iterations: 10,
       team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
     },
+    stages: stages.map(s => ({
+      type: s.type,
+      provider: s.provider ?? 'anthropic-subscription',
+      output_file: s.output_file,
+      current_version: s.current_version ?? 1,
+    })),
   };
 }
 
-/** Default feature pipeline stages (matching DEFAULT_CONFIG) */
+/** Default feature pipeline stages (matching DEFAULT_CONFIG with versioned naming) */
 const DEFAULT_FEATURE_STAGES = [
   { type: 'requirements', output_file: 'user-story.json' },
   { type: 'planning', output_file: 'plan-refined.json' },
-  { type: 'plan-review', output_file: 'plan-review-1.json' },
-  { type: 'plan-review', output_file: 'plan-review-2.json' },
-  { type: 'plan-review', output_file: 'plan-review-3.json' },
+  { type: 'plan-review', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json' },
+  { type: 'plan-review', output_file: 'plan-review-anthropic-subscription-opus-2-v1.json' },
+  { type: 'plan-review', output_file: 'plan-review-anthropic-subscription-sonnet-3-v1.json' },
   { type: 'implementation', output_file: 'impl-result.json' },
-  { type: 'code-review', output_file: 'code-review-1.json' },
-  { type: 'code-review', output_file: 'code-review-2.json' },
-  { type: 'code-review', output_file: 'code-review-3.json' },
+  { type: 'code-review', output_file: 'code-review-anthropic-subscription-sonnet-1-v1.json' },
+  { type: 'code-review', output_file: 'code-review-anthropic-subscription-opus-2-v1.json' },
+  { type: 'code-review', output_file: 'code-review-anthropic-subscription-sonnet-3-v1.json' },
 ];
 
-/** Default bug-fix pipeline stages (matching DEFAULT_CONFIG) */
+/** Default bug-fix pipeline stages (matching DEFAULT_CONFIG with versioned naming) */
 const DEFAULT_BUGFIX_STAGES = [
-  { type: 'rca', output_file: 'rca-1.json' },
-  { type: 'rca', output_file: 'rca-2.json' },
-  { type: 'plan-review', output_file: 'plan-review-1.json' },
+  { type: 'rca', output_file: 'rca-anthropic-subscription-sonnet-1-v1.json' },
+  { type: 'rca', output_file: 'rca-anthropic-subscription-opus-2-v1.json' },
+  { type: 'plan-review', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json' },
   { type: 'implementation', output_file: 'impl-result.json' },
-  { type: 'code-review', output_file: 'code-review-1.json' },
-  { type: 'code-review', output_file: 'code-review-2.json' },
-  { type: 'code-review', output_file: 'code-review-3.json' },
+  { type: 'code-review', output_file: 'code-review-anthropic-subscription-sonnet-1-v1.json' },
+  { type: 'code-review', output_file: 'code-review-anthropic-subscription-opus-2-v1.json' },
+  { type: 'code-review', output_file: 'code-review-anthropic-subscription-sonnet-3-v1.json' },
 ];
 
 /** Build an empty stageOutputs record from a stages array */
@@ -279,7 +292,7 @@ describe('guidance-hook', () => {
 
     test('bug-fix: returns root_cause_analysis (in progress) when one RCA done', () => {
       const stageOutputs = emptyStageOutputs(DEFAULT_BUGFIX_STAGES);
-      stageOutputs['rca-1.json'] = { status: 'complete' };
+      stageOutputs['rca-anthropic-subscription-sonnet-1-v1.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
@@ -290,14 +303,14 @@ describe('guidance-hook', () => {
       };
       const result = determinePhase(progress);
       expect(result.phase).toBe('root_cause_analysis');
-      expect(result.message).toContain('rca-1.json: done');
-      expect(result.message).toContain('rca-2.json: running');
+      expect(result.message).toContain('rca-anthropic-subscription-sonnet-1-v1.json: done');
+      expect(result.message).toContain('rca-anthropic-subscription-opus-2-v1.json: running');
     });
 
     test('bug-fix: returns root_cause_analysis (consolidation) when both RCAs done', () => {
       const stageOutputs = emptyStageOutputs(DEFAULT_BUGFIX_STAGES);
-      stageOutputs['rca-1.json'] = { status: 'complete' };
-      stageOutputs['rca-2.json'] = { status: 'complete' };
+      stageOutputs['rca-anthropic-subscription-sonnet-1-v1.json'] = { status: 'complete' };
+      stageOutputs['rca-anthropic-subscription-opus-2-v1.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: null,
         plan: null,
@@ -313,8 +326,8 @@ describe('guidance-hook', () => {
 
     test('bug-fix: skips Sonnet/Opus plan reviews, goes to Codex validation', () => {
       const stageOutputs = emptyStageOutputs(DEFAULT_BUGFIX_STAGES);
-      stageOutputs['rca-1.json'] = { status: 'complete' };
-      stageOutputs['rca-2.json'] = { status: 'complete' };
+      stageOutputs['rca-anthropic-subscription-sonnet-1-v1.json'] = { status: 'complete' };
+      stageOutputs['rca-anthropic-subscription-opus-2-v1.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: { title: 'Fix: test bug' },
         plan: { steps: [] },
@@ -324,7 +337,7 @@ describe('guidance-hook', () => {
         stageOutputs,
       };
       const result = determinePhase(progress);
-      // Bug-fix pipeline has plan-review-1.json as the first non-layer-1 stage after rca
+      // Bug-fix pipeline has plan-review as the first non-layer-1 stage after rca
       // It should go to plan_review phase (the bug-fix plan validation stage)
       expect(result.phase).toContain('plan_review');
       expect(result.message).toContain('RCA + Plan Validation');
@@ -332,9 +345,9 @@ describe('guidance-hook', () => {
 
     test('bug-fix: proceeds to implementation after Codex plan validation approved', () => {
       const stageOutputs = emptyStageOutputs(DEFAULT_BUGFIX_STAGES);
-      stageOutputs['rca-1.json'] = { status: 'complete' };
-      stageOutputs['rca-2.json'] = { status: 'complete' };
-      stageOutputs['plan-review-1.json'] = { status: 'approved' };
+      stageOutputs['rca-anthropic-subscription-sonnet-1-v1.json'] = { status: 'complete' };
+      stageOutputs['rca-anthropic-subscription-opus-2-v1.json'] = { status: 'complete' };
+      stageOutputs['plan-review-anthropic-subscription-sonnet-1-v1.json'] = { status: 'approved' };
       const progress: PipelineProgress = {
         userStory: { title: 'Fix: test bug' },
         plan: { steps: [] },
@@ -408,13 +421,13 @@ describe('guidance-hook', () => {
       const stageOutputs: Record<string, StageOutputEntry> = {
         'user-story.json': { status: 'complete' },
         'plan-refined.json': { status: 'complete' },
-        'plan-review-1.json': { status: 'approved' },
-        'plan-review-2.json': { status: 'approved' },
-        'plan-review-3.json': { status: 'approved' },
+        'plan-review-anthropic-subscription-sonnet-1-v1.json': { status: 'approved' },
+        'plan-review-anthropic-subscription-opus-2-v1.json': { status: 'approved' },
+        'plan-review-anthropic-subscription-sonnet-3-v1.json': { status: 'approved' },
         'impl-result.json': { status: 'complete' },
-        'code-review-1.json': { status: 'approved' },
-        'code-review-2.json': { status: 'approved' },
-        'code-review-3.json': { status: 'approved' },
+        'code-review-anthropic-subscription-sonnet-1-v1.json': { status: 'approved' },
+        'code-review-anthropic-subscription-opus-2-v1.json': { status: 'approved' },
+        'code-review-anthropic-subscription-sonnet-3-v1.json': { status: 'approved' },
       };
       const progress: PipelineProgress = {
         userStory: { title: 'test' },
@@ -432,13 +445,13 @@ describe('guidance-hook', () => {
       const stageOutputs: Record<string, StageOutputEntry> = {
         'user-story.json': { status: 'complete' },
         'plan-refined.json': { status: 'complete' },
-        'plan-review-1.json': { status: 'needs_changes' },
-        'plan-review-2.json': null,
-        'plan-review-3.json': null,
+        'plan-review-anthropic-subscription-sonnet-1-v1.json': { status: 'needs_changes' },
+        'plan-review-anthropic-subscription-opus-2-v1.json': null,
+        'plan-review-anthropic-subscription-sonnet-3-v1.json': null,
         'impl-result.json': null,
-        'code-review-1.json': null,
-        'code-review-2.json': null,
-        'code-review-3.json': null,
+        'code-review-anthropic-subscription-sonnet-1-v1.json': null,
+        'code-review-anthropic-subscription-opus-2-v1.json': null,
+        'code-review-anthropic-subscription-sonnet-3-v1.json': null,
       };
       const progress: PipelineProgress = {
         userStory: { title: 'test' },
@@ -451,6 +464,87 @@ describe('guidance-hook', () => {
       const result = determinePhase(progress);
       expect(result.phase).toContain('fix_plan_review');
       expect(result.message).toContain('Fix Plan');
+    });
+
+    test('malformed stages[] falls back to resolved_config', () => {
+      // stages[] has an entry missing output_file — validation should discard entire array
+      const malformedPipelineTasks = {
+        pipeline_type: 'feature-implement',
+        team_name: 'pipeline-test-abc123',
+        resolved_config: {
+          feature_pipeline: [
+            { type: 'requirements', provider: 'anthropic-subscription', model: 'opus' },
+            { type: 'planning', provider: 'anthropic-subscription', model: 'opus' },
+            { type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet' },
+            { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
+            { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
+          ],
+          bugfix_pipeline: [],
+          max_iterations: 10,
+          team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
+        },
+        stages: [
+          { type: 'requirements', output_file: 'user-story.json' },
+          { type: 'planning' }, // missing output_file — malformed
+        ],
+      };
+      // Legacy naming used because stages[] is invalid
+      const stageOutputs: Record<string, StageOutputEntry> = {
+        'user-story.json': { status: 'complete' },
+        'plan-refined.json': { status: 'complete' },
+        'plan-review-1.json': { status: 'approved' },
+        'impl-result.json': { status: 'complete' },
+        'code-review-1.json': { status: 'approved' },
+      };
+      const progress: PipelineProgress = {
+        userStory: { title: 'test' },
+        plan: { steps: [] },
+        pipelineTasks: malformedPipelineTasks,
+        analysisFiles: [],
+        implResult: { status: 'complete' },
+        stageOutputs,
+      };
+      const result = determinePhase(progress);
+      expect(result.phase).toBe('complete');
+    });
+
+    test('legacy fallback: works with resolved_config when stages[] absent', () => {
+      // Simulate old-format pipeline-tasks.json without top-level stages[]
+      const legacyPipelineTasks = {
+        pipeline_type: 'feature-implement',
+        team_name: 'pipeline-test-abc123',
+        resolved_config: {
+          feature_pipeline: [
+            { type: 'requirements', provider: 'anthropic-subscription', model: 'opus' },
+            { type: 'planning', provider: 'anthropic-subscription', model: 'opus' },
+            { type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet' },
+            { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
+            { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
+          ],
+          bugfix_pipeline: [],
+          max_iterations: 10,
+          team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
+        },
+        // No top-level stages[] — legacy format
+      };
+      // Legacy naming: plan-review-1.json, code-review-1.json
+      const stageOutputs: Record<string, StageOutputEntry> = {
+        'user-story.json': { status: 'complete' },
+        'plan-refined.json': { status: 'complete' },
+        'plan-review-1.json': { status: 'approved' },
+        'impl-result.json': { status: 'complete' },
+        'code-review-1.json': { status: 'approved' },
+      };
+      const progress: PipelineProgress = {
+        userStory: { title: 'test' },
+        plan: { steps: [] },
+        pipelineTasks: legacyPipelineTasks,
+        analysisFiles: [],
+        implResult: { status: 'complete' },
+        stageOutputs,
+      };
+      const result = determinePhase(progress);
+      expect(result.phase).toBe('complete');
     });
   });
 });

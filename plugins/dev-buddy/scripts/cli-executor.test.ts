@@ -319,7 +319,7 @@ describe('cli-executor.ts', () => {
       mockHome
     );
 
-    const outputPath = path.join(tempDir, '.vcp', 'task', 'review-codex.json');
+    const outputPath = path.join(tempDir, '.vcp', 'task', 'plan-review-cli.json');
     expect(fs.existsSync(outputPath)).toBe(true);
 
     const output = JSON.parse(fs.readFileSync(outputPath, 'utf8'));

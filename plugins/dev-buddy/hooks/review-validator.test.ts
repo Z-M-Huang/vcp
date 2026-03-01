@@ -340,6 +340,150 @@ describe('review-validator', () => {
       // code-review indices: 1, 2 (independent of plan-review)
       expect(result!.codeReviewFiles).toEqual(['code-review-1.json', 'code-review-2.json']);
     });
+
+    // ── New format: stages[] array (primary path) ─────────────────────
+
+    test('derives review files from stages[] array (new format)', () => {
+      writeFileSync(join(TEST_DIR, 'pipeline-tasks.json'), JSON.stringify({
+        team_name: 'test-team',
+        pipeline_type: 'feature-implement',
+        resolved_config: {
+          feature_pipeline: [
+            { type: 'requirements', provider: 'sub', model: 'opus' },
+            { type: 'planning', provider: 'sub', model: 'opus' },
+            { type: 'plan-review', provider: 'sub', model: 'sonnet' },
+            { type: 'implementation', provider: 'sub', model: 'sonnet' },
+            { type: 'code-review', provider: 'sub', model: 'sonnet' },
+            { type: 'code-review', provider: 'sub', model: 'opus' },
+          ],
+        },
+        stages: [
+          { type: 'requirements', output_file: 'user-story.json', current_version: 1 },
+          { type: 'planning', output_file: 'plan-refined.json', current_version: 1 },
+          { type: 'plan-review', output_file: 'plan-review-sub-sonnet-1-v1.json', current_version: 1 },
+          { type: 'implementation', output_file: 'impl-result.json', current_version: 1 },
+          { type: 'code-review', output_file: 'code-review-sub-sonnet-1-v1.json', current_version: 1 },
+          { type: 'code-review', output_file: 'code-review-sub-opus-2-v1.json', current_version: 1 },
+        ],
+      }));
+
+      const result = deriveReviewFiles(TEST_DIR);
+      expect(result).not.toBeNull();
+      expect(result!.planReviewFiles).toEqual(['plan-review-sub-sonnet-1-v1.json']);
+      expect(result!.codeReviewFiles).toEqual([
+        'code-review-sub-sonnet-1-v1.json',
+        'code-review-sub-opus-2-v1.json',
+      ]);
+    });
+
+    test('stages[] takes precedence over resolved_config', () => {
+      writeFileSync(join(TEST_DIR, 'pipeline-tasks.json'), JSON.stringify({
+        team_name: 'test-team',
+        pipeline_type: 'feature-implement',
+        resolved_config: {
+          feature_pipeline: [
+            { type: 'plan-review', provider: 'sub', model: 'sonnet' },
+            { type: 'plan-review', provider: 'sub', model: 'opus' },
+            { type: 'implementation', provider: 'sub', model: 'sonnet' },
+            { type: 'code-review', provider: 'sub', model: 'sonnet' },
+          ],
+        },
+        // stages[] has different count — should take precedence
+        stages: [
+          { type: 'plan-review', output_file: 'plan-review-sub-sonnet-1-v1.json', current_version: 1 },
+          { type: 'implementation', output_file: 'impl-result.json', current_version: 1 },
+          { type: 'code-review', output_file: 'code-review-sub-sonnet-1-v1.json', current_version: 1 },
+        ],
+      }));
+
+      const result = deriveReviewFiles(TEST_DIR);
+      expect(result).not.toBeNull();
+      // stages[] has 1 plan-review, not 2 from resolved_config
+      expect(result!.planReviewFiles).toEqual(['plan-review-sub-sonnet-1-v1.json']);
+      expect(result!.codeReviewFiles).toEqual(['code-review-sub-sonnet-1-v1.json']);
+    });
+
+    test('falls back to resolved_config when stages[] is empty', () => {
+      writeFileSync(join(TEST_DIR, 'pipeline-tasks.json'), JSON.stringify({
+        team_name: 'test-team',
+        pipeline_type: 'feature-implement',
+        resolved_config: {
+          feature_pipeline: [
+            { type: 'plan-review', provider: 'sub', model: 'sonnet' },
+            { type: 'implementation', provider: 'sub', model: 'sonnet' },
+            { type: 'code-review', provider: 'sub', model: 'sonnet' },
+          ],
+        },
+        stages: [], // empty = fall back to resolved_config
+      }));
+
+      const result = deriveReviewFiles(TEST_DIR);
+      expect(result).not.toBeNull();
+      // Legacy naming from resolved_config fallback
+      expect(result!.planReviewFiles).toEqual(['plan-review-1.json']);
+      expect(result!.codeReviewFiles).toEqual(['code-review-1.json']);
+    });
+
+    test('falls back to resolved_config when stages[] has missing output_file', () => {
+      writeFileSync(join(TEST_DIR, 'pipeline-tasks.json'), JSON.stringify({
+        team_name: 'test-team',
+        pipeline_type: 'feature-implement',
+        resolved_config: {
+          feature_pipeline: [
+            { type: 'plan-review', provider: 'sub', model: 'sonnet' },
+            { type: 'code-review', provider: 'sub', model: 'sonnet' },
+          ],
+        },
+        stages: [
+          { type: 'plan-review', output_file: 'plan-review-sub-sonnet-1-v1.json' },
+          { type: 'code-review' }, // missing output_file — malformed
+        ],
+      }));
+
+      const result = deriveReviewFiles(TEST_DIR);
+      expect(result).not.toBeNull();
+      // Malformed stages[] discarded entirely, falls back to resolved_config legacy naming
+      expect(result!.planReviewFiles).toEqual(['plan-review-1.json']);
+      expect(result!.codeReviewFiles).toEqual(['code-review-1.json']);
+    });
+
+    test('falls back to resolved_config when stages[] has unknown type', () => {
+      writeFileSync(join(TEST_DIR, 'pipeline-tasks.json'), JSON.stringify({
+        team_name: 'test-team',
+        pipeline_type: 'feature-implement',
+        resolved_config: {
+          feature_pipeline: [
+            { type: 'plan-review', provider: 'sub', model: 'sonnet' },
+          ],
+        },
+        stages: [
+          { type: 'not-a-stage', output_file: 'something.json' },
+        ],
+      }));
+
+      const result = deriveReviewFiles(TEST_DIR);
+      expect(result).not.toBeNull();
+      expect(result!.planReviewFiles).toEqual(['plan-review-1.json']);
+    });
+
+    test('falls back to resolved_config when stages[] has path traversal in output_file', () => {
+      writeFileSync(join(TEST_DIR, 'pipeline-tasks.json'), JSON.stringify({
+        team_name: 'test-team',
+        pipeline_type: 'feature-implement',
+        resolved_config: {
+          feature_pipeline: [
+            { type: 'plan-review', provider: 'sub', model: 'sonnet' },
+          ],
+        },
+        stages: [
+          { type: 'plan-review', output_file: '../../package.json' },
+        ],
+      }));
+
+      const result = deriveReviewFiles(TEST_DIR);
+      expect(result).not.toBeNull();
+      expect(result!.planReviewFiles).toEqual(['plan-review-1.json']);
+    });
   });
 
   describe('validatePlanReview', () => {

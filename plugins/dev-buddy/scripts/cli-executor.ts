@@ -47,15 +47,20 @@ const TASK_DIR = '.vcp/task';
 const TRACE_FILE = path.join(TASK_DIR, 'cli_trace.log');
 
 /** Compute the default output file path based on review type.
- *  This is the fallback when --output-file is not specified. */
+ *  Fallback for manual/standalone runs only — pipeline always passes --output-file. */
 function getDefaultOutputFile(reviewType: string): string {
   return reviewType === 'code'
-    ? path.join(TASK_DIR, 'code-review-codex.json')
-    : path.join(TASK_DIR, 'review-codex.json');
+    ? path.join(TASK_DIR, 'code-review-cli.json')
+    : path.join(TASK_DIR, 'plan-review-cli.json');
 }
 
-/** Get the resolved output file path: --output-file override if provided, else default. */
+/** Get the resolved output file path: --output-file override if provided, else default.
+ *  Logs a warning when falling back to defaults, since pipeline always passes --output-file
+ *  and a missing flag usually means a caller bug. */
 function getOutputFile(reviewType: string, outputFileOverride: string | null): string {
+  if (!outputFileOverride) {
+    console.error(`[cli-executor] WARNING: --output-file not provided, falling back to default '${getDefaultOutputFile(reviewType)}'. Pipeline callers should always pass --output-file.`);
+  }
   return outputFileOverride ?? getDefaultOutputFile(reviewType);
 }
 

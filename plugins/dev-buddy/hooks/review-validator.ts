@@ -25,7 +25,7 @@
 import fs from 'fs';
 import path from 'path';
 import { readJson, computeTaskDir } from '../scripts/pipeline-utils.ts';
-import { getOutputFileName, type StageType } from '../types/stage-definitions.ts';
+import { isValidStageEntry } from '../types/stage-definitions.ts';
 
 // ================== Codex Execution Proof Helpers ==================
 
@@ -161,35 +161,55 @@ function verifyCodexScriptExecution(transcriptPath: string): boolean {
 
 const TASK_DIR = computeTaskDir();
 
-/** Derive review file lists from resolved_config in pipeline-tasks.json.
- * Output file names are derived from stage definitions + per-type index.
- * Returns null when no resolved_config is present. */
+/** Derive review file lists from pipeline-tasks.json.
+ * Prefers stages[] array (new format), falls back to resolved_config (legacy).
+ * Returns null when neither source is present. */
 export function deriveReviewFiles(taskDir: string): { planReviewFiles: string[]; codeReviewFiles: string[]; pipelineType: string } | null {
   try {
     const pipelineTasksPath = path.join(taskDir, 'pipeline-tasks.json');
     if (!fs.existsSync(pipelineTasksPath)) return null;
     const raw = fs.readFileSync(pipelineTasksPath, 'utf-8');
     const pt = JSON.parse(raw) as Record<string, unknown>;
-    const resolvedConfig = pt.resolved_config as Record<string, unknown> | undefined;
-    if (!resolvedConfig) return null;
 
     const pipelineType = typeof pt.pipeline_type === 'string' ? pt.pipeline_type : 'feature-implement';
-    const pipeline = pipelineType === 'bug-fix'
-      ? resolvedConfig.bugfix_pipeline as Array<Record<string, unknown>>
-      : resolvedConfig.feature_pipeline as Array<Record<string, unknown>>;
-
-    if (!Array.isArray(pipeline)) return null;
-
     const planReviewFiles: string[] = [];
     const codeReviewFiles: string[] = [];
-    const typeCounters: Partial<Record<string, number>> = {};
-    for (const stage of pipeline) {
-      const stageType = stage.type as string;
-      typeCounters[stageType] = (typeCounters[stageType] || 0) + 1;
-      if (stageType === 'plan-review') {
-        planReviewFiles.push(getOutputFileName(stageType as StageType, typeCounters[stageType]!));
-      } else if (stageType === 'code-review') {
-        codeReviewFiles.push(getOutputFileName(stageType as StageType, typeCounters[stageType]!));
+
+    // Prefer stages[] array (new format with provider-model-version naming),
+    // fall back to resolved_config derivation (legacy {type}-{index} naming).
+    // Validate every entry is a known stage type with a safe output filename;
+    // if any is malformed, discard entirely and fall back to legacy.
+    const rawStages = pt.stages;
+    const stagesArray = Array.isArray(rawStages) && rawStages.length > 0
+      && rawStages.every(isValidStageEntry)
+      ? rawStages as Array<{ type: string; output_file: string }>
+      : undefined;
+
+    if (stagesArray) {
+      for (const stage of stagesArray) {
+        if (stage.type === 'plan-review') planReviewFiles.push(stage.output_file);
+        else if (stage.type === 'code-review') codeReviewFiles.push(stage.output_file);
+      }
+    } else {
+      // Legacy fallback: derive from resolved_config + old {type}-{index}.json naming
+      const resolvedConfig = pt.resolved_config as Record<string, unknown> | undefined;
+      if (!resolvedConfig) return null;
+
+      const pipeline = pipelineType === 'bug-fix'
+        ? resolvedConfig.bugfix_pipeline as Array<Record<string, unknown>>
+        : resolvedConfig.feature_pipeline as Array<Record<string, unknown>>;
+
+      if (!Array.isArray(pipeline)) return null;
+
+      const typeCounters: Partial<Record<string, number>> = {};
+      for (const stage of pipeline) {
+        const stageType = stage.type as string;
+        typeCounters[stageType] = (typeCounters[stageType] || 0) + 1;
+        if (stageType === 'plan-review') {
+          planReviewFiles.push(`plan-review-${typeCounters[stageType]!}.json`);
+        } else if (stageType === 'code-review') {
+          codeReviewFiles.push(`code-review-${typeCounters[stageType]!}.json`);
+        }
       }
     }
 
@@ -369,7 +389,7 @@ async function main(): Promise<void> {
     process.exit(0); // Not a reviewer, allow
   }
 
-  // Derive review file lists dynamically from resolved_config
+  // Derive review file lists dynamically from pipeline-tasks.json
   const derived = deriveReviewFiles(TASK_DIR);
   if (!derived) {
     // No resolved_config — cannot determine review files. Allow through.
