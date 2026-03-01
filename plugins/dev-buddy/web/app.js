@@ -16,7 +16,6 @@ function devBuddyApp() {
     // Data
     presets: {},
     pipelineConfig: null,
-    sessions: [],
     stageDefinitions: {},
 
     // Model options per provider (populated via GET /api/preset-models/:name)
@@ -43,7 +42,7 @@ function devBuddyApp() {
     formTestResults: null,
 
     // UI state
-    loading: { presets: false, pipeline: false, sessions: false },
+    loading: { presets: false, pipeline: false },
     saving: { pipeline: false },
     errorMsg: '',
     successMsg: '',
@@ -68,9 +67,6 @@ function devBuddyApp() {
       timeout_minutes: '',
       cli_models_str: '',
     },
-
-    // Session polling interval
-    sessionPollInterval: null,
 
     /**
      * Initialize the app
@@ -717,63 +713,6 @@ function devBuddyApp() {
       } finally {
         this.saving.pipeline = false;
       }
-    },
-
-    // ============================================================
-    // Sessions
-    // ============================================================
-
-    /**
-     * Load session manager status.
-     */
-    async loadSessions() {
-      this.loading.sessions = true;
-      try {
-        const resp = await fetch('/api/sessions');
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({ error: { message: 'Request failed' } }));
-          this.showError(err.error?.message || 'Failed to load sessions');
-          return;
-        }
-        const data = await resp.json();
-        this.sessions = data.sessions || [];
-      } catch (e) {
-        this.showError('Network error loading sessions');
-      } finally {
-        this.loading.sessions = false;
-      }
-    },
-
-    /**
-     * Start auto-polling session status every 10 seconds.
-     */
-    startSessionPolling() {
-      if (this.sessionPollInterval !== null) return;
-      this.sessionPollInterval = setInterval(() => this.loadSessions(), 10000);
-    },
-
-    /**
-     * Stop auto-polling session status and clear the interval.
-     */
-    stopSessionPolling() {
-      if (this.sessionPollInterval !== null) {
-        clearInterval(this.sessionPollInterval);
-        this.sessionPollInterval = null;
-      }
-    },
-
-    /**
-     * Format uptime milliseconds to human-readable string.
-     */
-    formatUptime(ms) {
-      if (ms === undefined || ms === null) return 'N/A';
-      const totalSeconds = Math.floor(ms / 1000);
-      const hours = Math.floor(totalSeconds / 3600);
-      const minutes = Math.floor((totalSeconds % 3600) / 60);
-      const seconds = totalSeconds % 60;
-      if (hours > 0) return hours + 'h ' + minutes + 'm ' + seconds + 's';
-      if (minutes > 0) return minutes + 'm ' + seconds + 's';
-      return seconds + 's';
     },
   };
 }

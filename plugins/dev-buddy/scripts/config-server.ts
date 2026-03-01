@@ -2,7 +2,7 @@
 /**
  * Dev Buddy Web Configuration Portal Server
  *
- * REST API for managing AI presets, pipeline config, and session managers.
+ * REST API for managing AI presets and pipeline config.
  * Serves the Alpine.js SPA from plugins/dev-buddy/web/.
  *
  * Security:
@@ -20,7 +20,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { readPresets, writePresets, validatePreset, maskApiKey, maskPresetKeys, CONFIG_DIR } from './preset-utils.ts';
-import { loadPipelineConfig, readSessionMappings, fetchWithTimeout, atomicWriteFile, validateConfig, DEFAULT_CONFIG } from './pipeline-config.ts';
+import { loadPipelineConfig, fetchWithTimeout, atomicWriteFile, validateConfig, DEFAULT_CONFIG } from './pipeline-config.ts';
 import type { Preset } from '../types/presets.ts';
 import { STAGE_DEFINITIONS } from '../types/stage-definitions.ts';
 import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
@@ -610,13 +610,6 @@ async function handleApiRequest(
       }
     }
 
-    // --- Session status ---
-    if (pathname === '/api/sessions') {
-      if (req.method === 'GET') {
-        return await handleGetSessions(cwd, corsHeaders);
-      }
-    }
-
     return jsonResponse({ error: { code: 'NOT_FOUND', message: 'Endpoint not found' } }, 404, corsHeaders);
   } catch (err) {
     // Sanitized error responses (CWE-209)
@@ -911,47 +904,6 @@ function handleGetPresetModels(presetName: string, corsHeaders: Record<string, s
   }
 
   return jsonResponse({ models }, 200, corsHeaders);
-}
-
-// --- Session handlers ---
-
-async function handleGetSessions(cwd: string, corsHeaders: Record<string, string>): Promise<Response> {
-  const mappings = readSessionMappings(cwd);
-
-  // Query all session managers in parallel (Promise.allSettled — one slow/dead doesn't block others)
-  const results = await Promise.allSettled(
-    mappings.map(async mapping => {
-      const url = `http://localhost:${mapping.port}/status`;
-      try {
-        const resp = await fetchWithTimeout(
-          url,
-          { headers: { Authorization: `Bearer ${mapping.token}` } },
-          5_000 // 5s timeout (GET /status should be fast)
-        );
-        if (!resp.ok) {
-          return { preset_name: mapping.preset_name, port: mapping.port, health: 'unknown', error: `HTTP ${resp.status}` };
-        }
-        const data = await resp.json() as Record<string, unknown>;
-        return { preset_name: mapping.preset_name, port: mapping.port, ...data };
-      } catch (err) {
-        if (err instanceof Error) {
-          if (err.name === 'AbortError') {
-            return { preset_name: mapping.preset_name, port: mapping.port, health: 'unknown', error: 'Status check timed out' };
-          }
-          if (err.message.includes('ECONNREFUSED') || err.message.includes('connection refused') || err.message.includes('fetch failed')) {
-            return { preset_name: mapping.preset_name, port: mapping.port, health: 'dead', error: 'Session manager not reachable' };
-          }
-        }
-        const errorId = crypto.randomUUID();
-        console.error(`[Config Server] Session status error (error_id: ${errorId}):`, err);
-        return { preset_name: mapping.preset_name, port: mapping.port, health: 'unknown', error: 'Status check failed' };
-      }
-    })
-  );
-
-  const sessions = results.map(r => r.status === 'fulfilled' ? r.value : { health: 'unknown', error: 'Unknown error' });
-
-  return jsonResponse({ sessions }, 200, corsHeaders);
 }
 
 // --- Static file serving ---

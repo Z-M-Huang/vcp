@@ -18,7 +18,7 @@
     },
     {
       "name": "dev-buddy",
-      "description": "Multi-AI pipeline orchestration with session management, preset providers, and hybrid backend routing",
+      "description": "Multi-AI pipeline orchestration with preset providers and hybrid backend routing",
       "version": "0.2.9",
       "author": { "name": "Z-M-Huang" },
       "source": "./plugins/dev-buddy",

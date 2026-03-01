@@ -37,9 +37,9 @@ VCP enforces standards through three layers:
 - README.md roadmap links to issues
 - Every folder has a README.md that indexes its contents
 
-### Dev Buddy Session Manager
+### Dev Buddy API Task Runner
 
-Session managers (`plugins/dev-buddy/scripts/session-manager.ts`) wrap persistent V2 Agent SDK sessions behind HTTP servers for API presets. The Claude SDK is configured via environment variables to route to external Claude-compatible providers (e.g., MiniMax).
+The API task runner (`plugins/dev-buddy/scripts/api-task-runner.ts`) is a per-invocation script that creates a V2 Agent SDK session, runs one task, outputs the result as JSON to stdout, and exits. Each invocation is an independent process — multiple instances can run in parallel safely.
 
 **Env var mapping for API presets:**
 
@@ -57,9 +57,9 @@ Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers; the env v
 
 The subprocess env uses a platform-aware allowlist (not `...process.env`) for clean isolation.
 Per-task timeout defaults to 5 minutes, configurable via `ApiPreset.timeout_ms` (set in the web portal under "Task Timeout").
-`spawnSessionManagers()` passes `--task-timeout` from the preset when spawning session managers.
+`api-task-runner.ts --task-timeout` receives the preset's timeout value.
 
-See `plugins/dev-buddy/CLAUDE.md` § "Session Manager Architecture" for full details.
+See `plugins/dev-buddy/CLAUDE.md` § "API Task Runner Architecture" for full details.
 
 ### Writing Standards
 

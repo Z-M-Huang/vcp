@@ -1,0 +1,21 @@
+{
+  "verdict": "needs_changes",
+  "summary": "The session-manager removal is mostly clean: stale references are effectively gone, the docs have been updated consistently, and the targeted tests pass. I would not approve this yet because the new `--task` transport moves full prompts onto the process command line, and the timeout path in `one-shot-runner.ts` can still leave `api-task-runner` children running after the parent reports a timeout.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "plugins/dev-buddy/scripts/one-shot-runner.ts",
+      "description": "Lines 243-251 now pass the entire task text as `--task <prompt>` when spawning `api-task-runner.ts`. That introduces two regressions compared with the old HTTP-body transport: prompt contents are exposed in process listings (`ps`, `/proc/.../cmdline`) and large review/implementation prompts can fail at OS argv limits (`E2BIG` on Unix, much lower limits on Windows). The new CLI contract in `api-task-runner.ts` and the updated CLAUDE/SKILL docs all reinforce this path, so API-provider tasks need a stdin/temp-file/pipe transport instead of argv."
+    },
+    {
+      "severity": "major",
+      "file": "plugins/dev-buddy/scripts/one-shot-runner.ts",
+      "description": "In the timeout branch at lines 287-293, the parent sends `SIGTERM`, schedules a `SIGKILL` with `setTimeout`, and immediately returns. `main()` then calls `process.exit()`, so the grace-period timer never gets a chance to fire. If `api-task-runner` ignores or does not promptly handle `SIGTERM`, the supposedly timed-out child process can survive as an orphan and keep consuming resources or modifying the workspace after the caller has already reported failure."
+    },
+    {
+      "severity": "minor",
+      "file": "plugins/dev-buddy/scripts/__tests__/one-shot-runner.test.ts",
+      "description": "The updated tests validate exit-code mapping, but they never exercise the real hang/cleanup branch even though `mockApiDeps()` has `shouldHang` support. There is also no coverage for oversized task payloads passed via `--task`. That gap is why the orphaned-child timeout bug and the argv-size/process-list regression both slip through while the suite still passes."
+    }
+  ]
+}

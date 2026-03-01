@@ -548,53 +548,6 @@ form input:focus, form select:focus {
   font-size: 0.85rem;
 }
 
-/* Session cards */
-.session-card {
-  border-left: 4px solid #e5e5e5;
-}
-
-.session-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-/* Health badges */
-.health-badge {
-  display: inline-block;
-  padding: 4px 12px;
-  border-radius: 12px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
-.health-starting {
-  background: #fff8e1;
-  color: #f57f17;
-}
-
-.health-ready {
-  background: #e8f5e9;
-  color: #2e7d32;
-}
-
-.health-dead {
-  background: #ffebee;
-  color: #c62828;
-}
-
-.health-failed {
-  background: #f5f5f5;
-  color: #6e6e73;
-}
-
-.health-unknown {
-  background: #fff3e0;
-  color: #e65100;
-}
-
 /* Utility */
 .loading {
   color: #6e6e73;

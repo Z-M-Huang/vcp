@@ -153,7 +153,7 @@ console.log('Preset removed: ' + presetName);
 | Type | Required Fields | Usage |
 |------|----------------|-------|
 | `subscription` | `type`, `name` | Uses Claude Task tool (default) |
-| `api` | `type`, `name`, `base_url`, `api_key`, `models` | Direct API via session manager |
+| `api` | `type`, `name`, `base_url`, `api_key`, `models` | Direct API provider |
 | `cli` | `type`, `name`, `command`, `args_template`, `models` | CLI tool like Codex CLI. Optional: `one_shot_args_template` for `/dev-buddy-once` |
 
 ## Config Location

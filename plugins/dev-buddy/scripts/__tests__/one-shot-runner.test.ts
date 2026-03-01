@@ -5,19 +5,12 @@ import {
   substitutePlaceholders,
   findUnsupportedPlaceholders,
   escapeWinArg,
-  readStartupLine,
-  extractResultText,
-  mapHttpStatusToError,
-  validateTaskResponse,
   makeComplete,
   makeError,
-  cleanupSessionManager,
   runApiPath,
   runCliPath,
-  StartupTimeoutError,
 } from '../one-shot-runner.ts';
 import type { ApiPathDeps } from '../one-shot-runner.ts';
-import type { Message } from '../../types/a2a-lite.ts';
 import type { ApiPreset, CliPreset } from '../../types/presets.ts';
 
 // ================== parseArgs ==================
@@ -40,7 +33,31 @@ describe('parseArgs', () => {
       model: 'M2.5',
       cwd: '/project',
       task: 'do something',
+      taskFromStdin: false,
     });
+  });
+
+  test('accepts --task-stdin flag as alternative to --task', () => {
+    const result = parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'my-preset',
+      '--model', 'M2.5',
+      '--cwd', '/project',
+      '--task-stdin',
+    ]);
+    expect(result.taskFromStdin).toBe(true);
+    expect(result.task).toBeUndefined();
+  });
+
+  test('rejects when neither --task nor --task-stdin provided', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+    ])).toThrow('--task or --task-stdin');
   });
 
   test('accepts cli type', () => {
@@ -208,137 +225,6 @@ describe('escapeWinArg', () => {
   });
 });
 
-// ================== extractResultText ==================
-
-describe('extractResultText', () => {
-  test('extracts text from single TextPart', () => {
-    const msg: Message = {
-      role: 'agent',
-      parts: [{ type: 'text', text: 'Hello from the model' }],
-    };
-    expect(extractResultText(msg)).toBe('Hello from the model');
-  });
-
-  test('extracts and joins text from multiple TextParts', () => {
-    const msg: Message = {
-      role: 'agent',
-      parts: [
-        { type: 'text', text: 'Line 1' },
-        { type: 'text', text: 'Line 2' },
-      ],
-    };
-    expect(extractResultText(msg)).toBe('Line 1\nLine 2');
-  });
-
-  test('ignores non-text parts', () => {
-    const msg: Message = {
-      role: 'agent',
-      parts: [
-        { type: 'data', mimeType: 'application/json', data: '{}' },
-        { type: 'text', text: 'Only this' },
-      ],
-    };
-    expect(extractResultText(msg)).toBe('Only this');
-  });
-
-  test('returns empty string for null/undefined', () => {
-    expect(extractResultText(null)).toBe('');
-    expect(extractResultText(undefined)).toBe('');
-  });
-
-  test('returns empty string for message with no parts', () => {
-    expect(extractResultText({ role: 'agent', parts: [] })).toBe('');
-  });
-
-  test('returns empty string for message with only non-text parts', () => {
-    const msg: Message = {
-      role: 'agent',
-      parts: [{ type: 'data', mimeType: 'text/plain', data: 'ignored' }],
-    };
-    expect(extractResultText(msg)).toBe('');
-  });
-});
-
-// ================== mapHttpStatusToError ==================
-
-describe('mapHttpStatusToError', () => {
-  test('maps 503 to exit code 2 with session not ready', () => {
-    const result = mapHttpStatusToError(503, 'Service Unavailable');
-    expect(result.exitCode).toBe(2);
-    expect(result.output.error).toContain('503');
-    expect(result.output.error).toContain('Session not ready');
-  });
-
-  test('maps 408 to exit code 3 (timeout)', () => {
-    const result = mapHttpStatusToError(408, 'Request Timeout');
-    expect(result.exitCode).toBe(3);
-    expect(result.output.error).toContain('408');
-    expect(result.output.error).toContain('Queue timeout');
-  });
-
-  test('maps other errors to exit code 2 with status text', () => {
-    const result = mapHttpStatusToError(500, 'Internal Server Error');
-    expect(result.exitCode).toBe(2);
-    expect(result.output.error).toContain('500');
-    expect(result.output.error).toContain('Internal Server Error');
-  });
-
-  test('maps 401 to exit code 2', () => {
-    const result = mapHttpStatusToError(401, 'Unauthorized');
-    expect(result.exitCode).toBe(2);
-    expect(result.output.error).toContain('401');
-  });
-});
-
-// ================== validateTaskResponse ==================
-
-describe('validateTaskResponse', () => {
-  test('returns null for completed task', () => {
-    const result = validateTaskResponse({
-      task: {
-        status: 'completed',
-        result: { role: 'agent', parts: [{ type: 'text', text: 'done' }] },
-      },
-    });
-    expect(result).toBeNull();
-  });
-
-  test('returns error for failed task', () => {
-    const result = validateTaskResponse({
-      task: {
-        status: 'failed',
-        error: { message: 'API error' },
-      },
-    });
-    expect(result).not.toBeNull();
-    expect(result!.exitCode).toBe(2);
-    expect(result!.output.error).toContain('failed');
-    expect(result!.output.error).toContain('API error');
-  });
-
-  test('returns error for canceled task', () => {
-    const result = validateTaskResponse({
-      task: { status: 'canceled' },
-    });
-    expect(result).not.toBeNull();
-    expect(result!.output.error).toContain('canceled');
-  });
-
-  test('returns error for missing task', () => {
-    const result = validateTaskResponse({});
-    expect(result).not.toBeNull();
-    expect(result!.output.error).toContain('unknown');
-  });
-
-  test('returns error for working task (not yet completed)', () => {
-    const result = validateTaskResponse({
-      task: { status: 'working' },
-    });
-    expect(result).not.toBeNull();
-    expect(result!.output.error).toContain('working');
-  });
-});
-
 // ================== makeComplete / makeError ==================
 
 describe('makeComplete / makeError', () => {
@@ -365,119 +251,53 @@ describe('makeComplete / makeError', () => {
   });
 });
 
-// ================== cleanupSessionManager ==================
-
-describe('cleanupSessionManager', () => {
-  test('does not throw when process already exited', async () => {
-    const fakeProc = {
-      exitCode: 0, // already exited
-      kill: () => {},
-    };
-    // Should not throw
-    await cleanupSessionManager(fakeProc);
-  });
-
-  test('calls kill when process has not exited and no port/token', async () => {
-    let killed = false;
-    const fakeProc = {
-      exitCode: null as number | null,
-      kill: () => { killed = true; fakeProc.exitCode = 0; },
-    };
-    await cleanupSessionManager(fakeProc);
-    expect(killed).toBe(true);
-  });
-
-  test('sends SIGTERM only (not SIGKILL) when process exits after SIGTERM', async () => {
-    let killCount = 0;
-    const fakeProc = {
-      exitCode: null as number | null,
-      kill: () => { killCount++; fakeProc.exitCode = 0; },
-    };
-    await cleanupSessionManager(fakeProc);
-    // After SIGTERM, exitCode becomes 0, so SIGKILL is not sent
-    expect(killCount).toBe(1);
-  });
-
-  test('sends SIGKILL when process ignores SIGTERM', async () => {
-    let signals: (number | string | undefined)[] = [];
-    const fakeProc = {
-      exitCode: null as number | null,
-      kill: (sig?: number | string) => { signals.push(sig); /* exitCode stays null */ },
-    };
-    await cleanupSessionManager(fakeProc);
-    expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
-  });
-});
-
-// ================== StartupTimeoutError ==================
-
-describe('StartupTimeoutError', () => {
-  test('has correct name for instanceof check', () => {
-    const err = new StartupTimeoutError('timed out');
-    expect(err).toBeInstanceOf(StartupTimeoutError);
-    expect(err).toBeInstanceOf(Error);
-    expect(err.name).toBe('StartupTimeoutError');
-    expect(err.message).toBe('timed out');
-  });
-});
-
 // ================== runApiPath (integration with injected deps) ==================
 
 // Use a clearly-fake key that won't trigger secret detection
 const TEST_KEY = process.env.TEST_DUMMY_KEY || 'test-placeholder-not-a-real-key';
 
-/** Helper: create a ReadableStream that emits a single line. */
-function streamFromLine(line: string): ReadableStream<Uint8Array> {
+/** Helper: create a ReadableStream that emits a string. */
+function streamFromText(text: string): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
     start(controller) {
-      controller.enqueue(encoder.encode(line + '\n'));
+      controller.enqueue(encoder.encode(text));
       controller.close();
     },
   });
 }
 
-/** Helper: build mock deps for runApiPath. */
+/** Helper: build mock deps for runApiPath that spawns api-task-runner. */
 function mockApiDeps(opts: {
-  startupLine?: string;
-  fetchResponses?: Array<{ ok: boolean; status: number; statusText: string; json: () => Promise<unknown> }>;
-}): { deps: ApiPathDeps; calls: { fetchCalls: Array<{ url: string; init: RequestInit }>; killCalls: (number | string | undefined)[] } } {
+  stdout?: string;
+  exitCode?: number;
+  exitDelay?: number;
+  shouldHang?: boolean;
+}): { deps: ApiPathDeps; calls: { spawnCalls: Array<{ args: unknown; taskTimeoutMs: number }>; killCalls: (number | string | undefined)[] } } {
   const calls = {
-    fetchCalls: [] as Array<{ url: string; init: RequestInit }>,
+    spawnCalls: [] as Array<{ args: unknown; taskTimeoutMs: number }>,
     killCalls: [] as (number | string | undefined)[],
   };
-  let fetchIdx = 0;
 
-  const proc = {
-    exitCode: null as number | null,
-    stdout: streamFromLine(opts.startupLine || '{"status":"ready","port":9999,"token":"test-tok"}'),
-    kill: (sig?: number | string) => { calls.killCalls.push(sig); proc.exitCode = 0; },
-  };
+  const exitCode = opts.exitCode ?? 0;
+  const stdoutText = opts.stdout ?? '{}';
 
   const deps: ApiPathDeps = {
-    spawnSessionManager: () => ({ proc }),
-    readStartup: readStartupLine,
-    fetchFn: ((url: string | URL | Request, init?: RequestInit) => {
-      const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
-      calls.fetchCalls.push({ url: urlStr, init: init || {} });
+    spawnTaskRunner(args, taskTimeoutMs) {
+      calls.spawnCalls.push({ args, taskTimeoutMs });
 
-      // Shutdown call — always succeed
-      if (urlStr.includes('/shutdown')) {
-        return Promise.resolve(new Response('ok', { status: 200 }));
-      }
+      const proc = {
+        exitCode: opts.shouldHang ? null : exitCode,
+        stdout: streamFromText(stdoutText),
+        kill: (sig?: number | string) => { calls.killCalls.push(sig); proc.exitCode = exitCode; },
+      };
 
-      // Task send — use provided responses
-      const resp = opts.fetchResponses?.[fetchIdx++];
-      if (resp) {
-        return Promise.resolve({
-          ok: resp.ok,
-          status: resp.status,
-          statusText: resp.statusText,
-          json: resp.json,
-        } as Response);
-      }
-      return Promise.resolve(new Response('{}', { status: 200 }));
-    }) as typeof fetch,
+      const exited = opts.shouldHang
+        ? new Promise<void>(() => {}) // never resolves
+        : new Promise<void>((resolve) => setTimeout(resolve, opts.exitDelay ?? 0));
+
+      return { proc, exited };
+    },
     log: async () => {},
   };
 
@@ -501,100 +321,50 @@ const baseApiPreset: ApiPreset = {
 };
 
 describe('runApiPath', () => {
-  test('sends Authorization header with bearer token to /tasks/send', async () => {
-    const { deps, calls } = mockApiDeps({
-      fetchResponses: [{
-        ok: true, status: 200, statusText: 'OK',
-        json: async () => ({ task: { status: 'completed', result: { role: 'agent', parts: [{ type: 'text', text: 'done' }] } } }),
-      }],
+  test('returns success for complete event', async () => {
+    const { deps } = mockApiDeps({
+      stdout: JSON.stringify({ event: 'complete', provider: 'test-preset', model: 'ModelA', result: 'Task done' }),
+      exitCode: 0,
     });
 
     const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
-
     expect(result.exitCode).toBe(0);
-    const taskSend = calls.fetchCalls.find(c => c.url.includes('/tasks/send'));
-    expect(taskSend).toBeDefined();
-    const headers = taskSend!.init.headers as Record<string, string>;
-    expect(headers['Authorization']).toBe('Bearer test-tok');
-    expect(headers['Content-Type']).toBe('application/json');
+    expect(result.output.event).toBe('complete');
+    expect(result.output.result).toBe('Task done');
   });
 
-  test('sends Authorization header to /shutdown during cleanup', async () => {
+  test('passes preset and model to spawnTaskRunner', async () => {
     const { deps, calls } = mockApiDeps({
-      fetchResponses: [{
-        ok: true, status: 200, statusText: 'OK',
-        json: async () => ({ task: { status: 'completed', result: { role: 'agent', parts: [{ type: 'text', text: 'ok' }] } } }),
-      }],
+      stdout: JSON.stringify({ event: 'complete', provider: 'test-preset', model: 'ModelA', result: 'ok' }),
     });
 
     await runApiPath(baseApiArgs, baseApiPreset, false, deps);
 
-    const shutdownCall = calls.fetchCalls.find(c => c.url.includes('/shutdown'));
-    expect(shutdownCall).toBeDefined();
-    const headers = shutdownCall!.init.headers as Record<string, string>;
-    expect(headers['Authorization']).toBe('Bearer test-tok');
+    expect(calls.spawnCalls.length).toBe(1);
+    const spawnArgs = calls.spawnCalls[0].args as typeof baseApiArgs;
+    expect(spawnArgs.preset).toBe('test-preset');
+    expect(spawnArgs.model).toBe('ModelA');
   });
 
-  test('maps HTTP 503 to exit code 2', async () => {
-    const { deps } = mockApiDeps({
-      fetchResponses: [{
-        ok: false, status: 503, statusText: 'Service Unavailable',
-        json: async () => ({}),
-      }],
+  test('uses preset.timeout_ms for task timeout', async () => {
+    const presetWithTimeout = { ...baseApiPreset, timeout_ms: 600_000 };
+    const { deps, calls } = mockApiDeps({
+      stdout: JSON.stringify({ event: 'complete', provider: 'test-preset', model: 'ModelA', result: 'ok' }),
     });
 
-    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
-    expect(result.exitCode).toBe(2);
-    expect(result.output.error).toContain('503');
+    await runApiPath(baseApiArgs, presetWithTimeout, false, deps);
+
+    expect(calls.spawnCalls[0].taskTimeoutMs).toBe(600_000);
   });
 
-  test('maps failed task status to exit code 2', async () => {
-    const { deps } = mockApiDeps({
-      fetchResponses: [{
-        ok: true, status: 200, statusText: 'OK',
-        json: async () => ({ task: { status: 'failed', error: { message: 'Provider error' } } }),
-      }],
+  test('defaults to 300s when preset has no timeout_ms', async () => {
+    const { deps, calls } = mockApiDeps({
+      stdout: JSON.stringify({ event: 'complete', provider: 'test-preset', model: 'ModelA', result: 'ok' }),
     });
 
-    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
-    expect(result.exitCode).toBe(2);
-    expect(result.output.error).toContain('failed');
-    expect(result.output.error).toContain('Provider error');
-  });
+    await runApiPath(baseApiArgs, baseApiPreset, false, deps);
 
-  test('extracts result text from completed task Message', async () => {
-    const { deps } = mockApiDeps({
-      fetchResponses: [{
-        ok: true, status: 200, statusText: 'OK',
-        json: async () => ({
-          task: {
-            status: 'completed',
-            result: { role: 'agent', parts: [{ type: 'text', text: 'The answer is 42' }] },
-          },
-        }),
-      }],
-    });
-
-    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
-    expect(result.exitCode).toBe(0);
-    expect(result.output.result).toBe('The answer is 42');
-  });
-
-  test('runs cleanup even when task fetch throws', async () => {
-    const { deps, calls } = mockApiDeps({});
-    // Override fetchFn to throw on /tasks/send
-    const origFetch = deps.fetchFn;
-    deps.fetchFn = ((url: string | URL | Request, init?: RequestInit) => {
-      const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : (url as Request).url;
-      if (urlStr.includes('/tasks/send')) return Promise.reject(new Error('network failure'));
-      return origFetch(url, init);
-    }) as typeof fetch;
-
-    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
-    expect(result.exitCode).toBe(2);
-    expect(result.output.error).toContain('network failure');
-    // Cleanup still ran — process was killed
-    expect(calls.killCalls.length).toBeGreaterThan(0);
+    expect(calls.spawnCalls[0].taskTimeoutMs).toBe(300_000);
   });
 
   test('returns exit code 1 for model not in preset', async () => {
@@ -605,33 +375,100 @@ describe('runApiPath', () => {
     expect(result.output.error).toContain('NoSuchModel');
   });
 
-  test('returns exit code 2 for invalid startup JSON', async () => {
+  test('maps error event with exit code 2', async () => {
     const { deps } = mockApiDeps({
-      startupLine: 'not-json',
+      stdout: JSON.stringify({ event: 'error', phase: 'execution', error: 'Provider error' }),
+      exitCode: 2,
     });
+
     const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
     expect(result.exitCode).toBe(2);
+    expect(result.output.error).toBe('Provider error');
+    expect(result.output.phase).toBe('execution');
   });
 
-  test('returns exit code 2 for startup with missing port/token', async () => {
+  test('maps timeout exit code 3', async () => {
     const { deps } = mockApiDeps({
-      startupLine: '{"status":"ready"}',
+      stdout: JSON.stringify({ event: 'error', phase: 'execution', error: 'Task execution timed out' }),
+      exitCode: 3,
     });
-    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
-    expect(result.exitCode).toBe(2);
-    expect(result.output.error).toContain('Invalid startup output');
-  });
-
-  test('returns exit code 3 when startup times out', async () => {
-    const { deps, calls } = mockApiDeps({});
-    // Override readStartup to throw StartupTimeoutError immediately
-    deps.readStartup = async () => { throw new StartupTimeoutError('Session manager startup timeout'); };
 
     const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
     expect(result.exitCode).toBe(3);
-    expect(result.output.error).toContain('startup timed out');
-    // Cleanup still ran (no port/token, so kill is the only option)
-    expect(calls.killCalls.length).toBeGreaterThan(0);
+    expect(result.output.error).toContain('timed out');
+  });
+
+  test('maps validation exit code 1', async () => {
+    const { deps } = mockApiDeps({
+      stdout: JSON.stringify({ event: 'error', phase: 'validation', error: 'bad model' }),
+      exitCode: 1,
+    });
+
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.output.error).toBe('bad model');
+  });
+
+  test('returns error for empty stdout', async () => {
+    const { deps } = mockApiDeps({
+      stdout: '',
+      exitCode: 2,
+    });
+
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.exitCode).toBe(2);
+    expect(result.output.error).toContain('no output');
+  });
+
+  test('returns error for invalid JSON stdout', async () => {
+    const { deps } = mockApiDeps({
+      stdout: 'not-json-at-all',
+      exitCode: 2,
+    });
+
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.exitCode).toBe(2);
+    expect(result.output.error).toContain('invalid JSON');
+  });
+
+  test('reads last line of stdout (ignores debug output)', async () => {
+    const { deps } = mockApiDeps({
+      stdout: 'debug: starting up\ndebug: warmup done\n' +
+        JSON.stringify({ event: 'complete', provider: 'test-preset', model: 'ModelA', result: 'The answer' }),
+      exitCode: 0,
+    });
+
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.exitCode).toBe(0);
+    expect(result.output.result).toBe('The answer');
+  });
+
+  test('defaults provider/model from args when output omits them', async () => {
+    const { deps } = mockApiDeps({
+      stdout: JSON.stringify({ event: 'complete', result: 'Done' }),
+      exitCode: 0,
+    });
+
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.output.provider).toBe('test-preset');
+    expect(result.output.model).toBe('ModelA');
+  });
+
+  test('returns timeout error and sends SIGTERM + SIGKILL when process hangs', async () => {
+    const presetWithShortTimeout = { ...baseApiPreset, timeout_ms: 50 };
+    const { deps, calls } = mockApiDeps({ shouldHang: true });
+    // Use short buffer and grace period for fast test execution
+    deps.processTimeoutBufferMs = 0;
+    deps.killGraceMs = 50;
+
+    const result = await runApiPath(baseApiArgs, presetWithShortTimeout, false, deps);
+
+    expect(result.exitCode).toBe(3);
+    expect(result.output.error).toContain('timed out');
+    // SIGTERM sent first, then SIGKILL after grace period
+    expect(calls.killCalls.length).toBe(2);
+    expect(calls.killCalls[0]).toBe('SIGTERM');
+    expect(calls.killCalls[1]).toBe('SIGKILL');
   });
 });
 

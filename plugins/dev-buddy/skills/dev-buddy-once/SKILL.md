@@ -92,17 +92,19 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
   --preset "<exact_preset_name>" \
   --model "<model>" \
   --cwd "${CLAUDE_PROJECT_DIR}" \
-  --task "<task_text>"
+  --task-stdin <<'TASK_EOF'
+<task_text>
+TASK_EOF
 ```
 
-**Bash timeout:** Read the preset's `timeout_ms` from `~/.vcp/presets.json`. Set the Bash tool timeout to `timeout_ms + 60000` (task timeout plus 60s buffer for startup/shutdown). If `timeout_ms` is not set or lookup fails, default to 600000 (10 minutes).
+Uses `--task-stdin` with heredoc to avoid OS argv size limits and ps exposure.
+
+**Bash timeout:** Read the preset's `timeout_ms` from `~/.vcp/ai-presets.json`. Set the Bash tool timeout to `timeout_ms + 120000` (task timeout plus 120s buffer for warmup and startup). If `timeout_ms` is not set or lookup fails, default to 600000 (10 minutes).
 
 The script:
-1. Spawns a session manager for the API preset
-2. Sends the task via HTTP (with bearer token auth)
-3. Waits for completion
-4. Shuts down the session manager
-5. Outputs a JSON event to stdout
+1. Spawns `api-task-runner.ts` with the preset, model, and task (via stdin)
+2. The task runner creates a V2 Agent SDK session, runs the task, and exits
+3. Outputs a JSON event to stdout
 
 ### CLI (`type: "cli"`)
 
@@ -118,10 +120,12 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
   --preset "<exact_preset_name>" \
   --model "<model>" \
   --cwd "${CLAUDE_PROJECT_DIR}" \
-  --task "<task_text>"
+  --task-stdin <<'TASK_EOF'
+<task_text>
+TASK_EOF
 ```
 
-**Bash timeout:** Read the preset's `timeout_ms` from `~/.vcp/presets.json`. Set the Bash tool timeout to `timeout_ms + 60000` (task timeout plus 60s buffer for startup/shutdown). If `timeout_ms` is not set or lookup fails, default to 1260000 (21 minutes — matches the script's 20-minute default CLI timeout plus buffer).
+**Bash timeout:** Read the preset's `timeout_ms` from `~/.vcp/ai-presets.json`. Set the Bash tool timeout to `timeout_ms + 120000` (task timeout plus 120s buffer for startup). If `timeout_ms` is not set or lookup fails, default to 1260000 (21 minutes — matches the script's 20-minute default CLI timeout plus buffer).
 
 The CLI tool runs directly in the project directory (e.g., Codex `exec --full-auto`). Its output streams to the terminal.
 
@@ -170,7 +174,7 @@ Report that the task timed out. Suggest increasing `timeout_ms` on the preset vi
 | Multiple preset matches | AskUserQuestion with matching names |
 | CLI preset missing `one_shot_args_template` | Report error, suggest `/dev-buddy-config` or `/dev-buddy-manage-presets` to add it |
 | CLI tool not installed | Report error, suggest installing the tool |
-| Session manager fails to start | Report error from script output |
+| API task runner fails | Report error from script output |
 | Task times out | Report timeout, suggest increasing `timeout_ms` |
 
 ---

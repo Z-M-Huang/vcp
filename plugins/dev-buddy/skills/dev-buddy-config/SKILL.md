@@ -1,13 +1,13 @@
 ---
 name: dev-buddy-config
-description: Dev Buddy web configuration portal for managing presets, pipeline config, and session managers
+description: Dev Buddy web configuration portal for managing presets and pipeline config
 user-invocable: true
 allowed-tools: Bash
 ---
 
 # Dev Buddy Web Configuration Portal
 
-Launch the web configuration portal for managing AI provider presets, pipeline configuration, and session manager status.
+Launch the web configuration portal for managing AI provider presets and pipeline configuration.
 
 ## Starting the Portal
 
@@ -27,7 +27,6 @@ The server:
 |-----|---------|
 | **AI Presets** | List, add, update, remove presets; reveal/hide API keys |
 | **Pipeline Config** | Configure which preset each stage uses |
-| **Session Managers** | View health status, uptime, and recent task count |
 
 ## Startup Output
 

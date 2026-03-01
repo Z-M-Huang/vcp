@@ -133,21 +133,7 @@ TeamCreate(team_name, description: "Bug-fix pipeline (resumed)")
 TaskList()              ← verify returns [] (fresh team, no tasks yet)
 ```
 
-#### Step 0.3: Spawn Session Managers (from snapshot)
-
-Only needed if `pipeline-tasks.json.resolved_config` has any API provider stages. Skip `validate` (original config was validated at pipeline creation). Do NOT use `pipeline-config.ts spawn` — it reads current disk config, which may have drifted. Instead, extract unique API presets from the stored snapshot and spawn session managers directly:
-
-```
-Read pipeline-tasks.json.stages
-For each unique provider name where providerType === 'api':
-  bun "${CLAUDE_PLUGIN_ROOT}/scripts/session-manager.ts" \
-    --preset "<provider_name>" \
-    --cwd "${CLAUDE_PROJECT_DIR}"
-```
-
-One session manager per unique API provider — no `--model` flag (matches non-resume `spawnSessionManagers` behavior). Model selection is per-task via the stage's `model` field, mapped through the provider's env vars at task dispatch time. This honors the "resume with original config" choice from Step 0.1.
-
-#### Step 0.4: Re-create Task Chain (Remaining Stages)
+#### Step 0.3: Re-create Task Chain (Remaining Stages)
 
 **Two-pass approach** (ensures all task IDs exist before rewiring):
 
@@ -233,11 +219,10 @@ Jump to existing Main Loop. `TaskList()` finds next unblocked task.
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd "${CLAUDE_PROJECT_DIR}"
 ```
 
-### Step 1.1: Validate Pipeline Config & Spawn Session Managers
+### Step 1.1: Validate Pipeline Config
 
 ```bash
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts" validate --cwd "${CLAUDE_PROJECT_DIR}"
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts" spawn --cwd "${CLAUDE_PROJECT_DIR}"
 ```
 
 If validation fails, report missing/invalid providers and stop.
@@ -513,15 +498,18 @@ while pipeline not complete:
          // NO team_name. One-shot subagent.
 
        **If providerType is 'api':**
-         Read .vcp/task/session-ports.json → find entry where preset_name matches stage.provider
-         Derive timeout: read `~/.vcp/presets.json` → find preset by stage.provider name → read `timeout_ms` → compute TIMEOUT_SECONDS = Math.ceil(timeout_ms / 1000) (default: 300 if not set or lookup fails)
-         Set Bash tool timeout parameter to timeout_ms + 30000 (default: 330000 if timeout_ms not set or lookup fails)
-         curl -s --connect-timeout 10 --max-time {TIMEOUT_SECONDS} \
-           -X POST "http://localhost:{PORT}/tasks/send" \
-           -H "Authorization: Bearer {TOKEN}" \
-           -H "Content-Type: application/json" \
-           -d '{"message":{"role":"user","parts":[{"type":"text","text":"<prompt>"}]}}'
-         // The session manager runs a V2 Agent SDK session with Read/Write/Edit/Bash — it CAN modify files.
+         Derive timeout: read `~/.vcp/ai-presets.json` → find preset by stage.provider name → read `timeout_ms` (default: 300000 if not set or lookup fails)
+         Set Bash tool timeout parameter to timeout_ms + 120000 (default: 420000 if timeout_ms not set or lookup fails)
+         bun "${CLAUDE_PLUGIN_ROOT}/scripts/api-task-runner.ts" \
+           --preset "<stage.provider>" \
+           --model "<stage.model>" \
+           --cwd "${CLAUDE_PROJECT_DIR}" \
+           --task-timeout "<timeout_ms>" \
+           --task-stdin <<'TASK_EOF'
+         <prompt>
+         TASK_EOF
+         // The api-task-runner creates a V2 Agent SDK session — it CAN read/write files.
+         // Parse stdout JSON: { event: "complete", result: "..." } or { event: "error", error: "..." }
 
        **If providerType is 'cli':**
          Task(subagent_type: "dev-buddy:cli-executor", prompt: "Run cli-executor.ts with --preset, --model, --output-file")
@@ -888,11 +876,6 @@ The `review-validator.ts` derives review file lists dynamically from pipeline-ta
 
 1. Report results to the user
 2. Read `team_name` from `.vcp/task/pipeline-tasks.json` and use `TeamDelete` to clean up
-3. Shutdown session managers:
-   ```bash
-   bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts" shutdown --cwd "${CLAUDE_PROJECT_DIR}"
-   ```
-
 ## Provider Routing
 
 **If providerType is `subscription`:** Use Task tool (NO `team_name` — one-shot subagent):
@@ -901,18 +884,23 @@ Task(subagent_type: "dev-buddy:<agent-name>", model: "<model>", prompt: "...")
 // Do NOT add team_name or name parameters. This is a one-shot subagent, NOT a teammate.
 ```
 
-**If providerType is `api`:** Use curl to the session manager port from `.vcp/task/session-ports.json`.
+**If providerType is `api`:** Use `api-task-runner.ts` — a per-invocation script that creates a V2 Agent SDK session, runs the task, and exits.
 
-**Derive timeout:** Read `~/.vcp/presets.json` → find the preset matching the stage's `provider` name → read `timeout_ms`. Compute `TIMEOUT_SECONDS = Math.ceil(timeout_ms / 1000)` (default: 300 if `timeout_ms` is not set or preset lookup fails). Set the Bash tool's `timeout` parameter to `timeout_ms + 30000` (or 330000 if not set or lookup fails) so the Bash tool outlives the curl request.
+**Derive timeout:** Read `~/.vcp/ai-presets.json` → find the preset matching the stage's `provider` name → read `timeout_ms` (default: 300000 if not set or lookup fails). Set the Bash tool's `timeout` parameter to `timeout_ms + 120000` (or 420000 if not set or lookup fails) so the Bash tool outlives the task runner.
 
 ```bash
-curl -s --connect-timeout 10 --max-time {TIMEOUT_SECONDS} \
-  -X POST "http://localhost:{PORT}/tasks/send" \
-  -H "Authorization: Bearer {TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"message":{"role":"user","parts":[{"type":"text","text":"...prompt..."}]}}'
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/api-task-runner.ts" \
+  --preset "<stage.provider>" \
+  --model "<stage.model>" \
+  --cwd "${CLAUDE_PROJECT_DIR}" \
+  --task-timeout "<timeout_ms>" \
+  --task-stdin <<'TASK_EOF'
+...prompt...
+TASK_EOF
 ```
-The session manager runs a V2 Agent SDK session with Read/Write/Edit/Bash — it CAN modify files on disk. API providers support ALL stage types including implementation and RCA.
+Uses `--task-stdin` with heredoc to avoid OS argv size limits and ps exposure.
+Parse stdout JSON: `{ event: "complete", result: "..." }` or `{ event: "error", error: "..." }`. Exit code 3 = timeout.
+The api-task-runner creates a V2 Agent SDK session with Read/Write/Edit/Bash — it CAN modify files on disk. API providers support ALL stage types including implementation and RCA.
 
 **If providerType is `cli`:** The task description specifies the exact cli-executor.ts invocation with `--output-file` and optional `--model` flags.
 

@@ -51,14 +51,3 @@ export interface ResolvedStage extends StageEntry {
   /** The 1-based index of this stage among stages of the same type in the pipeline. */
   stage_index: number;
 }
-
-export interface SessionPortMapping {
-  /** The preset name this session manager is serving */
-  preset_name: string;
-  /** The port the session manager HTTP server is listening on */
-  port: number;
-  /** The bearer token for authenticating to this session manager */
-  token: string;
-  /** The PID of the session manager process */
-  pid: number;
-}

@@ -28,16 +28,12 @@
   <nav>
     <button
       x-bind:class="{ active: tab === 'presets' }"
-      x-on:click="tab = 'presets'; stopSessionPolling(); loadPresets()"
+      x-on:click="tab = 'presets'; loadPresets()"
     >AI Presets</button>
     <button
       x-bind:class="{ active: tab === 'pipeline' }"
-      x-on:click="tab = 'pipeline'; stopSessionPolling(); loadPipelineConfig()"
+      x-on:click="tab = 'pipeline'; loadPipelineConfig()"
     >Pipeline Config</button>
-    <button
-      x-bind:class="{ active: tab === 'sessions' }"
-      x-on:click="tab = 'sessions'; loadSessions(); startSessionPolling()"
-    >Session Managers</button>
   </nav>
 
   <!-- Error banner -->
@@ -79,7 +75,7 @@
           Type
           <select x-model="newPreset.type" x-bind:disabled="!!editingPresetKey">
             <option value="subscription">Subscription (Claude Task tool)</option>
-            <option value="api">API (Direct API + session manager)</option>
+            <option value="api">API (Direct API provider)</option>
             <option value="cli">CLI (Command-line tool)</option>
           </select>
         </label>
@@ -567,54 +563,6 @@
     </template>
   </section>
 
-  <!-- ============ Session Managers Tab ============ -->
-  <section x-show="tab === 'sessions'" class="tab-content">
-    <div class="section-header">
-      <h2>Session Managers</h2>
-      <button class="btn-secondary" x-on:click="loadSessions()">Refresh</button>
-    </div>
-
-    <div x-show="loading.sessions" class="loading">Loading session status...</div>
-
-    <template x-if="!loading.sessions">
-      <div>
-        <template x-if="sessions.length === 0">
-          <p class="empty-state">No session managers are currently running.</p>
-        </template>
-
-        <template x-for="session in sessions" x-bind:key="session.preset_name || session.port">
-          <div class="card session-card">
-            <div class="session-header">
-              <span class="preset-name" x-text="session.preset_name"></span>
-              <span
-                class="health-badge"
-                x-bind:class="'health-' + (session.health || 'unknown')"
-                x-text="session.health || 'unknown'"
-              ></span>
-            </div>
-            <div class="session-details">
-              <div class="detail-row">
-                <span class="label">Port:</span>
-                <span x-text="session.port"></span>
-              </div>
-              <div class="detail-row" x-show="session.uptime_ms !== undefined">
-                <span class="label">Uptime:</span>
-                <span x-text="formatUptime(session.uptime_ms)"></span>
-              </div>
-              <div class="detail-row" x-show="session.task_count !== undefined">
-                <span class="label">Tasks:</span>
-                <span x-text="session.task_count"></span>
-              </div>
-              <div class="detail-row error-detail" x-show="session.error">
-                <span class="label">Error:</span>
-                <span x-text="session.error"></span>
-              </div>
-            </div>
-          </div>
-        </template>
-      </div>
-    </template>
-  </section>
 
 </body>
 </html>

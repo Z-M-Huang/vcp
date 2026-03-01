@@ -2,12 +2,13 @@
 /**
  * One-Shot Runner — execute a single task via an API or CLI preset.
  *
- * For API presets: spawns a session-manager, sends the task via HTTP, shuts down.
+ * For API presets: spawns api-task-runner.ts, reads stdout JSON result.
  * For CLI presets: substitutes template placeholders, executes the CLI command.
  *
  * Usage:
  *   bun one-shot-runner.ts --type api --preset <name> --model <model> --cwd <dir> --task "<text>"
  *   bun one-shot-runner.ts --type cli --preset <name> --model <model> --cwd <dir> --task "<text>"
+ *   echo "<text>" | bun one-shot-runner.ts --type api --preset <name> --model <model> --cwd <dir> --task-stdin
  *
  * Exit codes:
  *   0 - Success
@@ -28,24 +29,19 @@ import {
 } from './preset-utils.ts';
 import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 import type { ApiPreset, CliPreset } from '../types/presets.ts';
-import type { Message, Part } from '../types/a2a-lite.ts';
 import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
 
 // ================== CONFIGURATION ==================
 
 const DEFAULT_API_TIMEOUT_MS = 300_000;  // 5 minutes
 const DEFAULT_CLI_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
-const SESSION_STARTUP_TIMEOUT_MS = 30_000; // 30 seconds
-const SHUTDOWN_GRACE_MS = 5_000;
 const KILL_GRACE_MS = 3_000;
 
-/** Custom error for startup timeout — distinguishes from AbortSignal.timeout's TimeoutError. */
-class StartupTimeoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'StartupTimeoutError';
-  }
-}
+/**
+ * Buffer added to task timeout for the api-task-runner process timeout.
+ * Accounts for warmup (~60s) and process startup/shutdown overhead.
+ */
+const PROCESS_TIMEOUT_BUFFER_MS = 120_000;
 
 // Placeholder sets are centralized in preset-utils.ts (VALID_ONE_SHOT_PLACEHOLDERS, etc.)
 
@@ -86,45 +82,6 @@ function emitAndExit(result: RunResult): never {
   process.exit(result.exitCode);
 }
 
-// ================== RESULT EXTRACTION ==================
-
-/**
- * Extract text from an A2A-lite Message result.
- * Message has { role, parts[] } where parts are TextPart | DataPart | FilePart.
- */
-function extractResultText(result?: Message | null): string {
-  if (!result || !Array.isArray(result.parts)) return '';
-  return result.parts
-    .filter((p: Part) => p.type === 'text')
-    .map((p: Part) => (p as { type: 'text'; text: string }).text)
-    .join('\n');
-}
-
-// ================== HTTP STATUS MAPPING ==================
-
-/** Map HTTP error status to a structured error result. */
-function mapHttpStatusToError(status: number, statusText: string): RunResult {
-  switch (status) {
-    case 503: return makeError('api_execution', `HTTP 503: Session not ready`, 2);
-    case 408: return makeError('api_execution', `HTTP 408: Queue timeout`, 3);
-    default: return makeError('api_execution', `HTTP ${status}: ${statusText}`, 2);
-  }
-}
-
-/** Validate the task response body from /tasks/send. */
-function validateTaskResponse(body: {
-  task?: { status?: string; error?: { message?: string }; result?: Message };
-}): RunResult | null {
-  if (body.task?.status !== 'completed') {
-    return makeError(
-      'api_execution',
-      `Task ${body.task?.status || 'unknown'}: ${body.task?.error?.message || 'unknown error'}`,
-      2,
-    );
-  }
-  return null; // success — no error
-}
-
 // ================== CLI ARG PARSING ==================
 
 interface ParsedArgs {
@@ -133,6 +90,8 @@ interface ParsedArgs {
   model: string;
   cwd: string;
   task: string;
+  /** When true, task text is read from stdin instead of --task arg. */
+  taskFromStdin: boolean;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -170,6 +129,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         result.task = next;
         i++;
         break;
+      case '--task-stdin':
+        result.taskFromStdin = true;
+        break;
     }
   }
 
@@ -178,7 +140,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (!result.preset) missing.push('--preset');
   if (!result.model) missing.push('--model');
   if (!result.cwd) missing.push('--cwd');
-  if (!result.task) missing.push('--task');
+  if (!result.task && !result.taskFromStdin) missing.push('--task or --task-stdin');
 
   if (missing.length > 0) {
     throw new Error(`Missing required arguments: ${missing.join(', ')}`);
@@ -186,6 +148,10 @@ function parseArgs(argv: string[]): ParsedArgs {
 
   if (!MODEL_NAME_REGEX.test(result.model!)) {
     throw new Error(`Invalid model name '${result.model}'. Must match /^[a-zA-Z0-9._-]+$/`);
+  }
+
+  if (!result.taskFromStdin) {
+    result.taskFromStdin = false;
   }
 
   return result as ParsedArgs;
@@ -268,100 +234,41 @@ function escapeWinArg(arg: string): string {
   return `"${escaped}"`;
 }
 
-// ================== SESSION MANAGER CLEANUP ==================
-
-/**
- * Clean up a session manager process: POST /shutdown then escalate to SIGTERM/SIGKILL.
- * This function never throws — all errors are swallowed (best-effort cleanup).
- */
-async function cleanupSessionManager(
-  proc: { exitCode: number | null; kill(signal?: number | string): void },
-  port?: number,
-  token?: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<void> {
-  // 1. Graceful shutdown via HTTP
-  if (port && token) {
-    try {
-      await fetchFn(`http://localhost:${port}/shutdown`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        signal: AbortSignal.timeout(SHUTDOWN_GRACE_MS),
-      });
-    } catch { /* best-effort */ }
-  }
-
-  // 2. Wait briefly for process to exit
-  await new Promise(r => setTimeout(r, 1_000));
-
-  // 3. Escalate if still alive (exitCode === null means not exited)
-  if (proc.exitCode === null) {
-    proc.kill('SIGTERM');
-    await new Promise(r => setTimeout(r, KILL_GRACE_MS));
-    if (proc.exitCode === null) {
-      proc.kill('SIGKILL');
-    }
-  }
-}
-
 // ================== API PATH ==================
-
-/**
- * Read a single line from a readable stream with timeout.
- * Used to capture the session-manager startup JSON.
- */
-async function readStartupLine(
-  stdout: ReadableStream<Uint8Array>,
-  timeoutMs: number,
-): Promise<string> {
-  const reader = stdout.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new StartupTimeoutError('Session manager startup timeout')), timeoutMs)
-  );
-
-  const readPromise = (async () => {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) throw new Error('Session manager stdout closed before startup output');
-      buffer += decoder.decode(value, { stream: true });
-      const newlineIdx = buffer.indexOf('\n');
-      if (newlineIdx !== -1) {
-        reader.releaseLock();
-        return buffer.slice(0, newlineIdx).trim();
-      }
-    }
-  })();
-
-  return Promise.race([readPromise, timeoutPromise]);
-}
 
 /** Injectable dependencies for runApiPath — defaults to real implementations. */
 interface ApiPathDeps {
-  spawnSessionManager(args: ParsedArgs, taskTimeoutMs: number): {
-    proc: { exitCode: number | null; kill(signal?: number | string): void; stdout: ReadableStream<Uint8Array> };
+  spawnTaskRunner(args: ParsedArgs, taskTimeoutMs: number): {
+    proc: {
+      exitCode: number | null;
+      stdout: ReadableStream<Uint8Array>;
+      kill(signal?: number | string): void;
+    };
+    exited: Promise<void>;
   };
-  readStartup(stdout: ReadableStream<Uint8Array>, timeoutMs: number): Promise<string>;
-  fetchFn: typeof fetch;
   log: typeof vcpLog;
+  /** Override PROCESS_TIMEOUT_BUFFER_MS for testing. */
+  processTimeoutBufferMs?: number;
+  /** Override KILL_GRACE_MS for testing. */
+  killGraceMs?: number;
 }
 
 const defaultApiDeps: ApiPathDeps = {
-  spawnSessionManager(args, taskTimeoutMs) {
-    const sessionManagerPath = path.join(path.dirname(import.meta.path), 'session-manager.ts');
+  spawnTaskRunner(args, taskTimeoutMs) {
+    const taskRunnerPath = path.join(path.dirname(import.meta.path), 'api-task-runner.ts');
     const proc = Bun.spawn([
-      'bun', sessionManagerPath,
+      'bun', taskRunnerPath,
       '--preset', args.preset,
       '--model', args.model,
+      '--task-stdin',
       '--cwd', args.cwd,
       '--task-timeout', String(taskTimeoutMs),
-    ], { stdout: 'pipe', stderr: 'inherit' });
-    return { proc };
+    ], { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' });
+    // Write task to stdin — avoids argv size limits (E2BIG) and ps exposure
+    proc.stdin.write(args.task);
+    proc.stdin.end();
+    return { proc, exited: proc.exited.then(() => {}) };
   },
-  readStartup: readStartupLine,
-  fetchFn: fetch,
   log: vcpLog,
 };
 
@@ -377,72 +284,70 @@ async function runApiPath(
   }
 
   const taskTimeoutMs = preset.timeout_ms || DEFAULT_API_TIMEOUT_MS;
-  const { proc } = deps.spawnSessionManager(args, taskTimeoutMs);
+  const { proc, exited } = deps.spawnTaskRunner(args, taskTimeoutMs);
 
-  let port: number | undefined;
-  let token: string | undefined;
-  let result: RunResult;
+  // Collect stdout concurrently (start reading before exit to avoid buffer issues)
+  const stdoutPromise = new Response(proc.stdout).text();
 
+  let timer: ReturnType<typeof setTimeout> | null = null;
   try {
-    // Wait for startup JSON
-    const startupLine = await deps.readStartup(proc.stdout, SESSION_STARTUP_TIMEOUT_MS);
-    const startup = JSON.parse(startupLine);
-    if (startup.status !== 'ready' || !startup.port || !startup.token) {
-      throw new Error(`Invalid startup output: ${startupLine}`);
-    }
-    port = startup.port;
-    token = startup.token;
-
-    await deps.log(args.cwd, {
-      source: 'one-shot-runner', event: 'session_ready', decision: 'info',
-      details: `preset=${args.preset} model=${args.model} port=${port}`,
-    }, debugEnabled);
-
-    // Send task with auth
-    const response = await deps.fetchFn(`http://localhost:${port}/tasks/send`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: { role: 'user', parts: [{ type: 'text', text: args.task }] },
+    // Wait for process to complete with a wall-clock timeout
+    // api-task-runner has internal timeout, but add buffer for warmup + startup
+    const processTimeoutMs = taskTimeoutMs + (deps.processTimeoutBufferMs ?? PROCESS_TIMEOUT_BUFFER_MS);
+    const timedOut = await Promise.race([
+      exited.then(() => false),
+      new Promise<true>((resolve) => {
+        timer = setTimeout(() => resolve(true), processTimeoutMs);
       }),
-      signal: AbortSignal.timeout(taskTimeoutMs),
-    });
+    ]);
 
-    // Validate HTTP response
-    if (!response.ok) {
-      result = mapHttpStatusToError(response.status, response.statusText);
+    if (timedOut) {
+      // Graceful shutdown: SIGTERM → await grace period → SIGKILL
+      // Must await so SIGKILL fires before process.exit() kills the event loop
+      const graceMs = deps.killGraceMs ?? KILL_GRACE_MS;
+      try { proc.kill('SIGTERM'); } catch { /* best effort */ }
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          try { proc.kill('SIGKILL'); } catch { /* already dead */ }
+          resolve();
+        }, graceMs);
+      });
+      return makeError('api_execution', 'api-task-runner process timed out', 3);
+    }
+
+    const stdout = await stdoutPromise;
+    const lastLine = stdout.trim().split('\n').pop() || '';
+
+    if (!lastLine) {
+      return makeError('api_execution', 'api-task-runner produced no output', 2);
+    }
+
+    let output: OutputEvent;
+    try {
+      output = JSON.parse(lastLine);
+    } catch {
+      return makeError('api_execution', `api-task-runner produced invalid JSON: ${lastLine.slice(0, 200)}`, 2);
+    }
+
+    if (output.event === 'complete') {
+      return makeComplete(
+        output.provider || args.preset,
+        output.model || args.model,
+        output.result || 'Task completed successfully',
+      );
     } else {
-      const body = await response.json() as {
-        task?: { status?: string; error?: { message?: string }; result?: Message };
-      };
-
-      // Validate task status
-      const taskError = validateTaskResponse(body);
-      if (taskError) {
-        result = taskError;
-      } else {
-        // Extract text from Message { role, parts[] }
-        const resultText = extractResultText(body.task?.result) || 'Task completed successfully';
-        result = makeComplete(args.preset, args.model, resultText);
-      }
+      const exitCode = proc.exitCode === 3 ? 3 : proc.exitCode === 1 ? 1 : 2;
+      return makeError(
+        output.phase || 'api_execution',
+        output.error || 'Unknown error',
+        exitCode,
+      );
     }
   } catch (err) {
-    if (err instanceof StartupTimeoutError) {
-      result = makeError('api_execution', 'Session manager startup timed out', 3);
-    } else if (err instanceof Error && err.name === 'TimeoutError') {
-      result = makeError('api_execution', 'Task execution timed out', 3);
-    } else {
-      result = makeError('api_execution', (err as Error).message || 'Unknown error', 2);
-    }
+    return makeError('api_execution', (err as Error).message || 'Unknown error', 2);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
   }
-
-  // Cleanup ALWAYS runs — no process.exit in the try block above
-  await cleanupSessionManager(proc, port, token, deps.fetchFn);
-
-  return result;
 }
 
 // ================== CLI PATH ==================
@@ -563,6 +468,18 @@ async function main(): Promise<void> {
     emitAndExit(makeError('validation', (err as Error).message, 1));
   }
 
+  // Read task from stdin if --task-stdin was set (avoids argv size limits + ps exposure)
+  if (args.taskFromStdin) {
+    try {
+      args.task = await new Response(Bun.stdin.stream()).text();
+      if (!args.task.trim()) {
+        emitAndExit(makeError('validation', 'No task provided on stdin', 1));
+      }
+    } catch (err) {
+      emitAndExit(makeError('validation', `Failed to read task from stdin: ${(err as Error).message}`, 1));
+    }
+  }
+
   // Load preset
   let presets;
   try {
@@ -616,16 +533,10 @@ export {
   substitutePlaceholders,
   findUnsupportedPlaceholders,
   escapeWinArg,
-  readStartupLine,
-  extractResultText,
-  mapHttpStatusToError,
-  validateTaskResponse,
   makeComplete,
   makeError,
-  cleanupSessionManager,
   runApiPath,
   runCliPath,
-  StartupTimeoutError,
   type ParsedArgs,
   type OutputEvent,
   type RunResult,

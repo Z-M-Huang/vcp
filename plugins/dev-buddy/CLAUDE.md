@@ -245,7 +245,7 @@ Run a single arbitrary task using any configured provider — no pipeline, no re
 ```
 
 - **subscription** → Spawns a Claude subagent with the specified model
-- **api** → Starts a session manager, sends the task, shuts down after
+- **api** → Runs `api-task-runner.ts` with the task, collects result from stdout
 - **cli** → Runs the CLI tool directly with the task as prompt
 
 Model defaults to `sonnet` (subscription) or `preset.models[0]` (api/cli) if omitted.
@@ -253,7 +253,7 @@ Model defaults to `sonnet` (subscription) or `preset.models[0]` (api/cli) if omi
 Provider is matched by exact name first, then unique prefix. Run `/dev-buddy-manage-presets list` to see available presets.
 
 The one-shot runner script (`scripts/one-shot-runner.ts`) handles API and CLI lifecycle:
-- **API:** Spawns `session-manager.ts` with `--model` flag → sends task via HTTP with bearer auth → waits → graceful shutdown with try/finally cleanup
+- **API:** Spawns `api-task-runner.ts` with `--preset`, `--model`, `--task-stdin`, `--cwd`, `--task-timeout` → pipes task text via stdin (avoids argv size limits) → reads result JSON from stdout → process exits on its own
 - **CLI:** Uses the preset's `one_shot_args_template` (required for CLI presets in one-shot mode). Tokenizes it, substitutes `{model}`, `{prompt}`, `{reasoning_effort}` → platform-aware execution (CWE-78 safe) → wall-clock timeout. If `one_shot_args_template` is not configured, the runner exits with a validation error directing the user to configure it.
 
 **CLI Preset Templates:**
@@ -494,15 +494,11 @@ The config server (`scripts/config-server.ts`) exposes these REST endpoints:
 | GET | `/api/pipeline-config` | Get current pipeline config |
 | PUT | `/api/pipeline-config` | Save pipeline config |
 | GET | `/api/preset-models/:name` | Model list for a preset (subscription: sonnet/opus/haiku; api/cli: from preset) |
-| GET | `/api/sessions` | Query all running session manager health |
-
 ---
 
-## Session Manager Architecture
+## API Task Runner Architecture
 
-Session managers wrap persistent V2 Agent SDK sessions behind HTTP servers.
-For API presets, the Claude SDK is configured via environment variables to route
-to the external provider's Claude-compatible endpoint.
+The API task runner (`scripts/api-task-runner.ts`) is a per-invocation script that creates a V2 Agent SDK session, runs one task, outputs the result as JSON to stdout, and exits. Each invocation is an independent process with its own V2 session — no shared state, no ports, no file locks. Multiple instances can run in parallel safely.
 
 ### Env Var Mapping
 
@@ -523,26 +519,24 @@ Not `...process.env` (avoids leaking full host env), not Linux-hardcoded
 All aliases set to the same provider model name (case-sensitive).
 Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers.
 
-### Session Lifecycle
+### Per-Invocation Lifecycle
 
-1. Session manager spawned per unique API provider at pipeline start
-2. V2 session created with provider env vars (~5s warmup)
-3. Startup JSON emitted AFTER warmup (no race condition)
-4. Tasks dispatched via `session.send()` (~1.5-2.5s each, context retained)
-5. Per-task `Promise.race` timeout prevents queue deadlock (default 5min, configurable via `--task-timeout`)
-6. Health gate: `/tasks/send` returns 503 when session is not `ready`
-7. On failure: `session.close()`, create new session (auto-recovery via `attemptRespawn`)
-8. On pipeline end: graceful shutdown with `session.close()`
+1. Parse args (`--preset`, `--model`, `--task`, `--cwd`, `--task-timeout`)
+2. Load + validate preset from `readPresets()`
+3. Build env: `buildSessionEnv(preset, model)` — platform-aware allowlist
+4. Create V2 session: `unstable_v2_createSession({ model, env, permissionMode: 'default', allowedTools })`
+5. Warmup: `session.send('Respond with OK')` + `collectSessionResult()`
+6. Send actual task: `session.send(task)` + `collectSessionResult(session, taskTimeoutMs)`
+7. Output result JSON to stdout: `{ event: "complete", result: "..." }` or `{ event: "error", error: "..." }`
+8. `session.close()`, exit (0=success, 1=validation, 2=execution, 3=timeout)
 
 ### Key Design Decisions
 
 - **`permissionMode: 'default'`** (not `bypassPermissions`) — security-first; explicit `allowedTools` list
-- **Startup blocks until warmup completes** — caller never receives port+token until session is live
-- **Warmup failure exits with non-zero** — prevents serving on a broken session
+- **Per-invocation isolation** — no shared state between tasks; parallel execution is naturally safe
+- **Warmup failure exits with non-zero** — prevents running on a broken session
 - **Timeout via `Promise.race`** — wall-clock timeout fires even if `session.stream()` yields nothing; on timeout, `session.close()` kills the orphaned stream consumer
 - **Platform-aware env allowlist** — handles Windows (USERPROFILE, APPDATA, SystemRoot), proxy (HTTP_PROXY, HTTPS_PROXY), and TLS certs (NODE_EXTRA_CA_CERTS)
-
-Reference: `spike/test-session-server.ts`, GitHub issue #71
 
 ---
 
@@ -552,22 +546,25 @@ Reference: `spike/test-session-server.ts`, GitHub issue #71
 |--------|---------|
 | `orchestrator.ts` | Initialize/reset pipeline, show status (`bun orchestrator.ts [cmd]`) |
 | `json-tool.ts` | Cross-platform JSON operations (`bun json-tool.ts [cmd]`) |
-| `session-manager.ts` | Persistent V2 Agent SDK HTTP server for API presets |
+| `api-task-runner.ts` | Per-invocation V2 Agent SDK task runner for API presets |
 
-### Session Manager CLI
+### API Task Runner CLI
 
 ```
-bun session-manager.ts --preset <name> [options]
+bun api-task-runner.ts --preset <name> --model <model> --task "<text>" --cwd <dir> [--task-timeout <ms>]
+bun api-task-runner.ts --preset <name> --model <model> --task-stdin --cwd <dir> [--task-timeout <ms>]
 ```
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--preset` | string | *required* | Preset name from `~/.vcp/presets.json` |
+| `--preset` | string | *required* | Preset name from `~/.vcp/ai-presets.json` |
+| `--model` | string | *required* | Model name (must be in preset's `models[]` list) |
+| `--task` | string | *required*\* | The task/prompt to execute |
+| `--task-stdin` | flag | — | Read task from stdin (avoids argv size limits and ps exposure) |
 | `--cwd` | string | `process.cwd()` | Working directory for the session |
-| `--idle-timeout` | minutes | `60` | Idle timeout before auto-shutdown |
-| `--allowed-tools` | CSV | `Read,Write,Edit,Grep,Glob,Bash` | Tools the V2 session may use |
-| `--task-timeout` | ms | `300000` (5 min) | Per-task wall-clock timeout (from `ApiPreset.timeout_ms` via `spawnSessionManagers`) |
-| `--model` | string | `preset.models[0]` | Override model (must be in preset's `models[]` list). Used by one-shot runner. |
+| `--task-timeout` | ms | `300000` (5 min) | Per-task wall-clock timeout (from `ApiPreset.timeout_ms`) |
+
+\* Either `--task` or `--task-stdin` is required. `one-shot-runner.ts` uses `--task-stdin` to avoid OS argv limits.
 
 ---
 
