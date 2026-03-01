@@ -2,7 +2,7 @@
 name: dev-buddy-once
 description: Run a single task using a specific AI provider and model. Supports subscription, API, and CLI presets.
 user-invocable: true
-allowed-tools: Read, Bash, Task, AskUserQuestion, Glob, Grep
+allowed-tools: Read, Bash, Task, TaskOutput, AskUserQuestion, Glob, Grep
 ---
 
 # One-Shot Task Runner
@@ -99,7 +99,16 @@ TASK_EOF
 
 Uses `--task-stdin` with heredoc to avoid OS argv size limits and ps exposure.
 
-**Bash timeout:** Read the preset's `timeout_ms` from `~/.vcp/ai-presets.json`. Set the Bash tool timeout to `timeout_ms + 120000` (task timeout plus 120s buffer for warmup and startup). If `timeout_ms` is not set or lookup fails, default to 600000 (10 minutes).
+**Derive timeout:** Read `~/.vcp/ai-presets.json` → find the preset by name → read `timeout_ms` (default: 300000 if not set or lookup fails).
+
+**IMPORTANT:** The Bash tool has a hard max timeout of 600,000ms (10 min). API tasks can run much longer (e.g., 30 min). Always use `run_in_background: true` to prevent the Bash tool from killing the process prematurely.
+
+After launching, save the returned `task_id`. If `run_in_background` does not return a `task_id`, report a dispatch failure to the user — do not retry in foreground mode.
+Then poll for completion:
+```
+TaskOutput(task_id: "<task_id>", block: true, timeout: min(timeout_ms + 120000, 600000))
+```
+If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
 
 The script:
 1. Spawns `api-task-runner.ts` with the preset, model, and task (via stdin)
@@ -125,7 +134,16 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
 TASK_EOF
 ```
 
-**Bash timeout:** Read the preset's `timeout_ms` from `~/.vcp/ai-presets.json`. Set the Bash tool timeout to `timeout_ms + 120000` (task timeout plus 120s buffer for startup). If `timeout_ms` is not set or lookup fails, default to 1260000 (21 minutes — matches the script's 20-minute default CLI timeout plus buffer).
+**Derive timeout:** Read `~/.vcp/ai-presets.json` → find the preset by name → read `timeout_ms` (default: 1200000 for CLI if not set or lookup fails — matches the script's 20-minute default).
+
+**IMPORTANT:** The Bash tool has a hard max timeout of 600,000ms (10 min). CLI tasks can run much longer (e.g., Codex with 20-min timeout). Always use `run_in_background: true` to prevent the Bash tool from killing the process prematurely.
+
+After launching, save the returned `task_id`. If `run_in_background` does not return a `task_id`, report a dispatch failure to the user — do not retry in foreground mode.
+Then poll for completion:
+```
+TaskOutput(task_id: "<task_id>", block: true, timeout: min(timeout_ms + 120000, 600000))
+```
+If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
 
 The CLI tool runs directly in the project directory (e.g., Codex `exec --full-auto`). Its output streams to the terminal.
 

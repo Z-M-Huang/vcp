@@ -2,7 +2,7 @@
 name: dev-buddy-feature-implement
 description: Dev Buddy multi-AI pipeline. Plan -> Review -> Implement (loop until reviews approve). Configurable pipeline with Codex final gate.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete, SendMessage
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete, SendMessage
 ---
 
 # Multi-AI Pipeline Orchestrator
@@ -601,7 +601,10 @@ while pipeline not complete:
 
        **If providerType is 'api':**
          Derive timeout: read `~/.vcp/ai-presets.json` → find preset by stage.provider name → read `timeout_ms` (default: 300000 if not set or lookup fails)
-         Set Bash tool timeout parameter to timeout_ms + 120000 (default: 420000 if timeout_ms not set or lookup fails)
+         **IMPORTANT:** The Bash tool has a hard max timeout of 600000ms (10 min). For tasks that may exceed this,
+         use `run_in_background: true` so the process is not killed prematurely.
+         Run the Bash tool with `run_in_background: true`:
+         ```
          bun "${CLAUDE_PLUGIN_ROOT}/scripts/api-task-runner.ts" \
            --preset "<stage.provider>" \
            --model "<stage.model>" \
@@ -610,9 +613,18 @@ while pipeline not complete:
            --task-stdin <<'TASK_EOF'
          <prompt>
          TASK_EOF
+         ```
+         Save the returned `task_id` from the Bash tool result along with the pipeline task ID, stage provider, and model.
+         If `run_in_background` does not return a `task_id`, treat it as a dispatch failure — do not retry in foreground mode.
+         Then poll for completion:
+         ```
+         TaskOutput(task_id: "<task_id>", block: true, timeout: min(timeout_ms + 120000, 600000))
+         ```
+         If TaskOutput returns but the task is still running (not complete), repeat the TaskOutput call
+         with `timeout: 600000` until the background task finishes.
          // Uses --task-stdin to avoid OS argv size limits and ps exposure.
          // The api-task-runner creates a V2 Agent SDK session — it CAN read/write files.
-         // Parse stdout JSON: { event: "complete", result: "..." } or { event: "error", error: "..." }
+         // Parse the final output for JSON: { event: "complete", result: "..." } or { event: "error", error: "..." }
 
        **If providerType is 'cli':**
          Task(subagent_type: "dev-buddy:cli-executor", prompt: "Run cli-executor.ts with --preset, --model, --output-file")
@@ -1272,9 +1284,12 @@ Task(subagent_type: "dev-buddy:<agent-name>", model: "<model>", prompt: "...")
 
 **If provider type is `api`:** Use `api-task-runner.ts` — a per-invocation script that creates a V2 Agent SDK session, runs the task, and exits.
 
-**Derive timeout:** Read `~/.vcp/ai-presets.json` → find the preset matching the stage's `provider` name → read `timeout_ms` (default: 300000 if not set or lookup fails). Set the Bash tool's `timeout` parameter to `timeout_ms + 120000` (or 420000 if not set or lookup fails) so the Bash tool outlives the task runner.
+**Derive timeout:** Read `~/.vcp/ai-presets.json` → find the preset matching the stage's `provider` name → read `timeout_ms` (default: 300000 if not set or lookup fails).
+
+**IMPORTANT:** The Bash tool has a hard max timeout of 600,000ms (10 min). API tasks can run much longer (e.g., 30 min). Always use `run_in_background: true` to prevent the Bash tool from killing the process prematurely.
 
 ```bash
+# Run with run_in_background: true — saves task_id
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/api-task-runner.ts" \
   --preset "<stage.provider>" \
   --model "<stage.model>" \
@@ -1284,8 +1299,10 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/api-task-runner.ts" \
 ...prompt...
 TASK_EOF
 ```
+Save `task_id` along with the pipeline task ID, provider, and model. If no `task_id` is returned, treat as dispatch failure.
+Then poll: `TaskOutput(task_id, block: true, timeout: min(timeout_ms + 120000, 600000))`. If not complete, repeat `TaskOutput` with `timeout: 600000` until done.
 Uses `--task-stdin` with heredoc to avoid OS argv size limits and ps exposure.
-Parse stdout JSON: `{ event: "complete", result: "..." }` or `{ event: "error", error: "..." }`. Exit code 3 = timeout.
+Parse the final output for JSON: `{ event: "complete", result: "..." }` or `{ event: "error", error: "..." }`. Exit code 3 = timeout.
 
 **If provider type is `cli`:** The task description specifies the exact cli-executor.ts invocation with `--output-file` and optional `--model` flags.
 

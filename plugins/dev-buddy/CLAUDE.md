@@ -537,6 +537,7 @@ Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers.
 - **Warmup failure exits with non-zero** — prevents running on a broken session
 - **Timeout via `Promise.race`** — wall-clock timeout fires even if `session.stream()` yields nothing; on timeout, `session.close()` kills the orphaned stream consumer
 - **Platform-aware env allowlist** — handles Windows (USERPROFILE, APPDATA, SystemRoot), proxy (HTTP_PROXY, HTTPS_PROXY), and TLS certs (NODE_EXTRA_CA_CERTS)
+- **Bash tool timeout constraint** — The Bash tool has a hard max timeout of 600,000ms (10 min). API tasks with `timeout_ms` > 8 min must use `run_in_background: true` on the Bash tool, then poll with `TaskOutput(task_id, block: true, timeout: 600000)`. Pipeline SKILL.md files always use this pattern for API dispatch to avoid premature process termination.
 
 ---
 
