@@ -46,12 +46,13 @@ Check which input file exists to determine review type:
 
 ```
 Read(".vcp/task/impl-result.json")
-Read(".vcp/task/plan-refined.json")
+Read(".vcp/task/plan/manifest.json")
 ```
 
 **Decision:**
 - If `.vcp/task/impl-result.json` exists → `REVIEW_TYPE = "code"`
-- Else if `.vcp/task/plan-refined.json` exists → `REVIEW_TYPE = "plan"`
+- Else if `.vcp/task/plan/manifest.json` exists → `REVIEW_TYPE = "plan"`
+  - Fallback: if not found, check `.vcp/task/plan-refined.json`
 - Else → Report error: "No reviewable file found"
 
 ---

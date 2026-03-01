@@ -30,12 +30,12 @@ Multi-Session Orchestrator Pipeline (Task-Based Enforcement, Configurable)
   +-- Requirements (INTERACTIVE) [feature pipeline only]
   |     +-- Task: "Requirements 1"
   |     +-- requirements-gatherer agent
-  |     -> .vcp/task/user-story.json
+  |     -> .vcp/task/user-story/ (multi-file: manifest.json + section files)
   |
   +-- Planning (SEMI-INTERACTIVE) [feature pipeline only]
   |     +-- Task: "Planning 1"
   |     +-- planner agent
-  |     -> .vcp/task/plan-refined.json
+  |     -> .vcp/task/plan/ (multi-file: manifest.json + section files + steps/)
   |
   +-- Plan Reviews (TASK-ENFORCED, SEQUENTIAL OR PARALLEL)
   |     +-- TaskCreate + TaskUpdate(addBlockedBy) for each plan-review stage in config
@@ -85,7 +85,7 @@ User provides initial description via /dev-buddy-feature-implement
     ├── Uses findings to AskUserQuestion (informed questions)
     ├── Waits for specialists to complete analysis files
     ├── Spawns requirements-gatherer in synthesis mode (one-shot Task)
-    │    └── Reads analysis files → writes user-story.json
+    │    └── Reads analysis files → writes user-story/ directory (multi-file)
     └── Shuts down specialist teammates (pipeline team persists), continues pipeline
 ```
 
@@ -168,7 +168,7 @@ T9 = TaskCreate(subject: "Code Review 3", description: "...")      → TaskUpdat
 **Number of tasks = length of the configured pipeline array** — adding/removing stages adds/removes tasks.
 
 **Output file naming (versioned, append-only):**
-- Singleton stages: canonical names (`user-story.json`, `plan-refined.json`, `impl-result.json`)
+- Singleton stages: canonical names (`user-story/manifest.json`, `plan/manifest.json`, `impl-result.json`)
 - Multi-instance stages: `{type}-{provider}-{model}-{index}-v{version}.json` (e.g., `plan-review-anthropic-subscription-sonnet-1-v1.json`)
 - Re-reviews create new files with incremented version (e.g., `...-v2.json`), preserving all previous versions
 
@@ -224,14 +224,14 @@ The pipeline will:
 The bug-fix pipeline uses a different early-phase approach optimized for diagnosing and fixing bugs:
 
 1. **Sequential RCA** — Root-cause-analyst agents run one after another (configurable count)
-2. **Inline Consolidation** — After the last RCA stage, the orchestrator consolidates findings inline, writes `user-story.json` + `plan-refined.json` (fixed canonical names)
+2. **Inline Consolidation** — After the last RCA stage, the orchestrator consolidates findings inline, writes `user-story/` + `plan/` multi-file directories
 3. **Plan Validation** — Optional plan-review stage(s) for Codex RCA+plan validation
 4. **Implementation** — Minimal fix targeting the root cause
 5. **Code Reviews** (task-enforced) — Sequential by default, parallel groups where configured
 
 **Key differences from `/dev-buddy-feature-implement`:**
 - No requirements-gatherer or planner agents — RCA stages replace them
-- Orchestrator consolidates RCA findings inline (not via a separate task) before the next non-RCA stage
+- Orchestrator consolidates RCA findings inline (not via a separate task) before the next non-RCA stage, writing `user-story/` and `plan/` multi-file directories
 - Output files: `rca-{provider}-{model}-{N}-v{V}.json`, `plan-review-{provider}-{model}-{N}-v{V}.json`, `code-review-{provider}-{model}-{N}-v{V}.json` (versioned naming)
 - Fix plan emphasizes smallest possible change, not architectural design
 - Non-review stages (RCA, implementation) execute **sequentially**. Review stages (plan-review, code-review) can be configured for parallel execution via `parallel: true` on each StageEntry.
@@ -274,8 +274,6 @@ The pipeline uses specialized agents defined in `agents/` directory. Model selec
 | **implementer** | sonnet | Fullstack + TDD + Quality hybrid |
 | **code-reviewer** | sonnet/opus | Security + Performance + QA hybrid |
 | **root-cause-analyst** | sonnet/opus | Debugging + fault isolation for autonomous bug diagnosis |
-
-See `AGENTS.md` for detailed agent specifications.
 
 ---
 
@@ -337,31 +335,67 @@ Max 10 re-reviews per reviewer before escalating to user.
 
 ## Output Formats
 
-### User Story (`.vcp/task/user-story.json`)
+### User Story (`.vcp/task/user-story/`)
+
+Multi-file directory with section files indexed by manifest:
+
+```
+.vcp/task/user-story/
+├── manifest.json             # Index + top-level metadata (ac_count, title)
+├── meta.json                 # id, title, description, implementation config
+├── requirements.json         # functional, non_functional, constraints
+├── acceptance-criteria.json  # AC array (biggest section)
+├── scope.json                # in_scope, out_of_scope, assumptions
+└── test-criteria.json        # test commands, patterns
+```
+
+**manifest.json** (written last — signals completion):
 ```json
 {
+  "artifact": "user-story",
+  "format_version": "2.0",
   "id": "story-YYYYMMDD-HHMMSS",
   "title": "Feature title",
-  "requirements": {...},
-  "acceptance_criteria": [...],
-  "scope": {...},
-  "test_criteria": {...},
-  "implementation": { "max_iterations": 10 }
+  "ac_count": 26,
+  "sections": { "meta": "meta.json", "requirements": "requirements.json", ... },
+  "approved_by": "user",
+  "approved_at": "ISO8601"
 }
 ```
 
-### Plan Refined (`.vcp/task/plan-refined.json`)
+### Plan (`.vcp/task/plan/`)
+
+Multi-file directory with individual step files:
+
+```
+.vcp/task/plan/
+├── manifest.json             # Index + top-level metadata (step_count, summary)
+├── meta.json                 # id, title, summary, technical_approach
+├── steps/                    # Individual step files (one per step)
+│   ├── 1.json
+│   ├── 2.json
+│   └── ...
+├── test-plan.json            # test_plan
+├── risk-assessment.json      # risk_assessment
+├── dependencies.json         # external, internal, breaking_changes
+└── files.json                # files_to_modify, files_to_create
+```
+
+**manifest.json** (written last — signals completion):
 ```json
 {
+  "artifact": "plan",
+  "format_version": "2.0",
   "id": "plan-YYYYMMDD-HHMMSS",
-  "title": "Plan title",
-  "technical_approach": {...},
-  "steps": [...],
-  "test_plan": {...},
-  "risk_assessment": {...},
+  "title": "Implementation plan title",
+  "summary": "2-3 sentence overview",
+  "step_count": 15,
+  "sections": { "meta": "meta.json", "steps": ["steps/1.json", ...], ... },
   "completion_promise": "<promise>IMPLEMENTATION_COMPLETE</promise>"
 }
 ```
+
+**Backward compatibility:** All consumers try multi-file paths first, fall back to legacy `user-story.json` / `plan-refined.json`.
 
 ### Pipeline Tasks (`.vcp/task/pipeline-tasks.json`)
 
@@ -389,8 +423,8 @@ Format includes a `resolved_config` snapshot, `config_hash` for resume drift det
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "current_version": 1, "task_id": "task-id-1", "parallel_group_id": null },
-    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-refined.json", "current_version": 1, "task_id": "task-id-2", "parallel_group_id": null },
+    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story/manifest.json", "current_version": 1, "task_id": "task-id-1", "parallel_group_id": null },
+    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan/manifest.json", "current_version": 1, "task_id": "task-id-2", "parallel_group_id": null },
     { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-anthropic-subscription-sonnet-1-v1.json", "current_version": 1, "task_id": "task-id-3", "parallel_group_id": 1 },
     { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-anthropic-subscription-opus-2-v1.json", "current_version": 1, "task_id": "task-id-4", "parallel_group_id": 1 },
     { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-anthropic-subscription-sonnet-3-v1.json", "current_version": 1, "task_id": "task-id-5", "parallel_group_id": null },
@@ -417,8 +451,8 @@ The pipeline is driven by `~/.vcp/dev-buddy.json`. Two ordered arrays of stages 
 
 | Type | Singleton | Allowed In | Agent | Output File Pattern |
 |------|-----------|-----------|-------|---------------------|
-| `requirements` | yes | feature | requirements-gatherer | `user-story.json` |
-| `planning` | yes | feature | planner | `plan-refined.json` |
+| `requirements` | yes | feature | requirements-gatherer | `user-story/manifest.json` |
+| `planning` | yes | feature | planner | `plan/manifest.json` |
 | `plan-review` | no | feature, bugfix | plan-reviewer | `plan-review-{provider}-{model}-{index}-v{version}.json` |
 | `implementation` | yes | feature, bugfix | implementer | `impl-result.json` |
 | `code-review` | no | feature, bugfix | code-reviewer | `code-review-{provider}-{model}-{index}-v{version}.json` |
@@ -521,10 +555,11 @@ Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers.
 
 ### Per-Invocation Lifecycle
 
-1. Parse args (`--preset`, `--model`, `--task`, `--cwd`, `--task-timeout`)
+1. Parse args (`--preset`, `--model`, `--task`, `--cwd`, `--task-timeout`, `--system-prompt`)
 2. Load + validate preset from `readPresets()`
 3. Build env: `buildSessionEnv(preset, model)` — platform-aware allowlist
-4. Create V2 session: `unstable_v2_createSession({ model, env, permissionMode: 'default', allowedTools })`
+4. If `--system-prompt` provided: validate path under `docs/`, read file content
+5. Create V2 session: `unstable_v2_createSession({ model, env, permissionMode: 'default', allowedTools, systemPrompt? })`
 5. Warmup: `session.send('Respond with OK')` + `collectSessionResult()`
 6. Send actual task: `session.send(task)` + `collectSessionResult(session, taskTimeoutMs)`
 7. Output result JSON to stdout: `{ event: "complete", result: "..." }` or `{ event: "error", error: "..." }`
@@ -552,8 +587,8 @@ Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers.
 ### API Task Runner CLI
 
 ```
-bun api-task-runner.ts --preset <name> --model <model> --task "<text>" --cwd <dir> [--task-timeout <ms>]
-bun api-task-runner.ts --preset <name> --model <model> --task-stdin --cwd <dir> [--task-timeout <ms>]
+bun api-task-runner.ts --preset <name> --model <model> --task "<text>" --cwd <dir> [--task-timeout <ms>] [--system-prompt <path>]
+bun api-task-runner.ts --preset <name> --model <model> --task-stdin --cwd <dir> [--task-timeout <ms>] [--system-prompt <path>]
 ```
 
 | Flag | Type | Default | Description |
@@ -564,8 +599,11 @@ bun api-task-runner.ts --preset <name> --model <model> --task-stdin --cwd <dir> 
 | `--task-stdin` | flag | — | Read task from stdin (avoids argv size limits and ps exposure) |
 | `--cwd` | string | `process.cwd()` | Working directory for the session |
 | `--task-timeout` | ms | `300000` (5 min) | Per-task wall-clock timeout (from `ApiPreset.timeout_ms`) |
+| `--system-prompt` | path | — | Path to a file under plugin `docs/` to append to the system prompt (CWE-22 safe: path traversal validated) |
 
 \* Either `--task` or `--task-stdin` is required. `one-shot-runner.ts` uses `--task-stdin` to avoid OS argv limits.
+
+**`--system-prompt` usage:** Used for review stages to inject `docs/review-guidelines.md` into the API session. The file content is appended to the default Claude Code system prompt via `systemPrompt: { type: 'preset', preset: 'claude_code', append: content }`. Path must resolve under the plugin's `docs/` directory — traversal attempts are rejected.
 
 ---
 

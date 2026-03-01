@@ -44,9 +44,10 @@ export function computeGuidance(): { message: string; phase: string; isEmpty?: b
   const lines = [message];
 
   // Add AC reminder if user story exists with ACs
-  const ac = progress.userStory?.acceptance_criteria;
-  if (Array.isArray(ac) && ac.length > 0) {
-    const acCount = ac.length;
+  // Multi-file manifest has ac_count (number); legacy single-file has acceptance_criteria (array)
+  const acCount = (progress.userStory as Record<string, unknown> | null)?.ac_count as number | undefined
+    ?? (Array.isArray(progress.userStory?.acceptance_criteria) ? (progress.userStory!.acceptance_criteria as unknown[]).length : 0);
+  if (acCount > 0) {
     lines.push('');
     lines.push(`**Reminder**: ${acCount} acceptance criteria must be verified in all reviews.`);
     lines.push('Reviews MUST include acceptance_criteria_verification (code) or requirements_coverage (plan).');

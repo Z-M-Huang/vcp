@@ -24,7 +24,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { readJson, computeTaskDir } from '../scripts/pipeline-utils.ts';
+import { readJson, readUserStoryACs, computeTaskDir } from '../scripts/pipeline-utils.ts';
 import { isValidStageEntry } from '../types/stage-definitions.ts';
 
 // ================== Codex Execution Proof Helpers ==================
@@ -432,7 +432,9 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const userStory = readJson(path.join(TASK_DIR, 'user-story.json')) as UserStory | null;
+  // Multi-file first, legacy fallback
+  const acs = readUserStoryACs(TASK_DIR);
+  const userStory: UserStory | null = acs ? { acceptance_criteria: acs } : null;
 
   // Codex-specific enforcement: execution proof, error passthrough, verification stamp
   if (isCodexReviewer) {

@@ -69,8 +69,8 @@ describe('sanitizeForFilename', () => {
 
 describe('getOutputFileName', () => {
   test('returns canonical name for singleton stages', () => {
-    expect(getOutputFileName('requirements', 1, 'anthropic', 'opus', 1)).toBe('user-story.json');
-    expect(getOutputFileName('planning', 1, 'anthropic', 'opus', 1)).toBe('plan-refined.json');
+    expect(getOutputFileName('requirements', 1, 'anthropic', 'opus', 1)).toBe('user-story/manifest.json');
+    expect(getOutputFileName('planning', 1, 'anthropic', 'opus', 1)).toBe('plan/manifest.json');
     expect(getOutputFileName('implementation', 1, 'anthropic', 'sonnet', 1)).toBe('impl-result.json');
   });
 
@@ -116,7 +116,7 @@ describe('getOutputFileName', () => {
     const a = getOutputFileName('requirements', 1, 'foo', 'bar', 5);
     const b = getOutputFileName('requirements', 1, 'baz', 'qux', 1);
     expect(a).toBe(b);
-    expect(a).toBe('user-story.json');
+    expect(a).toBe('user-story/manifest.json');
   });
 });
 
@@ -143,8 +143,8 @@ describe('isValidStageEntry', () => {
   });
 
   test('accepts valid singleton entries', () => {
-    expect(isValidStageEntry({ type: 'requirements', output_file: 'user-story.json' })).toBe(true);
-    expect(isValidStageEntry({ type: 'planning', output_file: 'plan-refined.json' })).toBe(true);
+    expect(isValidStageEntry({ type: 'requirements', output_file: 'user-story/manifest.json' })).toBe(true);
+    expect(isValidStageEntry({ type: 'planning', output_file: 'plan/manifest.json' })).toBe(true);
     expect(isValidStageEntry({ type: 'implementation', output_file: 'impl-result.json' })).toBe(true);
   });
 
@@ -195,8 +195,10 @@ describe('isValidStageEntry', () => {
     expect(isValidStageEntry({ type: 'plan-review', output_file: '/etc/passwd' })).toBe(false);
   });
 
-  test('rejects output_file with path separators', () => {
-    expect(isValidStageEntry({ type: 'plan-review', output_file: 'subdir/review.json' })).toBe(false);
+  test('accepts output_file with safe path separators', () => {
+    expect(isValidStageEntry({ type: 'plan-review', output_file: 'subdir/review.json' })).toBe(true);
+    expect(isValidStageEntry({ type: 'requirements', output_file: 'user-story/manifest.json' })).toBe(true);
+    expect(isValidStageEntry({ type: 'planning', output_file: 'plan/manifest.json' })).toBe(true);
   });
 
   test('rejects non-json output_file', () => {

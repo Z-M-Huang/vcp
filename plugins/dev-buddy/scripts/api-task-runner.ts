@@ -18,6 +18,8 @@
  *   3 - Timeout
  */
 
+import fs from 'fs';
+import path from 'path';
 import { readPresets, maskApiKey } from './preset-utils.ts';
 import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk';
@@ -145,6 +147,8 @@ export interface ParsedArgs {
   taskTimeoutMs: number;
   /** When true, task text is read from stdin instead of --task arg. */
   taskFromStdin: boolean;
+  /** Optional path to a file whose content is appended to the system prompt. */
+  systemPrompt?: string;
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -184,6 +188,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
         const ms = parseInt(next, 10);
         if (isNaN(ms) || ms <= 0) throw new Error('--task-timeout must be a positive integer (milliseconds)');
         result.taskTimeoutMs = ms;
+        i++;
+        break;
+      case '--system-prompt':
+        if (!next) throw new Error('--system-prompt requires a value');
+        result.systemPrompt = next;
         i++;
         break;
     }
@@ -239,6 +248,30 @@ async function main(): Promise<void> {
     }
   }
 
+  // Validate and read --system-prompt file if provided
+  let systemPromptContent: string | undefined;
+  if (args.systemPrompt) {
+    try {
+      // Path validation: must resolve under plugin's docs/ directory (CWE-22)
+      const docsDir = path.resolve(path.join(import.meta.dir, '..', 'docs'));
+      const resolved = path.resolve(args.systemPrompt);
+      const relative = path.relative(docsDir, resolved);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) {
+        emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt path must be under plugin docs/ directory. Got: ${args.systemPrompt}` }, 1);
+      }
+      systemPromptContent = fs.readFileSync(resolved, 'utf-8');
+      if (!systemPromptContent.trim()) {
+        emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt file is empty: ${args.systemPrompt}` }, 1);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt file not found: ${args.systemPrompt}` }, 1);
+      }
+      // Re-throw if not already handled by emitAndExit (which calls process.exit)
+      throw err;
+    }
+  }
+
   // Load preset — no session yet, emitAndExit is safe
   let preset: ApiPreset;
   try {
@@ -290,6 +323,10 @@ async function main(): Promise<void> {
       env,
       permissionMode: 'default',
       allowedTools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
+      // Append review guidelines to default system prompt when provided
+      ...(systemPromptContent && {
+        systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptContent },
+      }),
     });
 
     // Warmup — blocks until session is live

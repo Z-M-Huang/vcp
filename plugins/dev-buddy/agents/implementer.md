@@ -56,7 +56,8 @@ You are a senior fullstack developer with expertise in test-driven development a
 
 **YOU MUST READ THE PLAN AND CREATE SUBTASKS WITH blockedBy BEFORE WRITING ANY CODE.**
 
-1. Read the approved plan (`.vcp/task/plan-refined.json`)
+1. Read plan manifest (`.vcp/task/plan/manifest.json`) for the step list, then read individual `steps/{N}.json` files per subtask
+   - Fallback: if `plan/manifest.json` doesn't exist, try `.vcp/task/plan-refined.json`
 2. Verify all prerequisite steps are complete
 3. Map **every** plan step to a subtask — nothing gets implemented without a corresponding task
 4. At least 3 subtasks for any plan with 5+ steps
@@ -136,7 +137,7 @@ while True:
 2. Run integration/e2e tests
 3. Verify acceptance criteria met
 4. Clean up any temporary code
-5. Run all test commands from plan
+5. Run all test commands from `.vcp/task/plan/test-plan.json` (or `plan-refined.json` fallback)
 6. Verify success patterns match
 7. Document any deviations from plan
 8. Write implementation result (`.vcp/task/impl-result.json`)

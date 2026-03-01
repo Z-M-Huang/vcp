@@ -61,8 +61,8 @@ function makeBugFixPipelineTasks(stages: Array<{ type: string; output_file: stri
 
 /** Default feature pipeline stages (matching DEFAULT_CONFIG with versioned naming) */
 const DEFAULT_FEATURE_STAGES = [
-  { type: 'requirements', output_file: 'user-story.json' },
-  { type: 'planning', output_file: 'plan-refined.json' },
+  { type: 'requirements', output_file: 'user-story/manifest.json' },
+  { type: 'planning', output_file: 'plan/manifest.json' },
   { type: 'plan-review', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json' },
   { type: 'plan-review', output_file: 'plan-review-anthropic-subscription-opus-2-v1.json' },
   { type: 'plan-review', output_file: 'plan-review-anthropic-subscription-sonnet-3-v1.json' },
@@ -234,8 +234,8 @@ describe('guidance-hook', () => {
 
     test('returns plan_drafting when user story exists but no plan', () => {
       const stageOutputs = emptyStageOutputs(DEFAULT_FEATURE_STAGES);
-      // user-story.json exists (requirements stage done)
-      stageOutputs['user-story.json'] = { status: 'complete' };
+      // user-story/manifest.json exists (requirements stage done)
+      stageOutputs['user-story/manifest.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: { title: 'test' },
         plan: null,
@@ -389,8 +389,8 @@ describe('guidance-hook', () => {
 
     test('feature-implement: still requires plan review before code review (regression check)', () => {
       const stageOutputs = emptyStageOutputs(DEFAULT_FEATURE_STAGES);
-      stageOutputs['user-story.json'] = { status: 'complete' };
-      stageOutputs['plan-refined.json'] = { status: 'complete' };
+      stageOutputs['user-story/manifest.json'] = { status: 'complete' };
+      stageOutputs['plan/manifest.json'] = { status: 'complete' };
       const progress: PipelineProgress = {
         userStory: { title: 'test' },
         plan: { steps: [] },
@@ -419,8 +419,8 @@ describe('guidance-hook', () => {
 
     test('feature-implement: returns complete when all stages approved', () => {
       const stageOutputs: Record<string, StageOutputEntry> = {
-        'user-story.json': { status: 'complete' },
-        'plan-refined.json': { status: 'complete' },
+        'user-story/manifest.json': { status: 'complete' },
+        'plan/manifest.json': { status: 'complete' },
         'plan-review-anthropic-subscription-sonnet-1-v1.json': { status: 'approved' },
         'plan-review-anthropic-subscription-opus-2-v1.json': { status: 'approved' },
         'plan-review-anthropic-subscription-sonnet-3-v1.json': { status: 'approved' },
@@ -443,8 +443,8 @@ describe('guidance-hook', () => {
 
     test('feature-implement: returns fix phase when a plan review needs_changes', () => {
       const stageOutputs: Record<string, StageOutputEntry> = {
-        'user-story.json': { status: 'complete' },
-        'plan-refined.json': { status: 'complete' },
+        'user-story/manifest.json': { status: 'complete' },
+        'plan/manifest.json': { status: 'complete' },
         'plan-review-anthropic-subscription-sonnet-1-v1.json': { status: 'needs_changes' },
         'plan-review-anthropic-subscription-opus-2-v1.json': null,
         'plan-review-anthropic-subscription-sonnet-3-v1.json': null,

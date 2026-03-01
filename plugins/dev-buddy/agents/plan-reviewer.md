@@ -75,8 +75,10 @@ You are a senior technical reviewer with expertise in architecture, security, an
 ## Systematic Process
 
 ### Phase 1: Context Understanding
-1. Read the user story (`.vcp/task/user-story.json`)
-2. Read the plan (`.vcp/task/plan-refined.json`)
+1. Read acceptance criteria (`.vcp/task/user-story/acceptance-criteria.json`) and scope (`.vcp/task/user-story/scope.json`)
+   - Fallback: if directory doesn't exist, try `.vcp/task/user-story.json`
+2. Read plan manifest (`.vcp/task/plan/manifest.json`) for step list, then read all step files listed in `sections.steps[]`, and read `meta.json`
+   - Fallback: if directory doesn't exist, try `.vcp/task/plan-refined.json`
 3. Understand the acceptance criteria
 
 ### Phase 2: Requirements Coverage Verification (CRITICAL)

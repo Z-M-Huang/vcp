@@ -97,11 +97,11 @@ bun -e "
       const out = JSON.parse(fs.readFileSync(outPath,'utf-8'));
       // requirements/planning outputs lack 'status' — detect via content
       if (s.type === 'requirements') {
-        const complete = out.title && out.acceptance_criteria && out.acceptance_criteria.length > 0;
+        const complete = out.artifact === 'user-story' && out.ac_count > 0;
         return {...s, file_status: complete ? 'complete' : 'unknown'};
       }
       if (s.type === 'planning') {
-        const complete = out.title && out.steps && out.steps.length > 0;
+        const complete = out.artifact === 'plan' && out.step_count > 0;
         return {...s, file_status: complete ? 'complete' : 'unknown'};
       }
       return {...s, file_status: out.status || 'unknown'};
@@ -468,27 +468,27 @@ PHASE: Requirements Gathering (team-based)
 AGENT: Special — spawn 5+ specialist teammates (subagent_type: general-purpose, model: opus) into pipeline team,
        then synthesize via requirements-gatherer (subagent_type: dev-buddy:requirements-gatherer, model: opus)
 INPUT: User's initial request (from conversation context)
-OUTPUT: .vcp/task/user-story.json
+OUTPUT: .vcp/task/user-story/manifest.json
 PROCEDURE: 1) Spawn all 5 core specialists as teammates 2) Interactive loop: receive messages, AskUserQuestion
            3) Wait for all analysis files 4) Spawn requirements-gatherer in synthesis mode (one-shot Task)
            5) shutdown_request to ALL specialists, wait ~60s, retry once if needed, then proceed 6) Mark completed
-COMPLETION: .vcp/task/user-story.json exists with acceptance_criteria array
+COMPLETION: .vcp/task/user-story/manifest.json exists with ac_count field
 ```
 
 For `planning`:
 ```
 PHASE: Planning
 AGENT: dev-buddy:planner (model: opus)
-INPUT: .vcp/task/user-story.json
-OUTPUT: .vcp/task/plan-refined.json
-COMPLETION: .vcp/task/plan-refined.json exists with steps array, test_plan, and completion_promise
+INPUT: .vcp/task/user-story/ (all sections)
+OUTPUT: .vcp/task/plan/manifest.json
+COMPLETION: .vcp/task/plan/manifest.json exists with step_count field and completion_promise
 ```
 
 For `plan-review` (subscription/api provider, stageIndex N, outputFile plan-review-N.json):
 ```
 PHASE: Plan Review {N}
 AGENT: dev-buddy:plan-reviewer (model: {stage.model})
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json
+INPUT: .vcp/task/user-story/acceptance-criteria.json, .vcp/task/user-story/scope.json, .vcp/task/plan/manifest.json (then read step files)
 OUTPUT: .vcp/task/plan-review-{N}.json
 PROMPT MUST INCLUDE: 'Write output to .vcp/task/plan-review-{N}.json.'
 RESULT HANDLING: Read .vcp/task/plan-review-{N}.json → check status → handle per Result Handling rules
@@ -499,7 +499,7 @@ For `plan-review` (CLI provider, stageIndex N, outputFile plan-review-N.json):
 ```
 PHASE: Plan Review {N} (CLI - final gate)
 AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json
+INPUT: .vcp/task/user-story/acceptance-criteria.json, .vcp/task/user-story/scope.json, .vcp/task/plan/manifest.json (then read step files)
 OUTPUT: .vcp/task/plan-review-{N}.json
 NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
       --output-file "${CLAUDE_PROJECT_DIR}/.vcp/task/plan-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
@@ -511,7 +511,7 @@ For `implementation`:
 ```
 PHASE: Implementation
 AGENT: dev-buddy:implementer (model: {stage.model})
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json
+INPUT: .vcp/task/user-story/ (all sections), .vcp/task/plan/manifest.json (then read step files)
 OUTPUT: .vcp/task/impl-result.json
 COMPLETION: .vcp/task/impl-result.json exists with status='complete'
 ```
@@ -520,7 +520,7 @@ For `code-review` (subscription/api provider, stageIndex N, outputFile code-revi
 ```
 PHASE: Code Review {N}
 AGENT: dev-buddy:code-reviewer (model: {stage.model})
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, .vcp/task/impl-result.json
+INPUT: .vcp/task/user-story/acceptance-criteria.json, .vcp/task/user-story/scope.json, .vcp/task/plan/manifest.json (then read step files), .vcp/task/impl-result.json
 OUTPUT: .vcp/task/code-review-{N}.json
 PROMPT MUST INCLUDE: 'Write output to .vcp/task/code-review-{N}.json.'
 RESULT HANDLING: Read .vcp/task/code-review-{N}.json → check status → handle per Result Handling rules
@@ -531,7 +531,7 @@ For `code-review` (CLI provider, stageIndex N, outputFile code-review-N.json):
 ```
 PHASE: Code Review {N} (CLI - final gate)
 AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, .vcp/task/impl-result.json
+INPUT: .vcp/task/user-story/acceptance-criteria.json, .vcp/task/user-story/scope.json, .vcp/task/plan/manifest.json (then read step files), .vcp/task/impl-result.json
 OUTPUT: .vcp/task/code-review-{N}.json
 NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
       --output-file "${CLAUDE_PROJECT_DIR}/.vcp/task/code-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
@@ -552,8 +552,8 @@ COMPLETION: .vcp/task/code-review-{N}.json exists with status field
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "task_id": "4", "parallel_group_id": null, "current_version": 1 },
-    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-refined.json", "task_id": "5", "parallel_group_id": null, "current_version": 1 },
+    { "type": "requirements", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "user-story/manifest.json", "task_id": "4", "parallel_group_id": null, "current_version": 1 },
+    { "type": "planning", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan/manifest.json", "task_id": "5", "parallel_group_id": null, "current_version": 1 },
     { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-anthropic-subscription-sonnet-1-v1.json", "task_id": "6", "parallel_group_id": null, "current_version": 1 },
     { "type": "plan-review", "provider": "anthropic-subscription", "providerType": "subscription", "model": "opus", "output_file": "plan-review-anthropic-subscription-opus-2-v1.json", "task_id": "7", "parallel_group_id": null, "current_version": 1 },
     { "type": "plan-review", "provider": "my-codex-preset", "providerType": "cli", "model": "o3", "output_file": "plan-review-my-codex-preset-o3-3-v1.json", "task_id": "8", "parallel_group_id": null, "current_version": 1 },
@@ -1210,7 +1210,7 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
     "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
   },
   "stages": [
-    { "type": "requirements", "provider": "...", "providerType": "subscription", "model": "opus", "output_file": "user-story.json", "task_id": "4", "parallel_group_id": null, "current_version": 1 },
+    { "type": "requirements", "provider": "...", "providerType": "subscription", "model": "opus", "output_file": "user-story/manifest.json", "task_id": "4", "parallel_group_id": null, "current_version": 1 },
     { "type": "plan-review", "provider": "...", "providerType": "subscription", "model": "sonnet", "output_file": "plan-review-...-sonnet-1-v1.json", "task_id": "7", "parallel_group_id": 1, "current_version": 1 }
   ]
 }
@@ -1250,7 +1250,7 @@ The `review-validator.ts` derives review file lists dynamically from `resolved_c
 }
 ```
 
-### user-story.json, plan-refined.json, impl-result.json
+### user-story/manifest.json, plan/manifest.json, impl-result.json
 
 Same as before — singleton stages use canonical file names.
 
@@ -1299,6 +1299,9 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/api-task-runner.ts" \
 ...prompt...
 TASK_EOF
 ```
+
+**For review stages (plan-review, code-review) ONLY:** Add `--system-prompt "${CLAUDE_PLUGIN_ROOT}/docs/review-guidelines.md"` to the api-task-runner.ts invocation to inject centralized review guidelines into the API session's system prompt.
+
 Save `task_id` along with the pipeline task ID, provider, and model. If no `task_id` is returned, treat as dispatch failure.
 Then poll: `TaskOutput(task_id, block: true, timeout: min(timeout_ms + 120000, 600000))`. If not complete, repeat `TaskOutput` with `timeout: 600000` until done.
 Uses `--task-stdin` with heredoc to avoid OS argv size limits and ps exposure.
@@ -1314,13 +1317,13 @@ Parse the final output for JSON: `{ event: "complete", result: "..." }` or `{ ev
 2. **Tasks are primary** — Create tasks with `blockedBy` for structural enforcement
 3. **No phase skipping** — ALL phases execute in order. Exception: Resume path (Step 0) skips already-completed stages by creating pre-completed tasks. Pre-existing plans are INPUT, not substitutes.
 4. **Data-driven task chain** — Iterate over `feature_pipeline` array, create one task per entry. Number of tasks = length of pipeline array.
-5. **Versioned file naming** — Multi-instance stages: `{type}-{provider}-{model}-{index}-v{version}.json` (e.g., `code-review-anthropic-subscription-sonnet-1-v1.json`). Singleton stages: `user-story.json`, `plan-refined.json`, `impl-result.json`. Re-reviews create new versioned files (append-only).
+5. **Versioned file naming** — Multi-instance stages: `{type}-{provider}-{model}-{index}-v{version}.json` (e.g., `code-review-anthropic-subscription-sonnet-1-v1.json`). Singleton stages: `user-story/manifest.json`, `plan/manifest.json`, `impl-result.json`. Re-reviews create new versioned files (append-only).
 6. **Same-stage re-review (two-phase)** — After fix, the SAME stage index re-reviews with a new version file. `stages[].output_file` is updated AFTER re-review completes (not before) to preserve phase detection during fix phase.
 7. **resolved_config snapshot** — pipeline-tasks.json includes full PipelineConfig. Hooks read this snapshot, never ~/.vcp/dev-buddy.json.
 8. **max_iterations from config** — Use resolved_config.max_iterations for the fix/re-review cycle limit.
 9. **CLI stages pass --preset, --model, --output-file** — CLI provider stages MUST pass --preset, --model, and --output-file to cli-executor.ts.
 10. **SubagentStop enforces** — Hook validates reviewer outputs and can block
-11. **AC verification required** — All reviews MUST verify acceptance criteria from user-story.json
+11. **AC verification required** — All reviews MUST verify acceptance criteria from user-story/acceptance-criteria.json (or legacy user-story.json)
 12. **Task descriptions are execution context** — Every TaskCreate includes AGENT, MODEL, INPUT, OUTPUT. Main loop calls TaskGet() before spawning.
 13. **Progressive enrichment before completion** — Before marking a task completed, extract key context and TaskUpdate the next task's description.
 14. **Team-based execution is ONLY for requirements gathering** — Spawn specialist teammates (via `Task(team_name: ...)` and `SendMessage`) ONLY during the requirements gathering phase. ALL other phases (planning, plan-review, implementation, code-review, fix tasks, re-reviews) use one-shot `Task()` calls WITHOUT `team_name`. Parallel review groups dispatch concurrent one-shot `Task()` calls — not team-spawned teammates. Never spawn teammates outside requirements gathering. The pipeline team exists for task tool availability — not for spawning workers in every phase.

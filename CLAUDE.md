@@ -59,6 +59,8 @@ The subprocess env uses a platform-aware allowlist (not `...process.env`) for cl
 Per-task timeout defaults to 5 minutes, configurable via `ApiPreset.timeout_ms` (set in the web portal under "Task Timeout").
 `api-task-runner.ts --task-timeout` receives the preset's timeout value.
 
+The runner also supports `--system-prompt <path>` to append a file (must be under plugin's `docs/` dir) to the session's system prompt — used for review stages to inject centralized review guidelines.
+
 See `plugins/dev-buddy/CLAUDE.md` § "API Task Runner Architecture" for full details.
 
 ### Writing Standards

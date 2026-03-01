@@ -46,7 +46,7 @@ This pipeline uses a **Task + Hook architecture** with a persistent pipeline tea
 
 1. **Load config** - Read `~/.vcp/dev-buddy.json`, resolve `bugfix_pipeline` stages
 2. **RCA stages** - Sequential root-cause-analyst agents (one per `rca` stage)
-3. **Inline consolidation** - Orchestrator consolidates RCA findings, writes `user-story.json` + `plan-refined.json`
+3. **Inline consolidation** - Orchestrator consolidates RCA findings, writes `user-story/` + `plan/` multi-file directories
 4. **Plan validation** - Optional `plan-review` stages (e.g., Codex RCA+plan gate)
 5. **Implementation** - implementer agent
 6. **Code reviews** - Sequential, one per `code-review` stage
@@ -120,8 +120,8 @@ When a review returns `needs_changes`:
 
 | File Pattern | Stage Type | Description |
 |------|-------------|-------------|
-| `.vcp/task/user-story.json` | requirements | Approved requirements (singleton) |
-| `.vcp/task/plan-refined.json` | planning | Implementation plan (singleton) |
+| `.vcp/task/user-story/manifest.json` | requirements | Approved requirements (multi-file directory) |
+| `.vcp/task/plan/manifest.json` | planning | Implementation plan (multi-file directory) |
 | `.vcp/task/plan-review-{provider}-{model}-{N}-v{V}.json` | plan-review | Plan review (e.g., `plan-review-anthropic-subscription-sonnet-1-v1.json`) |
 | `.vcp/task/impl-result.json` | implementation | Implementation result (singleton) |
 | `.vcp/task/code-review-{provider}-{model}-{N}-v{V}.json` | code-review | Code review (e.g., `code-review-anthropic-subscription-opus-2-v1.json`) |

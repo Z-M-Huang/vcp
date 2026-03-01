@@ -56,9 +56,9 @@ You are a senior software architect with expertise in system design, architectur
 
 ## Output Format
 
-**Use the Write tool** to write to `.vcp/task/plan-refined.json`.
+Write each section as a separate file using the Write tool, in this order:
 
-**IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
+1. **Write `.vcp/task/plan/meta.json`**
 ```json
 {
   "id": "plan-YYYYMMDD-HHMMSS",
@@ -73,46 +73,88 @@ You are a senior software architect with expertise in system design, architectur
   },
   "implementation": {
     "max_iterations": 10
-  },
-  "steps": [
-    {
-      "id": 1,
-      "phase": "setup|implementation|testing|cleanup",
-      "file": "path/to/file.ts",
-      "action": "create|modify|delete",
-      "description": "What to do and why",
-      "code_changes": "Pseudocode or detailed description",
-      "dependencies": [0],
-      "tests": ["Related test cases"],
-      "risks": ["Potential issues"],
-      "rollback": "How to undo if needed"
-    }
+  }
+}
+```
+
+2. **Write `.vcp/task/plan/steps/{N}.json` for each step** (one file per step)
+```json
+{
+  "id": 1,
+  "phase": "setup|implementation|testing|cleanup",
+  "file": "path/to/file.ts",
+  "action": "create|modify|delete",
+  "description": "What to do and why",
+  "code_changes": "Pseudocode or detailed description",
+  "dependencies": [0],
+  "tests": ["Related test cases"],
+  "risks": ["Potential issues"],
+  "rollback": "How to undo if needed"
+}
+```
+
+3. **Write `.vcp/task/plan/test-plan.json`**
+```json
+{
+  "commands": ["npm test", "npm run lint"],
+  "success_pattern": "All tests passed|passed",
+  "failure_pattern": "FAILED|Error|failed",
+  "run_after_review": true,
+  "coverage_target": "80%"
+}
+```
+
+4. **Write `.vcp/task/plan/risk-assessment.json`**
+```json
+{
+  "technical_risks": [
+    { "risk": "Description", "severity": "high|medium|low", "mitigation": "Strategy" }
   ],
+  "infinite_loop_risks": ["Conditions that could cause review/test loops"],
+  "security_considerations": ["Security implications"],
+  "performance_impact": "Expected performance change"
+}
+```
+
+5. **Write `.vcp/task/plan/dependencies.json`**
+```json
+{
+  "external": ["npm packages, APIs"],
+  "internal": ["Other modules, services"],
+  "breaking_changes": ["Changes that affect other code"]
+}
+```
+
+6. **Write `.vcp/task/plan/files.json`**
+```json
+{
   "files_to_modify": ["path/to/file.ts"],
-  "files_to_create": ["path/to/new-file.ts"],
-  "test_plan": {
-    "commands": ["npm test", "npm run lint"],
-    "success_pattern": "All tests passed|passed",
-    "failure_pattern": "FAILED|Error|failed",
-    "run_after_review": true,
-    "coverage_target": "80%"
-  },
-  "risk_assessment": {
-    "technical_risks": [
-      { "risk": "Description", "severity": "high|medium|low", "mitigation": "Strategy" }
-    ],
-    "infinite_loop_risks": ["Conditions that could cause review/test loops"],
-    "security_considerations": ["Security implications"],
-    "performance_impact": "Expected performance change"
-  },
-  "dependencies": {
-    "external": ["npm packages, APIs"],
-    "internal": ["Other modules, services"],
-    "breaking_changes": ["Changes that affect other code"]
+  "files_to_create": ["path/to/new-file.ts"]
+}
+```
+
+7. **Write `.vcp/task/plan/manifest.json` (LAST — signals completion)**
+```json
+{
+  "artifact": "plan",
+  "format_version": "2.0",
+  "id": "plan-YYYYMMDD-HHMMSS",
+  "title": "Implementation plan title",
+  "summary": "2-3 sentence overview",
+  "step_count": 15,
+  "sections": {
+    "meta": "meta.json",
+    "steps": ["steps/1.json", "steps/2.json"],
+    "test_plan": "test-plan.json",
+    "risk_assessment": "risk-assessment.json",
+    "dependencies": "dependencies.json",
+    "files": "files.json"
   },
   "completion_promise": "<promise>IMPLEMENTATION_COMPLETE</promise>"
 }
 ```
+
+**IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 
 ## Quality Standards
 
@@ -154,7 +196,8 @@ Glob: "**/*.test.{ts,js}" or "**/*.spec.{ts,js}"
 
 **You MUST write the output file before completing.** Your work is NOT complete until:
 
-1. `.vcp/task/plan-refined.json` has been written using the Write tool
+1. All section files in `.vcp/task/plan/` have been written using the Write tool
+2. `.vcp/task/plan/manifest.json` was written LAST (signals completion)
 2. The JSON is valid and contains all required fields
 3. All referenced files have been read and verified to exist
 

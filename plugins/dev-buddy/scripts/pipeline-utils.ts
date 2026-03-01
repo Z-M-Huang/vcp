@@ -132,6 +132,22 @@ function getLegacyOutputFileName(type: StageType, index: number): string {
   }
 }
 
+/** Read user story acceptance criteria: multi-file first, legacy fallback.
+ *  Returns the AC array or null if not found. */
+export function readUserStoryACs(taskDir: string): Array<{ id: string }> | null {
+  // Multi-file: acceptance-criteria.json is the AC array directly
+  const multiFileACs = readJson(path.join(taskDir, 'user-story', 'acceptance-criteria.json'));
+  if (Array.isArray(multiFileACs) && multiFileACs.length > 0) {
+    return multiFileACs as Array<{ id: string }>;
+  }
+  // Legacy: user-story.json has acceptance_criteria property
+  const legacyStory = readJson(path.join(taskDir, 'user-story.json')) as Record<string, unknown> | null;
+  if (legacyStory && Array.isArray(legacyStory.acceptance_criteria)) {
+    return legacyStory.acceptance_criteria as Array<{ id: string }>;
+  }
+  return null;
+}
+
 /** Get progress from artifact files */
 export function getProgress(taskDir: string): PipelineProgress {
   const pipelineTasks = readJson(path.join(taskDir, 'pipeline-tasks.json'));
@@ -198,9 +214,16 @@ export function getProgress(taskDir: string): PipelineProgress {
     }
   }
 
+  // Multi-file artifacts: try manifest first, fall back to legacy single file
+  const userStoryManifest = readJson(path.join(taskDir, 'user-story', 'manifest.json')) as Record<string, unknown> | null;
+  const userStory = userStoryManifest ?? readJson(path.join(taskDir, 'user-story.json')) as Record<string, unknown> | null;
+
+  const planManifest = readJson(path.join(taskDir, 'plan', 'manifest.json'));
+  const plan = planManifest ?? readJson(path.join(taskDir, 'plan-refined.json'));
+
   return {
-    userStory: readJson(path.join(taskDir, 'user-story.json')) as Record<string, unknown> | null,
-    plan: readJson(path.join(taskDir, 'plan-refined.json')),
+    userStory,
+    plan,
     pipelineTasks,
     implResult: readJson(path.join(taskDir, 'impl-result.json')) as { status: string } | null,
     stageOutputs,

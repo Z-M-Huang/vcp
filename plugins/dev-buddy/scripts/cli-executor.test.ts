@@ -89,8 +89,8 @@ describe('cli-executor.ts', () => {
       JSON.stringify({ type: 'object' })
     );
     fs.writeFileSync(
-      path.join(mockPluginRoot, 'docs', 'standards.md'),
-      '# Standards\n\nReview standards here.'
+      path.join(mockPluginRoot, 'docs', 'review-guidelines.md'),
+      '# Review Guidelines\n\nReview guidelines here.'
     );
 
     mockHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-home-'));
@@ -290,12 +290,12 @@ describe('cli-executor.ts', () => {
     )).toBe(true);
   });
 
-  test('fails when standards.md missing', async () => {
+  test('fails when review-guidelines.md missing', async () => {
     fs.writeFileSync(
       path.join(tempDir, '.vcp', 'task', 'plan-refined.json'),
       JSON.stringify({ id: 'test', steps: [] })
     );
-    fs.unlinkSync(path.join(mockPluginRoot, 'docs', 'standards.md'));
+    fs.unlinkSync(path.join(mockPluginRoot, 'docs', 'review-guidelines.md'));
 
     const result = await runScript(
       ['--type', 'plan', '--preset', MOCK_PRESET_NAME, '--model', 'test-model', '--plugin-root', mockPluginRoot],
@@ -306,7 +306,7 @@ describe('cli-executor.ts', () => {
     expect(result.code).toBe(1);
     expect(result.events.some(e =>
       e.phase === 'input_validation' &&
-      (e.errors as string[])?.some(err => err.includes('standards'))
+      (e.errors as string[])?.some(err => err.includes('review guidelines'))
     )).toBe(true);
   });
 

@@ -342,6 +342,40 @@ describe('parseArgs', () => {
       '--task-timeout', 'abc',
     ])).toThrow('--task-timeout must be a positive integer');
   });
+
+  test('parses --system-prompt flag', () => {
+    const result = parseArgs([
+      ...base,
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--system-prompt', '/path/to/docs/review-guidelines.md',
+    ]);
+    expect(result.systemPrompt).toBe('/path/to/docs/review-guidelines.md');
+  });
+
+  test('omitting --system-prompt leaves it undefined', () => {
+    const result = parseArgs([
+      ...base,
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+    ]);
+    expect(result.systemPrompt).toBeUndefined();
+  });
+
+  test('rejects --system-prompt without value', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--system-prompt',
+    ])).toThrow('--system-prompt requires a value');
+  });
 });
 
 // ================== ENV_ALLOWLIST ==================

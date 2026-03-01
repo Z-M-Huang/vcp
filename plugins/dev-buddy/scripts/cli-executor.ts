@@ -232,10 +232,10 @@ function validateInputs(args: ParsedArgs, preset: CliPreset): string[] {
     errors.push('.vcp/task directory not found');
   }
 
-  // Check review-specific input files
+  // Check review-specific input files (multi-file first, legacy fallback)
   if (args.type === 'plan') {
-    if (!fileExists(path.join(TASK_DIR, 'plan-refined.json'))) {
-      errors.push('Missing .vcp/task/plan-refined.json for plan review');
+    if (!fileExists(path.join(TASK_DIR, 'plan', 'manifest.json')) && !fileExists(path.join(TASK_DIR, 'plan-refined.json'))) {
+      errors.push('Missing .vcp/task/plan/manifest.json (or legacy plan-refined.json) for plan review');
     }
   } else if (args.type === 'code') {
     if (!fileExists(path.join(TASK_DIR, 'impl-result.json'))) {
@@ -243,7 +243,7 @@ function validateInputs(args: ParsedArgs, preset: CliPreset): string[] {
     }
   }
 
-  // Check schema files
+  // Check schema files and standards
   if (args.pluginRoot) {
     const schemaFile = args.type === 'plan'
       ? 'plan-review.schema.json'
@@ -253,9 +253,9 @@ function validateInputs(args: ParsedArgs, preset: CliPreset): string[] {
       errors.push(`Missing schema file: ${schemaPath}`);
     }
 
-    const standardsPath = path.join(args.pluginRoot, 'docs', 'standards.md');
-    if (!fileExists(standardsPath)) {
-      errors.push(`Missing standards file: ${standardsPath}`);
+    const guidelinesPath = path.join(args.pluginRoot, 'docs', 'review-guidelines.md');
+    if (!fileExists(guidelinesPath)) {
+      errors.push(`Missing review guidelines file: ${guidelinesPath}`);
     }
   }
 
@@ -290,24 +290,31 @@ interface CmdConfig {
 
 /** Build the review prompt based on review type and context. */
 function buildReviewPrompt(args: ParsedArgs, isResume: boolean): string {
-  const inputFile = args.type === 'plan'
-    ? '.vcp/task/plan-refined.json'
-    : '.vcp/task/impl-result.json';
-  const standardsPath = path.join(args.pluginRoot!, 'docs', 'standards.md');
-  const userStoryFile = '.vcp/task/user-story.json';
-  const userStoryRef = fileExists(userStoryFile) ? ` Requirements and acceptance criteria are in ${userStoryFile}.` : '';
+  // Multi-file artifact paths with legacy fallback
+  const planInput = fileExists('.vcp/task/plan/manifest.json')
+    ? '.vcp/task/plan/manifest.json (read manifest, then step files from sections.steps[])'
+    : '.vcp/task/plan-refined.json';
+  const inputFile = args.type === 'plan' ? planInput : '.vcp/task/impl-result.json';
 
-  const readFilesFirst = `IMPORTANT: You MUST use your shell tools to read ALL referenced files BEFORE producing your review output. Do NOT output the review JSON until you have read and analyzed every file. Read the files first, then produce your final structured review.`;
+  const guidelinesPath = path.join(args.pluginRoot!, 'docs', 'review-guidelines.md');
+
+  // AC source: multi-file first, legacy fallback
+  const acFile = fileExists('.vcp/task/user-story/acceptance-criteria.json')
+    ? '.vcp/task/user-story/acceptance-criteria.json'
+    : '.vcp/task/user-story.json';
+  const userStoryRef = fileExists(acFile) ? ` Requirements and acceptance criteria are in ${acFile}.` : '';
+
+  const readFilesFirst = `IMPORTANT: You MUST use your shell tools to read ALL referenced files BEFORE producing your review output. Do NOT output the review JSON until you have read and analyzed every file. Read the files first, then produce your final structured review. Also read ${guidelinesPath} for the full review rubric and severity definitions.`;
 
   if (isResume && args.changesSummary) {
-    return `${readFilesFirst}\n\nRe-review after fixes. Changes made:\n${args.changesSummary}\n\nVerify fixes address previous concerns. Check against ${standardsPath}.${userStoryRef}`;
+    return `${readFilesFirst}\n\nRe-review after fixes. Changes made:\n${args.changesSummary}\n\nVerify fixes address previous concerns. Check against ${guidelinesPath}.${userStoryRef}`;
   } else if (isResume) {
-    return `${readFilesFirst}\n\nRe-review ${inputFile}. Previous concerns should be addressed. Verify against ${standardsPath}.${userStoryRef}`;
+    return `${readFilesFirst}\n\nRe-review ${inputFile}. Previous concerns should be addressed. Verify against ${guidelinesPath}.${userStoryRef}`;
   } else {
     const criteriaInstruction = args.type === 'plan'
       ? 'Map each acceptance criterion to plan steps.'
       : 'Verify implementation evidence for each acceptance criterion.';
-    return `${readFilesFirst}\n\nReview ${inputFile} against ${standardsPath}.${userStoryRef} Final gate review for ${args.type === 'plan' ? 'plan approval' : 'code quality'}. ${criteriaInstruction} Only set needs_clarification if you have a genuine question for the user after reading the files — NOT because you have not read them yet.`;
+    return `${readFilesFirst}\n\nReview ${inputFile} against ${guidelinesPath}.${userStoryRef} Final gate review for ${args.type === 'plan' ? 'plan approval' : 'code quality'}. ${criteriaInstruction} Only set needs_clarification if you have a genuine question for the user after reading the files — NOT because you have not read them yet.`;
   }
 }
 

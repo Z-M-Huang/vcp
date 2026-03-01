@@ -25,7 +25,7 @@ You coordinate worker agents using Task tools to diagnose and fix a bug. The pip
 
 **Key insight:** `blockedBy` is *data*, not an instruction. Only claim tasks where blockedBy is empty or all dependencies completed.
 
-**Bug-fix differentiator:** This pipeline does NOT use requirements-gatherer or planner agents. The orchestrator itself reads all RCA output files after the last consecutive RCA stage completes, consolidates findings, and writes `user-story.json` + `plan-refined.json` directly. This consolidation is an INLINE ORCHESTRATOR ACTION, not a task.
+**Bug-fix differentiator:** This pipeline does NOT use requirements-gatherer or planner agents. The orchestrator itself reads all RCA output files after the last consecutive RCA stage completes, consolidates findings, and writes the `user-story/` + `plan/` multi-file artifacts directly. This consolidation is an INLINE ORCHESTRATOR ACTION, not a task.
 
 **Stages execute SEQUENTIALLY by default.** Review stages (plan-review, code-review) can be configured for parallel execution via the `parallel` flag on each StageEntry. Non-review stages (rca, implementation) always run sequentially. Each task has `blockedBy` dependencies enforced via TaskUpdate.
 
@@ -52,6 +52,15 @@ bun -e "
       // RCA outputs lack 'status' field — detect completion via root_cause.summary
       if (s.type === 'rca') {
         const complete = out.root_cause && out.root_cause.summary && out.root_cause.root_file;
+        return {...s, file_status: complete ? 'complete' : 'unknown'};
+      }
+      // Multi-file artifact completion via manifest fields
+      if (s.type === 'requirements') {
+        const complete = out.artifact === 'user-story' && out.ac_count > 0;
+        return {...s, file_status: complete ? 'complete' : 'unknown'};
+      }
+      if (s.type === 'planning') {
+        const complete = out.artifact === 'plan' && out.step_count > 0;
         return {...s, file_status: complete ? 'complete' : 'unknown'};
       }
       return {...s, file_status: out.status || 'unknown'};
@@ -207,7 +216,7 @@ Write updated stages array back to .vcp/task/pipeline-tasks.json
 
 **RCA completion detection:** RCA output files do NOT have a `status` field (unlike review/implementation outputs). The resume detection script detects RCA completion via `root_cause.summary` and `root_cause.root_file` — if both are populated, the stage is `complete`. If not, it's `unknown` (treated as pending, stage re-runs).
 
-**Bug-fix RCA edge case:** If all rca-*.json files are complete AND no user-story.json exists → run inline Orchestrator Consolidation first (before entering Main Loop).
+**Bug-fix RCA edge case:** If all rca-*.json files are complete AND no user-story/manifest.json exists → run inline Orchestrator Consolidation first (before entering Main Loop).
 
 #### Step 0.5: Enter Main Loop
 
@@ -391,7 +400,7 @@ For `plan-review` (subscription/api, stageIndex N, outputFile plan-review-N.json
 ```
 PHASE: Plan Review {N} (RCA + Plan Validation)
 AGENT: dev-buddy:plan-reviewer (model: {stage.model})
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, + all rca-*.json files
+INPUT: .vcp/task/plan/manifest.json (then read step files), .vcp/task/user-story/manifest.json, + all rca-*.json files
 OUTPUT: .vcp/task/plan-review-{N}.json
 PROMPT MUST INCLUDE: 'Write output to .vcp/task/plan-review-{N}.json. Validate that the consolidated RCA diagnosis is correct and the fix plan is sound.'
 RESULT HANDLING: Read .vcp/task/plan-review-{N}.json → check status → handle per Result Handling rules
@@ -402,7 +411,7 @@ For `plan-review` (CLI provider, stageIndex N, outputFile plan-review-N.json):
 ```
 PHASE: Plan Review {N} (CLI - RCA Validation gate)
 AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, + all rca-*.json files
+INPUT: .vcp/task/plan/manifest.json (then read step files), .vcp/task/user-story/manifest.json, + all rca-*.json files
 OUTPUT: .vcp/task/plan-review-{N}.json
 NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
       --output-file "${CLAUDE_PROJECT_DIR}/.vcp/task/plan-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
@@ -414,7 +423,7 @@ For `implementation`:
 ```
 PHASE: Implementation (Bug Fix)
 AGENT: dev-buddy:implementer (model: {stage.model})
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json
+INPUT: .vcp/task/plan/manifest.json (read steps from sections.steps[]), .vcp/task/user-story/manifest.json
 OUTPUT: .vcp/task/impl-result.json
 PROMPT MUST INCLUDE: This is a bug fix — make the smallest possible change that addresses the root cause.
 COMPLETION: .vcp/task/impl-result.json exists with status='complete'
@@ -424,7 +433,7 @@ For `code-review` (subscription/api, stageIndex N, outputFile code-review-N.json
 ```
 PHASE: Code Review {N}
 AGENT: dev-buddy:code-reviewer (model: {stage.model})
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, .vcp/task/impl-result.json
+INPUT: .vcp/task/user-story/acceptance-criteria.json, .vcp/task/plan/manifest.json, .vcp/task/impl-result.json
 OUTPUT: .vcp/task/code-review-{N}.json
 PROMPT MUST INCLUDE: 'Write output to .vcp/task/code-review-{N}.json.'
 RESULT HANDLING: Read .vcp/task/code-review-{N}.json → check status → handle per Result Handling rules
@@ -435,7 +444,7 @@ For `code-review` (CLI provider, stageIndex N, outputFile code-review-N.json):
 ```
 PHASE: Code Review {N} (CLI - final gate)
 AGENT: dev-buddy:cli-executor (external — do NOT pass model parameter to Task tool)
-INPUT: .vcp/task/user-story.json, .vcp/task/plan-refined.json, .vcp/task/impl-result.json
+INPUT: .vcp/task/user-story/acceptance-criteria.json, .vcp/task/plan/manifest.json, .vcp/task/impl-result.json
 OUTPUT: .vcp/task/code-review-{N}.json
 NOTE: CLI executor runs cli-executor.ts with --preset {stage.provider} --model {stage.model}
       --output-file "${CLAUDE_PROJECT_DIR}/.vcp/task/code-review-{N}.json" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
@@ -578,7 +587,7 @@ nextStage = stages[completedStageIndex + 1]  // may be null if last
 
 if completedStage.type === 'rca' AND (nextStage === null OR nextStage.type !== 'rca'):
     → Run Orchestrator Consolidation NOW (inline, before dispatching next task)
-    → Write user-story.json and plan-refined.json
+    → Write user-story/ and plan/ multi-file artifacts
     → Then proceed to next task
 ```
 
@@ -617,42 +626,80 @@ Read each file from .vcp/task/ using the output_file from stages[]
   ```
 - Use user's chosen diagnosis, or merge if "all contributing"
 
-### Step 3: Write user-story.json
+### Step 3: Write user-story/ multi-file artifact
 
-Write `.vcp/task/user-story.json` with bug-fix acceptance criteria. **This file name is FIXED — not configurable:**
+Write the user-story as individual section files. **These paths are FIXED — not configurable.** Write files in this order (manifest LAST):
 
+**3a. `.vcp/task/user-story/meta.json`**
+```json
+{
+  "id": "story-YYYYMMDD-HHMMSS",
+  "title": "Fix: [Bug title from RCA]",
+  "pipeline_type": "bug-fix"
+}
+```
+
+**3b. `.vcp/task/user-story/requirements.json`**
+```json
+{
+  "root_cause": "[Consolidated root cause summary]",
+  "root_file": "[path/to/file.ts]",
+  "root_line": 42
+}
+```
+
+**3c. `.vcp/task/user-story/acceptance-criteria.json`**
+```json
+[
+  { "id": "AC1", "description": "Bug is resolved — expected behavior is restored" },
+  { "id": "AC2", "description": "Regression test covers the exact bug scenario" },
+  { "id": "AC3", "description": "No existing tests are broken by the fix" },
+  { "id": "AC4", "description": "Root cause is addressed, not just symptoms patched" }
+]
+```
+
+**3d. `.vcp/task/user-story/scope.json`**
+```json
+{
+  "affected_files": ["[merged from all RCAs]"],
+  "blast_radius": "[from RCA impact analysis]",
+  "fix_constraints": {
+    "must_preserve": ["[merged from all RCAs]"],
+    "safe_to_change": ["[merged from all RCAs]"]
+  }
+}
+```
+
+**3e. `.vcp/task/user-story/test-criteria.json`**
+```json
+{
+  "implementation": { "max_iterations": 10 }
+}
+```
+
+**3f. `.vcp/task/user-story/manifest.json`** (write LAST)
 ```json
 {
   "id": "story-YYYYMMDD-HHMMSS",
   "title": "Fix: [Bug title from RCA]",
   "pipeline_type": "bug-fix",
-  "requirements": {
-    "root_cause": "[Consolidated root cause summary]",
-    "root_file": "[path/to/file.ts]",
-    "root_line": 42
-  },
-  "acceptance_criteria": [
-    { "id": "AC1", "description": "Bug is resolved — expected behavior is restored" },
-    { "id": "AC2", "description": "Regression test covers the exact bug scenario" },
-    { "id": "AC3", "description": "No existing tests are broken by the fix" },
-    { "id": "AC4", "description": "Root cause is addressed, not just symptoms patched" }
-  ],
-  "scope": {
-    "affected_files": ["[merged from all RCAs]"],
-    "blast_radius": "[from RCA impact analysis]",
-    "fix_constraints": {
-      "must_preserve": ["[merged from all RCAs]"],
-      "safe_to_change": ["[merged from all RCAs]"]
-    }
-  },
-  "implementation": { "max_iterations": 10 }
+  "artifact": "user-story",
+  "ac_count": 4,
+  "sections": {
+    "meta": "meta.json",
+    "requirements": "requirements.json",
+    "acceptance_criteria": "acceptance-criteria.json",
+    "scope": "scope.json",
+    "test_criteria": "test-criteria.json"
+  }
 }
 ```
 
-### Step 4: Write plan-refined.json
+### Step 4: Write plan/ multi-file artifact
 
-Write `.vcp/task/plan-refined.json` with a minimal fix plan. **This file name is FIXED — not configurable:**
+Write the plan as individual section files. **These paths are FIXED — not configurable.** Write files in this order (manifest LAST):
 
+**4a. `.vcp/task/plan/meta.json`**
 ```json
 {
   "id": "plan-YYYYMMDD-HHMMSS",
@@ -662,24 +709,71 @@ Write `.vcp/task/plan-refined.json` with a minimal fix plan. **This file name is
     "root_cause": "[Consolidated root cause]",
     "fix_strategy": "[From recommended_approach of chosen RCA]",
     "complexity": "[From estimated_complexity]"
-  },
-  "steps": [
-    { "description": "Write regression test that reproduces the bug", "files": ["path/to/test.ts"] },
-    { "description": "Apply minimal fix to [root_file] at line [root_line]", "files": ["path/to/file.ts"] },
-    { "description": "Verify regression test passes, all existing tests pass", "files": [] }
-  ],
-  "test_plan": {
-    "commands": ["npm test", "npm run lint"],
-    "regression_test": "Specific regression test to write",
-    "success_pattern": "All tests pass",
-    "failure_pattern": "FAIL|ERROR"
-  },
-  "risk_assessment": {
-    "blast_radius": "[from RCA]",
-    "regression_risk": "[from RCA]",
-    "mitigation": "Regression test covers the exact bug scenario"
-  },
+  }
+}
+```
+
+**4b. `.vcp/task/plan/steps/{N}.json`** (one file per step, N = 1, 2, 3, ...)
+```json
+// .vcp/task/plan/steps/1.json
+{ "description": "Write regression test that reproduces the bug", "files": ["path/to/test.ts"] }
+
+// .vcp/task/plan/steps/2.json
+{ "description": "Apply minimal fix to [root_file] at line [root_line]", "files": ["path/to/file.ts"] }
+
+// .vcp/task/plan/steps/3.json
+{ "description": "Verify regression test passes, all existing tests pass", "files": [] }
+```
+
+**4c. `.vcp/task/plan/test-plan.json`**
+```json
+{
+  "commands": ["npm test", "npm run lint"],
+  "regression_test": "Specific regression test to write",
+  "success_pattern": "All tests pass",
+  "failure_pattern": "FAIL|ERROR"
+}
+```
+
+**4d. `.vcp/task/plan/risk-assessment.json`**
+```json
+{
+  "blast_radius": "[from RCA]",
+  "regression_risk": "[from RCA]",
+  "mitigation": "Regression test covers the exact bug scenario"
+}
+```
+
+**4e. `.vcp/task/plan/dependencies.json`**
+```json
+{
   "completion_promise": "<promise>IMPLEMENTATION_COMPLETE</promise>"
+}
+```
+
+**4f. `.vcp/task/plan/files.json`**
+```json
+{
+  "affected_files": ["[all files from steps]"]
+}
+```
+
+**4g. `.vcp/task/plan/manifest.json`** (write LAST)
+```json
+{
+  "id": "plan-YYYYMMDD-HHMMSS",
+  "title": "Fix: [Bug title]",
+  "pipeline_type": "bug-fix",
+  "artifact": "plan",
+  "step_count": 3,
+  "sections": {
+    "meta": "meta.json",
+    "steps": ["steps/1.json", "steps/2.json", "steps/3.json"],
+    "test_plan": "test-plan.json",
+    "risk_assessment": "risk-assessment.json",
+    "dependencies": "dependencies.json",
+    "files": "files.json"
+  }
 }
 ```
 
@@ -861,15 +955,16 @@ The `review-validator.ts` derives review file lists dynamically from pipeline-ta
 1. **Pipeline team first, then task chain** — Create team (Step 1.3), verify tools (Step 1.4), then create task chain.
 2. **Non-review stages sequential** — RCA, implementation always execute sequentially. Review stages (plan-review, code-review) with `parallel: true` form parallel groups via fan-out/fan-in. Every non-parallel task has `blockedBy` pointing to the previous task.
 3. **Data-driven task chain** — Iterate over `bugfix_pipeline` array, create one task per entry.
-4. **RCA consolidation is inline** — NOT a task, NOT an agent call. The orchestrator reads all rca-*.json files and writes user-story.json + plan-refined.json directly. Fixed file names.
+4. **RCA consolidation is inline** — NOT a task, NOT an agent call. The orchestrator reads all rca-*.json files and writes `user-story/` + `plan/` multi-file artifacts directly. Singleton stage names: `user-story/manifest.json`, `plan/manifest.json`, `impl-result.json`.
 5. **Consolidation trigger** — After completing an rca stage, check if next stage is non-rca (or no next stage). If yes, run consolidation immediately before dispatching next task.
 6. **Versioned file naming** — `{type}-{provider}-{model}-{index}-v{version}.json` (e.g., `rca-anthropic-subscription-sonnet-1-v1.json`). Re-reviews create new versioned files (append-only).
 7. **Same-stage re-review (two-phase)** — After fix, SAME stage index re-reviews with a new version file. `stages[].output_file` updated AFTER re-review completes.
-8. **resolved_config snapshot** — pipeline-tasks.json includes full PipelineConfig. Hooks read this, never ~/.vcp/dev-buddy.json.
-9. **max_iterations from config** — Use resolved_config.max_iterations for fix/re-review cycle limit.
-10. **CLI stages pass --preset, --model, --output-file** — CLI provider stages MUST pass --preset, --model, and --output-file to cli-executor.ts.
-11. **Minimal fix principle** — Fix is the smallest possible change addressing root cause. No refactoring.
-12. **No teammate spawning** — The bug-fix pipeline does NOT use team-based parallel execution. Never spawn teammates with `Task(team_name: ...)`. The pipeline team exists solely for task tool availability (TaskCreate/TaskUpdate/TaskList), not for spawning workers. Parallel review groups use concurrent one-shot `Task()` calls (without `team_name`), NOT team-spawned teammates.
+8. **AC verification** — Code reviewers reference `user-story/acceptance-criteria.json` for acceptance criteria verification.
+9. **resolved_config snapshot** — pipeline-tasks.json includes full PipelineConfig. Hooks read this, never ~/.vcp/dev-buddy.json.
+10. **max_iterations from config** — Use resolved_config.max_iterations for fix/re-review cycle limit.
+11. **CLI stages pass --preset, --model, --output-file** — CLI provider stages MUST pass --preset, --model, and --output-file to cli-executor.ts.
+12. **Minimal fix principle** — Fix is the smallest possible change addressing root cause. No refactoring.
+13. **No teammate spawning** — The bug-fix pipeline does NOT use team-based parallel execution. Never spawn teammates with `Task(team_name: ...)`. The pipeline team exists solely for task tool availability (TaskCreate/TaskUpdate/TaskList), not for spawning workers. Parallel review groups use concurrent one-shot `Task()` calls (without `team_name`), NOT team-spawned teammates.
 
 ---
 
@@ -913,6 +1008,9 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/api-task-runner.ts" \
 ...prompt...
 TASK_EOF
 ```
+
+**For review stages (plan-review, code-review) ONLY:** Add `--system-prompt "${CLAUDE_PLUGIN_ROOT}/docs/review-guidelines.md"` to inject centralized review guidelines into the API session's system prompt.
+
 Save `task_id` along with the pipeline task ID, provider, and model. If no `task_id` is returned, treat as dispatch failure.
 Then poll: `TaskOutput(task_id, block: true, timeout: min(timeout_ms + 120000, 600000))`. If not complete, repeat `TaskOutput` with `timeout: 600000` until done.
 Uses `--task-stdin` with heredoc to avoid OS argv size limits and ps exposure.

@@ -79,7 +79,7 @@ Before reading analysis files, verify them:
    - Ask "Approve this user story?" with options: Approve / Revise scope / Add requirements
    - If user approves: set `approved_by: "user"` and `approved_at` to current ISO timestamp
    - If user wants changes: incorporate feedback and re-ask
-8. **Write the unified `.vcp/task/user-story.json`** using the standard output format below
+8. **Write the user story as multi-file sections** in `.vcp/task/user-story/` using the standard output format below
 9. **Before completing, include this exact final reminder to the orchestrator lead:**
    - `ACTION REQUIRED: Send 'shutdown_request' to all specialist teammates before marking the requirements task complete.`
 
@@ -112,49 +112,86 @@ If the specialist analyses are insufficient to produce complete acceptance crite
 
 ## Output Format
 
-**Use the Write tool** to write to `.vcp/task/user-story.json`.
+Write each section as a separate file using the Write tool, in this order:
 
-**IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
+1. **Write `.vcp/task/user-story/meta.json`**
 ```json
 {
   "id": "story-YYYYMMDD-HHMMSS",
   "title": "Concise feature title",
   "description": "User story in As a/I want/So that format",
-  "requirements": {
-    "functional": ["Core functionality requirements"],
-    "non_functional": ["Performance, security, usability requirements"],
-    "constraints": ["Technical and business constraints"]
-  },
-  "acceptance_criteria": [
-    {
-      "id": "AC1",
-      "scenario": "Scenario name",
-      "given": "Initial context",
-      "when": "Action taken",
-      "then": "Expected outcome"
-    }
-  ],
-  "scope": {
-    "in_scope": ["Explicitly included items"],
-    "out_of_scope": ["Explicitly excluded items"],
-    "assumptions": ["Documented assumptions"]
-  },
-  "test_criteria": {
-    "commands": ["Test commands for TDD validation"],
-    "success_pattern": "Regex for success",
-    "failure_pattern": "Regex for failure"
-  },
   "implementation": {
     "max_iterations": 10,
     "priority": "P0|P1|P2",
     "rice_score": { "reach": 0, "impact": 0, "confidence": 0, "effort": 0 }
   },
   "questions_resolved": ["List of clarified questions"],
-  "vcp_standards_referenced": [],
+  "vcp_standards_referenced": []
+}
+```
+
+2. **Write `.vcp/task/user-story/requirements.json`**
+```json
+{
+  "functional": ["Core functionality requirements"],
+  "non_functional": ["Performance, security, usability requirements"],
+  "constraints": ["Technical and business constraints"]
+}
+```
+
+3. **Write `.vcp/task/user-story/acceptance-criteria.json`**
+```json
+[
+  {
+    "id": "AC1",
+    "scenario": "Scenario name",
+    "given": "Initial context",
+    "when": "Action taken",
+    "then": "Expected outcome"
+  }
+]
+```
+
+4. **Write `.vcp/task/user-story/scope.json`**
+```json
+{
+  "in_scope": ["Explicitly included items"],
+  "out_of_scope": ["Explicitly excluded items"],
+  "assumptions": ["Documented assumptions"]
+}
+```
+
+5. **Write `.vcp/task/user-story/test-criteria.json`**
+```json
+{
+  "commands": ["Test commands for TDD validation"],
+  "success_pattern": "Regex for success",
+  "failure_pattern": "Regex for failure"
+}
+```
+
+6. **Write `.vcp/task/user-story/manifest.json` (LAST — signals completion)**
+```json
+{
+  "artifact": "user-story",
+  "format_version": "2.0",
+  "id": "story-YYYYMMDD-HHMMSS",
+  "title": "Concise feature title",
+  "description": "User story in As a/I want/So that format",
+  "ac_count": 26,
+  "sections": {
+    "meta": "meta.json",
+    "requirements": "requirements.json",
+    "acceptance_criteria": "acceptance-criteria.json",
+    "scope": "scope.json",
+    "test_criteria": "test-criteria.json"
+  },
   "approved_by": "user",
   "approved_at": "ISO8601"
 }
 ```
+
+**IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 
 ## Quality Checklist
 
@@ -188,7 +225,8 @@ When you need clarification:
 
 **You MUST write the output file before completing.** Your work is NOT complete until:
 
-1. `.vcp/task/user-story.json` has been written using the Write tool
+1. All section files in `.vcp/task/user-story/` have been written using the Write tool
+2. `.vcp/task/user-story/manifest.json` was written LAST (signals completion)
 2. The JSON is valid and contains all required fields
 3. User has approved the requirements (set `approved_by` and `approved_at`)
 4. In synthesis mode, your final response includes the mandatory specialist shutdown reminder

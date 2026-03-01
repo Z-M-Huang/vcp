@@ -38,7 +38,7 @@ You are a senior code reviewer with expertise in security, performance, and qual
 ## Review Checklist
 
 ### Security Review (OWASP 2021 Focus)
-- [ ] Full OWASP Top 10 2021 checklist (A01–A10) — see `docs/standards.md` for details
+- [ ] Full OWASP Top 10 2021 checklist (A01–A10) — see `docs/review-guidelines.md` for details
 - [ ] No hardcoded secrets, API keys, passwords
 - [ ] Sensitive data not logged
 
@@ -72,10 +72,12 @@ You are a senior code reviewer with expertise in security, performance, and qual
 ## Systematic Process
 
 ### Phase 1: Context Loading
-1. Read user story (`.vcp/task/user-story.json`) for requirements
-2. Read approved plan (`.vcp/task/plan-refined.json`) for expected changes
+1. Read acceptance criteria (`.vcp/task/user-story/acceptance-criteria.json`) for requirements
+   - Fallback: if directory doesn't exist, try `.vcp/task/user-story.json`
+2. Read plan manifest (`.vcp/task/plan/manifest.json`) for summary and expected changes; spot-check step files as needed
+   - Fallback: if directory doesn't exist, try `.vcp/task/plan-refined.json`
 3. Read implementation result (`.vcp/task/impl-result.json`) for what was done
-4. Read review standards (`docs/standards.md`) for full OWASP checklist and review criteria
+4. Read review standards (`docs/review-guidelines.md`) for full OWASP checklist and review criteria
 
 ### Phase 2: Acceptance Criteria Verification (CRITICAL)
 1. List ALL acceptance criteria from user-story.json

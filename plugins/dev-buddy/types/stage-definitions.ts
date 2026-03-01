@@ -46,13 +46,13 @@ export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
     singleton: true,
     allowed_pipelines: ['feature'],
     agent_type: 'requirements-gatherer',
-    output_file_pattern: 'user-story.json',
+    output_file_pattern: 'user-story/manifest.json',
   },
   planning: {
     singleton: true,
     allowed_pipelines: ['feature'],
     agent_type: 'planner',
-    output_file_pattern: 'plan-refined.json',
+    output_file_pattern: 'plan/manifest.json',
   },
   'plan-review': {
     singleton: false,
@@ -135,8 +135,11 @@ export function getOutputFileName(
 /** Runtime set of valid stage type strings (derived from STAGE_DEFINITIONS keys). */
 export const VALID_STAGE_TYPES: ReadonlySet<string> = new Set(Object.keys(STAGE_DEFINITIONS));
 
-/** Output filenames must be safe basenames: no path separators, no traversal. */
-const SAFE_FILENAME_RE = /^[a-z0-9][a-z0-9._-]*\.json$/;
+/**
+ * Output filenames must be safe paths: no traversal, each segment starts with alphanumeric.
+ * Allows paths like 'user-story/manifest.json' but rejects '../evil.json'.
+ */
+const SAFE_PATH_RE = /^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*\.json$/;
 
 /** Validate a single stages[] entry from pipeline-tasks.json.
  *  Checks: type is a known StageType, output_file is a safe JSON basename. */
@@ -147,7 +150,7 @@ export function isValidStageEntry(entry: unknown): entry is { type: string; outp
     typeof e.type === 'string' &&
     VALID_STAGE_TYPES.has(e.type) &&
     typeof e.output_file === 'string' &&
-    SAFE_FILENAME_RE.test(e.output_file)
+    SAFE_PATH_RE.test(e.output_file)
   );
 }
 

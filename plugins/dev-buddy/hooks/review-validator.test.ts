@@ -358,8 +358,8 @@ describe('review-validator', () => {
           ],
         },
         stages: [
-          { type: 'requirements', output_file: 'user-story.json', current_version: 1 },
-          { type: 'planning', output_file: 'plan-refined.json', current_version: 1 },
+          { type: 'requirements', output_file: 'user-story/manifest.json', current_version: 1 },
+          { type: 'planning', output_file: 'plan/manifest.json', current_version: 1 },
           { type: 'plan-review', output_file: 'plan-review-sub-sonnet-1-v1.json', current_version: 1 },
           { type: 'implementation', output_file: 'impl-result.json', current_version: 1 },
           { type: 'code-review', output_file: 'code-review-sub-sonnet-1-v1.json', current_version: 1 },

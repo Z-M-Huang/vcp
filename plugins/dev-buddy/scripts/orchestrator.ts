@@ -302,10 +302,10 @@ function runDryRun(): void {
   }
 
   // 5. Check required docs
-  if (fs.existsSync(path.join(PLUGIN_ROOT, 'docs', 'standards.md'))) {
-    console.log('docs/standards.md: OK');
+  if (fs.existsSync(path.join(PLUGIN_ROOT, 'docs', 'review-guidelines.md'))) {
+    console.log('docs/review-guidelines.md: OK');
   } else {
-    console.log('docs/standards.md: MISSING');
+    console.log('docs/review-guidelines.md: MISSING');
     errors++;
   }
 
