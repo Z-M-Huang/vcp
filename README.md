@@ -239,7 +239,7 @@ Their findings inform requirements gathering — producing richer, more complete
 
 ### Configurable Pipeline
 
-The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. Each stage specifies a type, provider, and model. Add, remove, or reorder stages. Swap AI providers per stage. Use the web portal (`/dev-buddy-config`) or edit JSON directly.
+The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. Each stage specifies a type, provider, and model. Add, remove, or reorder stages. Swap AI providers per stage — API presets support both **Anthropic-compatible** and **OpenAI-compatible** endpoints via the `protocol` field. Use the web portal (`/dev-buddy-config`) or edit JSON directly.
 
 <details>
 <summary><strong>Example: feature pipeline with Codex final gates</strong> — click to expand</summary>
