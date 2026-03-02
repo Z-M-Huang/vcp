@@ -39,9 +39,13 @@ VCP enforces standards through three layers:
 
 ### Dev Buddy API Task Runner
 
-The API task runner (`plugins/dev-buddy/scripts/api-task-runner.ts`) is a per-invocation script that creates a V2 Agent SDK session, runs one task, outputs the result as JSON to stdout, and exits. Each invocation is an independent process — multiple instances can run in parallel safely.
+The API task runner (`plugins/dev-buddy/scripts/api-task-runner.ts`) runs one task per invocation, outputs the result as JSON to stdout, and exits. Each invocation is an independent process — multiple instances can run in parallel safely.
 
-**Env var mapping for API presets:**
+Both protocols implement the shared `AgentRunner` interface:
+- **`AnthropicRunner`** (default) — V2 Agent SDK session with 6 built-in tools
+- **`OpenAIRunner`** (`protocol: 'openai'`) — multi-turn function-calling agent loop via `fetch()` with 6 local tool implementations (read_file, write_file, edit_file, bash, glob, grep)
+
+**Env var mapping for Anthropic API presets:**
 
 | Env Var | Source | Purpose |
 |---------|--------|---------|
@@ -55,7 +59,9 @@ The API task runner (`plugins/dev-buddy/scripts/api-task-runner.ts`) is a per-in
 All aliases set to the same provider model name (**case-sensitive** — e.g., `MiniMax-M2.5` not `minimax-m2.5`).
 Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers; the env vars map those to the actual provider model.
 
-The subprocess env uses a platform-aware allowlist (not `...process.env`) for clean isolation.
+The OpenAI runner uses `preset.base_url` and `preset.api_key` directly in HTTP headers — no env var mapping needed.
+
+The subprocess env (Anthropic path) uses a platform-aware allowlist (not `...process.env`) for clean isolation.
 Per-task timeout defaults to 5 minutes, configurable via `ApiPreset.timeout_ms` (set in the web portal under "Task Timeout").
 `api-task-runner.ts --task-timeout` receives the preset's timeout value.
 

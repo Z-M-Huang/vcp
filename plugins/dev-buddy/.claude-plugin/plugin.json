@@ -1,6 +1,6 @@
 {
   "name": "dev-buddy",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "Multi-AI pipeline orchestration with preset providers and hybrid backend routing",
   "author": {
     "name": "Z-M-Huang"
