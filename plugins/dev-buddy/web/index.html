@@ -83,12 +83,32 @@
         <template x-if="newPreset.type === 'api'">
           <div>
             <label>
+              API Format
+              <select x-model="newPreset.protocol">
+                <option value="anthropic">Anthropic (Claude API compatible)</option>
+                <option value="openai">OpenAI (ChatGPT/Codex compatible)</option>
+              </select>
+            </label>
+            <label x-show="newPreset.protocol === 'openai'" x-transition>
+              Reasoning Effort <span class="optional-label">(optional, for reasoning models)</span>
+              <select x-model="newPreset.reasoning_effort_api">
+                <option value="">Not set (default)</option>
+                <option value="minimal">Minimal</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra High</option>
+              </select>
+            </label>
+            <label>
               Base URL
-              <input type="url" x-model="newPreset.base_url" placeholder="https://openrouter.ai/api/v1" required>
+              <input type="url" x-model="newPreset.base_url" placeholder="https://openrouter.ai/api" required>
             </label>
             <label>
               Provider Credential
-              <input type="password" x-model="newPreset.api_key" placeholder="Enter provider credential" required>
+              <input type="password" x-model="newPreset.api_key"
+                x-bind:placeholder="newPreset.protocol === 'openai' ? 'Enter OpenAI-compatible API key' : 'Enter Anthropic-compatible API key'"
+                required>
             </label>
             <label>
               Models (comma-separated)
@@ -268,6 +288,10 @@
               <!-- API preset details -->
               <template x-if="preset.type === 'api'">
                 <div class="api-details">
+                  <div class="detail-row">
+                    <span class="label">API Format:</span>
+                    <span x-text="preset.protocol === 'openai' ? 'OpenAI' : 'Anthropic'"></span>
+                  </div>
                   <div class="detail-row">
                     <span class="label">Base URL:</span>
                     <span x-text="preset.base_url"></span>

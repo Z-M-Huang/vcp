@@ -54,9 +54,14 @@ function devBuddyApp() {
       key: '',
       type: 'subscription',
       name: '',
+      // API preset fields
       base_url: '',
       api_key: '',
       models_str: '',
+      protocol: 'anthropic',
+      reasoning_effort_api: '',
+      timeout_minutes: '',
+      // CLI preset fields
       command: '',
       args_template: '',
       resume_args_template: '',
@@ -64,7 +69,6 @@ function devBuddyApp() {
       supports_resume: false,
       supports_reasoning_effort: false,
       reasoning_effort: 'medium',
-      timeout_minutes: '',
       cli_models_str: '',
     },
 
@@ -144,6 +148,11 @@ function devBuddyApp() {
           api_key: this.newPreset.api_key,
           models,
           timeout_ms: this.newPreset.timeout_minutes ? Number(this.newPreset.timeout_minutes) * 60000 : undefined,
+          protocol: this.newPreset.protocol || 'anthropic',
+          // Only include reasoning_effort when protocol is 'openai' and a value is set
+          reasoning_effort: this.newPreset.protocol === 'openai' && this.newPreset.reasoning_effort_api
+            ? this.newPreset.reasoning_effort_api
+            : undefined,
         };
       } else if (this.newPreset.type === 'subscription') {
         body = {
@@ -307,6 +316,8 @@ function devBuddyApp() {
         }
         this.newPreset.models_str = Array.isArray(preset.models) ? preset.models.join(', ') : '';
         this.newPreset.timeout_minutes = preset.timeout_ms ? String(Math.round(preset.timeout_ms / 60000)) : '';
+        this.newPreset.protocol = preset.protocol || 'anthropic';
+        this.newPreset.reasoning_effort_api = preset.reasoning_effort || '';
       } else if (preset.type === 'cli') {
         this.newPreset.command = preset.command || '';
         this.newPreset.args_template = preset.args_template || '';
@@ -353,6 +364,7 @@ function devBuddyApp() {
           body.base_url = this.newPreset.base_url;
           body.api_key = this.newPreset.api_key;
           body.models = this.newPreset.models_str.split(',').map(m => m.trim()).filter(Boolean);
+          body.protocol = this.newPreset.protocol || 'anthropic';
         } else if (this.newPreset.type === 'cli') {
           body.command = this.newPreset.command;
         }
@@ -382,9 +394,14 @@ function devBuddyApp() {
         key: '',
         type: 'subscription',
         name: '',
+        // API preset fields
         base_url: '',
         api_key: '',
         models_str: '',
+        protocol: 'anthropic',
+        reasoning_effort_api: '',
+        timeout_minutes: '',
+        // CLI preset fields
         command: '',
         args_template: '',
         resume_args_template: '',
@@ -392,7 +409,6 @@ function devBuddyApp() {
         supports_resume: false,
         supports_reasoning_effort: false,
         reasoning_effort: 'medium',
-        timeout_minutes: '',
         cli_models_str: '',
       };
     },

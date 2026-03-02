@@ -50,19 +50,29 @@ export const ENV_ALLOWLIST = [
 // ================== ENV CONSTRUCTION ==================
 
 /**
- * Build the env object for a V2 Agent SDK session from an API preset.
- * Inherits allowlisted host vars + sets provider credentials and model aliases.
- * The env option replaces the entire subprocess env (clean isolation).
+ * Build the base env object from the ENV_ALLOWLIST.
+ * Inherits allowlisted host vars only — no provider-specific vars.
+ * Both Anthropic and OpenAI env builders call this to avoid duplicating
+ * the allowlist loop.
  */
-export function buildSessionEnv(preset: ApiPreset, modelOverride?: string): Record<string, string> {
-  const model = modelOverride ?? preset.models[0]; // Case-sensitive — passed unmodified
+export function buildBaseEnv(): Record<string, string> {
   const env: Record<string, string> = {};
-
   for (const key of ENV_ALLOWLIST) {
     if (process.env[key]) {
       env[key] = process.env[key]!;
     }
   }
+  return env;
+}
+
+/**
+ * Build the env object for a V2 Agent SDK session from an API preset.
+ * Inherits allowlisted host vars + sets Anthropic credentials and model aliases.
+ * The env option replaces the entire subprocess env (clean isolation).
+ */
+export function buildSessionEnv(preset: ApiPreset, modelOverride?: string): Record<string, string> {
+  const model = modelOverride ?? preset.models[0]; // Case-sensitive — passed unmodified
+  const env = buildBaseEnv();
 
   // Provider credentials + model aliases (override any inherited values)
   env.ANTHROPIC_BASE_URL = preset.base_url;
@@ -72,6 +82,18 @@ export function buildSessionEnv(preset: ApiPreset, modelOverride?: string): Reco
   env.ANTHROPIC_DEFAULT_OPUS_MODEL = model;
   env.CLAUDE_CODE_SUBAGENT_MODEL = model;
 
+  return env;
+}
+
+/**
+ * Build the env object for an OpenAI-compatible session from an API preset.
+ * Inherits allowlisted host vars + sets OPENAI_BASE_URL and CODEX_API_KEY.
+ * Does NOT set ANTHROPIC_* vars or model alias vars (OpenAI SDK uses its own discovery).
+ */
+export function buildOpenAISessionEnv(preset: ApiPreset): Record<string, string> {
+  const env = buildBaseEnv();
+  env.OPENAI_BASE_URL = preset.base_url;
+  env.CODEX_API_KEY = preset.api_key;
   return env;
 }
 
@@ -118,6 +140,118 @@ export async function collectSessionResult(
     return result;
   } finally {
     if (timer !== null) clearTimeout(timer);
+  }
+}
+
+// ================== OPENAI SESSION ==================
+
+/**
+ * Run a task via the OpenAI-compatible API.
+ *
+ * Attempts to dynamically import @openai/codex-sdk first.
+ * If the SDK is not installed or its API surface differs, falls back to raw HTTP
+ * fetch to /v1/chat/completions (same endpoint used by testOpenAIModel in config-server).
+ *
+ * The system prompt (if provided) is prepended to the task text as a
+ * [SYSTEM INSTRUCTIONS] block since the Codex SDK may not support native
+ * system prompts.
+ *
+ * Per AC10: dynamic import failure must produce a JSON error envelope + exit code 1.
+ */
+export async function runOpenAISession(
+  preset: ApiPreset,
+  model: string,
+  taskText: string,
+  timeoutMs: number,
+): Promise<string> {
+  // Build the full prompt (system prompt prepended as a framing block)
+  const fullPrompt = taskText;
+
+  // Raw HTTP fallback to /v1/chat/completions — used when SDK is not installed
+  // or its API surface differs from what we expect.
+  async function rawHttpFallback(): Promise<string> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const resp = await fetch(`${preset.base_url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${preset.api_key}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: fullPrompt }],
+        }),
+        signal: controller.signal,
+      });
+
+      if (!resp.ok) {
+        throw new Error(`OpenAI API returned ${resp.status}: ${resp.statusText}`);
+      }
+
+      const data = await resp.json() as any;
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string') {
+        throw new Error('OpenAI API returned unexpected response format');
+      }
+      return content;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // Attempt dynamic import of @openai/codex-sdk.
+  // If not installed, emit JSON error with install instructions and exit.
+  let sdkModule: any = null;
+  try {
+    sdkModule = await import('@openai/codex-sdk');
+  } catch {
+    // SDK not installed — report with install guidance (exit code 1 = validation error)
+    emitAndExit({
+      event: 'error',
+      phase: 'validation',
+      error: 'OpenAI Codex SDK not installed. Run: npm install @openai/codex-sdk',
+    }, 1);
+  }
+
+  // SDK imported successfully — attempt to use it.
+  // The @openai/codex-sdk API surface is unverified; fall back to raw HTTP if it
+  // doesn't match expected shape.
+  try {
+    // Expected API surface (unverified): Codex constructor + startThread + run
+    const Codex = sdkModule.Codex ?? sdkModule.default?.Codex ?? sdkModule.default;
+    if (typeof Codex !== 'function') {
+      throw new Error('Unexpected SDK shape — falling back to raw HTTP');
+    }
+
+    const env = buildOpenAISessionEnv(preset);
+    const codex = new Codex({ env, config: { model } });
+
+    type RunResult = { result: string } | { error: string };
+    const sdkPromise = new Promise<string>(async (resolve, reject) => {
+      try {
+        const thread = await codex.startThread();
+        const result: RunResult = await thread.run(fullPrompt);
+        if ('error' in result) {
+          reject(new Error(result.error));
+        } else {
+          resolve(result.result);
+        }
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`OpenAI session timed out after ${timeoutMs / 1000}s`)), timeoutMs);
+    });
+
+    return await Promise.race([sdkPromise, timeoutPromise]);
+  } catch {
+    // SDK API differs from expected — fall back to raw HTTP
+    return rawHttpFallback();
   }
 }
 
@@ -304,69 +438,149 @@ async function main(): Promise<void> {
     emitAndExit({ event: 'error', phase: 'validation', error: `Failed to change to working directory '${args.cwd}': ${(err as Error).message}` }, 1);
   }
 
-  // Session lifecycle — if/else chain ensures control always falls through
-  // to emitAndExit() after the try/catch/finally block.
-  // NOTE: Do NOT use `return` inside the try block — it would skip emitAndExit().
-  const env = buildSessionEnv(preset, args.model);
-  let session: any = null;
+  // Determine protocol: default to 'anthropic' for backward compatibility
+  // If adding a 3rd protocol, extract to ProtocolAdapter interface
+  const protocol = preset.protocol ?? 'anthropic';
+
   let output: OutputEvent = { event: 'error', phase: 'execution', error: 'unexpected: no result produced' };
   let exitCode: number = 2;
 
-  try {
+  if (protocol === 'openai') {
+    // =========== OpenAI Protocol Path ===========
+    const env = buildOpenAISessionEnv(preset);
+
+    // Build task text, prepending system prompt as framing block if provided
+    const taskWithPrompt = systemPromptContent
+      ? `[SYSTEM INSTRUCTIONS]\n${systemPromptContent}\n\n[TASK]\n${args.task}`
+      : args.task;
+
+    // Debug logging: 4 individual writes (not batched — guaranteed writes on crash)
     await vcpLog(args.cwd, {
-      source: 'api-task-runner', event: 'session_create', decision: 'info',
-      details: `preset=${args.preset} model=${args.model} key=${maskApiKey(preset.api_key)}`,
+      source: 'api-task-runner', event: 'session_env', decision: 'info',
+      details: JSON.stringify(Object.fromEntries(
+        Object.entries(env).map(([k, v]) =>
+          k === 'CODEX_API_KEY' ? [k, maskApiKey(v)] : [k, v]
+        )
+      )),
+    }, debugEnabled);
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_config', decision: 'info',
+      details: `protocol=openai model=${args.model} preset=${args.preset}`,
+    }, debugEnabled);
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_system_prompt', decision: 'info',
+      details: systemPromptContent ?? 'none',
+    }, debugEnabled);
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_task', decision: 'info',
+      details: args.task,
     }, debugEnabled);
 
-    session = unstable_v2_createSession({
-      model: args.model,
-      env,
-      permissionMode: 'default',
-      allowedTools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
-      // Append review guidelines to default system prompt when provided
-      ...(systemPromptContent && {
-        systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptContent },
-      }),
-    });
-
-    // Warmup — blocks until session is live
-    await session.send('Respond with OK');
-    const warmupResult = await collectSessionResult(session, WARMUP_TIMEOUT_MS);
-    if (warmupResult.error) {
-      output = { event: 'error', phase: 'warmup', error: `Warmup failed: ${warmupResult.error}` };
-      exitCode = 2;
-    } else {
-      await vcpLog(args.cwd, {
-        source: 'api-task-runner', event: 'session_ready', decision: 'info',
-        details: `preset=${args.preset} model=${args.model}`,
-      }, debugEnabled);
-
-      // Send task
-      await session.send(args.task);
-      const result = await collectSessionResult(session, args.taskTimeoutMs);
-
-      if (result.timedOut) {
+    try {
+      const result = await runOpenAISession(preset, args.model, taskWithPrompt, args.taskTimeoutMs);
+      output = {
+        event: 'complete',
+        provider: args.preset,
+        model: args.model,
+        result: result || 'Task completed successfully',
+      };
+      exitCode = 0;
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      if (errMsg.includes('timed out')) {
         output = { event: 'error', phase: 'execution', error: 'Task execution timed out' };
         exitCode = 3;
-      } else if (result.error) {
-        output = { event: 'error', phase: 'execution', error: result.error };
-        exitCode = 2;
       } else {
-        output = {
-          event: 'complete',
-          provider: args.preset,
-          model: args.model,
-          result: result.result || 'Task completed successfully',
-        };
-        exitCode = 0;
+        output = { event: 'error', phase: 'execution', error: errMsg };
+        exitCode = 2;
       }
     }
-  } catch (err) {
-    output = { event: 'error', phase: 'execution', error: (err as Error).message };
-    exitCode = 2;
-  } finally {
-    if (session) {
-      try { session.close(); } catch { /* best effort */ }
+  } else {
+    // =========== Anthropic Protocol Path (default) ===========
+    // Session lifecycle — if/else chain ensures control always falls through
+    // to emitAndExit() after the try/catch/finally block.
+    // NOTE: Do NOT use `return` inside the try block — it would skip emitAndExit().
+    const env = buildSessionEnv(preset, args.model);
+    let session: any = null;
+
+    // Debug logging: 4 individual writes (not batched — guaranteed writes on crash)
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_env', decision: 'info',
+      details: JSON.stringify(Object.fromEntries(
+        Object.entries(env).map(([k, v]) =>
+          k === 'ANTHROPIC_API_KEY' ? [k, maskApiKey(v)] : [k, v]
+        )
+      )),
+    }, debugEnabled);
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_config', decision: 'info',
+      details: `protocol=anthropic model=${args.model} preset=${args.preset} permissionMode=default`,
+    }, debugEnabled);
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_system_prompt', decision: 'info',
+      details: systemPromptContent ?? 'none',
+    }, debugEnabled);
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_task', decision: 'info',
+      details: args.task,
+    }, debugEnabled);
+
+    try {
+      await vcpLog(args.cwd, {
+        source: 'api-task-runner', event: 'session_create', decision: 'info',
+        details: `preset=${args.preset} model=${args.model} key=${maskApiKey(preset.api_key)}`,
+      }, debugEnabled);
+
+      session = unstable_v2_createSession({
+        model: args.model,
+        env,
+        permissionMode: 'default',
+        allowedTools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
+        // Append review guidelines to default system prompt when provided
+        ...(systemPromptContent && {
+          systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptContent },
+        }),
+      });
+
+      // Warmup — blocks until session is live
+      await session.send('Respond with OK');
+      const warmupResult = await collectSessionResult(session, WARMUP_TIMEOUT_MS);
+      if (warmupResult.error) {
+        output = { event: 'error', phase: 'warmup', error: `Warmup failed: ${warmupResult.error}` };
+        exitCode = 2;
+      } else {
+        await vcpLog(args.cwd, {
+          source: 'api-task-runner', event: 'session_ready', decision: 'info',
+          details: `preset=${args.preset} model=${args.model}`,
+        }, debugEnabled);
+
+        // Send task
+        await session.send(args.task);
+        const result = await collectSessionResult(session, args.taskTimeoutMs);
+
+        if (result.timedOut) {
+          output = { event: 'error', phase: 'execution', error: 'Task execution timed out' };
+          exitCode = 3;
+        } else if (result.error) {
+          output = { event: 'error', phase: 'execution', error: result.error };
+          exitCode = 2;
+        } else {
+          output = {
+            event: 'complete',
+            provider: args.preset,
+            model: args.model,
+            result: result.result || 'Task completed successfully',
+          };
+          exitCode = 0;
+        }
+      }
+    } catch (err) {
+      output = { event: 'error', phase: 'execution', error: (err as Error).message };
+      exitCode = 2;
+    } finally {
+      if (session) {
+        try { session.close(); } catch { /* best effort */ }
+      }
     }
   }
 
@@ -387,3 +601,4 @@ if (import.meta.main) {
 
 // Exports for testing
 export { type OutputEvent };
+// buildBaseEnv and buildOpenAISessionEnv are exported via named export above

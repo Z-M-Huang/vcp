@@ -52,6 +52,13 @@ export function maskApiKey(key: string): string {
  */
 export function createDefaultPresets(): PresetConfig {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  // Set restrictive permissions on config directory (contains credentials)
+  // chmod is a no-op on Windows — that's acceptable
+  try {
+    fs.chmodSync(CONFIG_DIR, 0o700);
+  } catch (err) {
+    console.warn(`[preset-utils] chmod(0o700) on config dir failed: ${(err as Error).message}`);
+  }
   const defaultConfig: PresetConfig = {
     version: '2.0',
     presets: {
@@ -62,6 +69,12 @@ export function createDefaultPresets(): PresetConfig {
     },
   };
   fs.writeFileSync(PRESETS_PATH, JSON.stringify(defaultConfig, null, 2), 'utf-8');
+  // Set restrictive permissions on presets file (contains API keys)
+  try {
+    fs.chmodSync(PRESETS_PATH, 0o600);
+  } catch (err) {
+    console.warn(`[preset-utils] chmod(0o600) on presets file failed: ${(err as Error).message}`);
+  }
   return defaultConfig;
 }
 
@@ -87,7 +100,20 @@ export function writePresets(config: PresetConfig): void {
     throw new Error(`Invalid preset config version: ${config.version}. Expected '2.0'.`);
   }
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  // Set restrictive permissions on config directory (contains credentials)
+  // chmod is a no-op on Windows — that's acceptable
+  try {
+    fs.chmodSync(CONFIG_DIR, 0o700);
+  } catch (err) {
+    console.warn(`[preset-utils] chmod(0o700) on config dir failed: ${(err as Error).message}`);
+  }
   fs.writeFileSync(PRESETS_PATH, JSON.stringify(config, null, 2), 'utf-8');
+  // Set restrictive permissions on presets file (contains API keys)
+  try {
+    fs.chmodSync(PRESETS_PATH, 0o600);
+  } catch (err) {
+    console.warn(`[preset-utils] chmod(0o600) on presets file failed: ${(err as Error).message}`);
+  }
 }
 
 /**
@@ -183,6 +209,20 @@ export function validatePreset(preset: unknown): Preset {
       if (p.timeout_ms !== undefined) {
         if (!Number.isInteger(p.timeout_ms) || (p.timeout_ms as number) <= 0) {
           throw new Error('API preset timeout_ms must be a positive integer');
+        }
+      }
+      // protocol is optional but must be a valid value if present
+      if (p.protocol !== undefined) {
+        const validProtocols = ['anthropic', 'openai'];
+        if (typeof p.protocol !== 'string' || !validProtocols.includes(p.protocol)) {
+          throw new Error(`API preset protocol must be one of: ${validProtocols.join(', ')}`);
+        }
+      }
+      // reasoning_effort is optional but must be a valid value if present
+      if (p.reasoning_effort !== undefined) {
+        const validEfforts = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+        if (typeof p.reasoning_effort !== 'string' || !validEfforts.includes(p.reasoning_effort)) {
+          throw new Error(`API preset reasoning_effort must be one of: (empty), minimal, low, medium, high, xhigh`);
         }
       }
       return p as unknown as ApiPreset;

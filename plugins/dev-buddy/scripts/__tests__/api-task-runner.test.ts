@@ -1,6 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import {
+  buildBaseEnv,
   buildSessionEnv,
+  buildOpenAISessionEnv,
   collectSessionResult,
   parseArgs,
   ENV_ALLOWLIST,
@@ -19,6 +21,15 @@ const mockPreset: ApiPreset = {
   base_url: 'https://api.example.com/anthropic',
   api_key: FAKE_KEY,
   models: ['MiniMax-M2.5', 'ModelB'],
+};
+
+const mockOpenAIPreset: ApiPreset = {
+  type: 'api',
+  name: 'test-openai',
+  base_url: 'https://api.openai.com',
+  api_key: FAKE_KEY,
+  models: ['gpt-4o', 'o3'],
+  protocol: 'openai',
 };
 
 describe('buildSessionEnv', () => {
@@ -131,6 +142,132 @@ describe('buildSessionEnv', () => {
     } finally {
       if (original) process.env.SSL_CERT_FILE = original;
     }
+  });
+});
+
+// ================== buildBaseEnv ==================
+
+describe('buildBaseEnv', () => {
+  test('returns object with PATH from host if set', () => {
+    if (process.env.PATH) {
+      const env = buildBaseEnv();
+      expect(env.PATH).toBe(process.env.PATH);
+    }
+  });
+
+  test('does not set ANTHROPIC_* vars', () => {
+    const env = buildBaseEnv();
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+  });
+
+  test('does not set CODEX_API_KEY or OPENAI_BASE_URL', () => {
+    const env = buildBaseEnv();
+    expect(env.CODEX_API_KEY).toBeUndefined();
+    expect(env.OPENAI_BASE_URL).toBeUndefined();
+  });
+
+  test('does not set CLAUDE_CODE_SUBAGENT_MODEL', () => {
+    const env = buildBaseEnv();
+    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
+  });
+
+  test('does not leak non-allowlisted env vars', () => {
+    const original = process.env.MY_SECRET_TOKEN;
+    process.env.MY_SECRET_TOKEN = 'super-secret';
+    try {
+      const env = buildBaseEnv();
+      expect(env.MY_SECRET_TOKEN).toBeUndefined();
+    } finally {
+      if (original) process.env.MY_SECRET_TOKEN = original;
+      else delete process.env.MY_SECRET_TOKEN;
+    }
+  });
+});
+
+// ================== buildOpenAISessionEnv ==================
+
+describe('buildOpenAISessionEnv', () => {
+  test('sets OPENAI_BASE_URL from preset.base_url', () => {
+    const env = buildOpenAISessionEnv(mockOpenAIPreset);
+    expect(env.OPENAI_BASE_URL).toBe('https://api.openai.com');
+  });
+
+  test('sets CODEX_API_KEY from preset.api_key', () => {
+    const env = buildOpenAISessionEnv(mockOpenAIPreset);
+    expect(env.CODEX_API_KEY).toBe(FAKE_KEY);
+  });
+
+  test('does NOT set ANTHROPIC_BASE_URL', () => {
+    const env = buildOpenAISessionEnv(mockOpenAIPreset);
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+  });
+
+  test('does NOT set ANTHROPIC_API_KEY', () => {
+    const env = buildOpenAISessionEnv(mockOpenAIPreset);
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  test('does NOT set ANTHROPIC_DEFAULT_HAIKU_MODEL', () => {
+    const env = buildOpenAISessionEnv(mockOpenAIPreset);
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
+  });
+
+  test('does NOT set ANTHROPIC_DEFAULT_SONNET_MODEL', () => {
+    const env = buildOpenAISessionEnv(mockOpenAIPreset);
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
+  });
+
+  test('does NOT set ANTHROPIC_DEFAULT_OPUS_MODEL', () => {
+    const env = buildOpenAISessionEnv(mockOpenAIPreset);
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+  });
+
+  test('does NOT set CLAUDE_CODE_SUBAGENT_MODEL', () => {
+    const env = buildOpenAISessionEnv(mockOpenAIPreset);
+    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
+  });
+
+  test('inherits PATH from host env', () => {
+    if (process.env.PATH) {
+      const env = buildOpenAISessionEnv(mockOpenAIPreset);
+      expect(env.PATH).toBe(process.env.PATH);
+    }
+  });
+
+  test('inherits proxy vars when present', () => {
+    const original = process.env.HTTPS_PROXY;
+    process.env.HTTPS_PROXY = 'http://proxy:8080';
+    try {
+      const env = buildOpenAISessionEnv(mockOpenAIPreset);
+      expect(env.HTTPS_PROXY).toBe('http://proxy:8080');
+    } finally {
+      if (original) process.env.HTTPS_PROXY = original;
+      else delete process.env.HTTPS_PROXY;
+    }
+  });
+
+  test('does not leak non-allowlisted env vars', () => {
+    const original = process.env.SECRET_TOKEN;
+    process.env.SECRET_TOKEN = 'super-secret';
+    try {
+      const env = buildOpenAISessionEnv(mockOpenAIPreset);
+      expect(env.SECRET_TOKEN).toBeUndefined();
+    } finally {
+      if (original) process.env.SECRET_TOKEN = original;
+      else delete process.env.SECRET_TOKEN;
+    }
+  });
+
+  test('works with anthropic preset (protocol defaults to openai env builder when called directly)', () => {
+    // buildOpenAISessionEnv doesn't check preset.protocol — the caller (main()) routes by protocol
+    const env = buildOpenAISessionEnv(mockPreset);
+    expect(env.OPENAI_BASE_URL).toBe('https://api.example.com/anthropic');
+    expect(env.CODEX_API_KEY).toBe(FAKE_KEY);
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
   });
 });
 

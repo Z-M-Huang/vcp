@@ -27,7 +27,7 @@ import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
 
 // Allowed fields per preset type for field allowlisting (CWE-915)
 const ALLOWED_PRESET_FIELDS: Record<string, Set<string>> = {
-  api: new Set(['type', 'name', 'base_url', 'api_key', 'models', 'timeout_ms']),
+  api: new Set(['type', 'name', 'base_url', 'api_key', 'models', 'timeout_ms', 'protocol', 'reasoning_effort']),
   subscription: new Set(['type', 'name']),
   cli: new Set(['type', 'name', 'command', 'args_template', 'resume_args_template', 'one_shot_args_template', 'supports_resume', 'supports_reasoning_effort', 'reasoning_effort', 'timeout_ms', 'models']),
 };
@@ -193,6 +193,44 @@ async function testApiModel(baseUrl: string, apiKey: string, model: string): Pro
   return { model, success: false, latency_ms: Date.now() - startTime, attempts: MAX_ATTEMPTS, error_category: lastCategory };
 }
 
+/**
+ * Test an OpenAI-compatible API endpoint by sending a minimal request to /v1/chat/completions.
+ * Uses a 30s timeout (increased from 15s to accommodate reasoning models that may be slow).
+ */
+async function testOpenAIModel(baseUrl: string, apiKey: string, model: string): Promise<ModelTestResult> {
+  const TIMEOUT_MS = 30_000;
+  const startTime = Date.now();
+
+  try {
+    const resp = await fetchWithTimeout(
+      `${baseUrl}/v1/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'Hi' }],
+        }),
+      },
+      TIMEOUT_MS
+    );
+
+    if (resp.ok) {
+      return { model, success: true, latency_ms: Date.now() - startTime, attempts: 1 };
+    }
+
+    const { category } = classifyError(null, resp.status);
+    return { model, success: false, latency_ms: Date.now() - startTime, attempts: 1, error_category: category };
+  } catch (err) {
+    const { category } = classifyError(err);
+    return { model, success: false, latency_ms: Date.now() - startTime, attempts: 1, error_category: category };
+  }
+}
+
 async function handleTestPreset(
   presetName: string,
   corsHeaders: Record<string, string>
@@ -225,16 +263,18 @@ async function handleTestPreset(
 
   if (preset.type === 'api') {
     const models = Array.isArray(preset.models) ? preset.models : [];
-    const results = await Promise.allSettled(
-      models.map(model => testApiModel(preset.base_url, preset.api_key, model))
-    );
+    const protocol = preset.protocol ?? 'anthropic';
+    const testFn = protocol === 'openai'
+      ? (model: string) => testOpenAIModel(preset.base_url, preset.api_key, model)
+      : (model: string) => testApiModel(preset.base_url, preset.api_key, model);
+    const results = await Promise.allSettled(models.map(testFn));
     const modelResults: ModelTestResult[] = results.map((r, i) =>
       r.status === 'fulfilled'
         ? r.value
         : { model: models[i], success: false, latency_ms: 0, attempts: 1, error_category: 'invalid_response' as ErrorCategory }
     );
     const passed = modelResults.filter(r => r.success).length;
-    logTestAudit(presetName, 'api', `${passed}/${modelResults.length} models passed`);
+    logTestAudit(presetName, 'api', `${passed}/${modelResults.length} models passed (${protocol})`);
     return jsonResponse({ type: 'api', results: modelResults }, 200, corsHeaders);
   }
 
@@ -338,6 +378,7 @@ async function handleTestPresetInline(
     const base_url = body.base_url;
     const api_key = body.api_key;
     const models = body.models;
+    const protocol = typeof body.protocol === 'string' ? body.protocol : 'anthropic';
     if (typeof base_url !== 'string' || !base_url.trim()) {
       return jsonResponse(
         { error: { code: 'INVALID_REQUEST', message: 'base_url is required' } },
@@ -357,15 +398,16 @@ async function handleTestPresetInline(
       );
     }
 
-    const results = await Promise.allSettled(
-      (models as string[]).map(model => testApiModel(base_url.trim(), api_key, model.trim()))
-    );
+    const testFn = protocol === 'openai'
+      ? (model: string) => testOpenAIModel(base_url.trim(), api_key, model.trim())
+      : (model: string) => testApiModel(base_url.trim(), api_key, model.trim());
+    const results = await Promise.allSettled((models as string[]).map(testFn));
     const modelResults: ModelTestResult[] = results.map((r, i) =>
       r.status === 'fulfilled'
         ? r.value
         : { model: (models as string[])[i], success: false, latency_ms: 0, attempts: 1, error_category: 'invalid_response' as ErrorCategory }
     );
-    logTestAudit('inline-test', 'api', `${modelResults.filter(r => r.success).length}/${modelResults.length} passed`);
+    logTestAudit('inline-test', 'api', `${modelResults.filter(r => r.success).length}/${modelResults.length} passed (${protocol})`);
     return jsonResponse({ type: 'api', results: modelResults }, 200, corsHeaders);
   }
 
@@ -703,6 +745,12 @@ async function handlePutPreset(
       400,
       corsHeaders
     );
+  }
+
+  // Normalize base_url: strip trailing /v1 or /v1/ to prevent double-pathing
+  // e.g., https://api.example.com/v1 -> https://api.example.com
+  if (typeof allowedBody.base_url === 'string') {
+    allowedBody.base_url = allowedBody.base_url.replace(/\/v1\/?$/, '');
   }
 
   // Validate preset

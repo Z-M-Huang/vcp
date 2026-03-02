@@ -1,7 +1,8 @@
 {
   "name": "dev-buddy",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.49"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.49",
+    "@openai/codex-sdk": "^0.106.0"
   },
   "devDependencies": {
     "@types/bun": "^1.3.8",

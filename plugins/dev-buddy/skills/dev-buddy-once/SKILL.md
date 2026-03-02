@@ -103,12 +103,15 @@ Uses `--task-stdin` with heredoc to avoid OS argv size limits and ps exposure.
 
 **IMPORTANT:** The Bash tool has a hard max timeout of 600,000ms (10 min). API tasks can run much longer (e.g., 30 min). Always use `run_in_background: true` to prevent the Bash tool from killing the process prematurely.
 
-After launching, save the returned `task_id`. If `run_in_background` does not return a `task_id`, report a dispatch failure to the user — do not retry in foreground mode.
-Then poll for completion:
-```
-TaskOutput(task_id: "<task_id>", block: true, timeout: min(timeout_ms + 120000, 600000))
-```
-If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
+After launching:
+1. Save the returned `task_id` from the Bash tool. If `run_in_background` does not return a `task_id`, report a dispatch failure to the user — do not retry in foreground mode.
+2. **CRITICAL — Poll with the correct timeout (NOT the default 30s):**
+   ```
+   TaskOutput(task_id: "<task_id>", block: true, timeout: min(timeout_ms + 120000, 600000))
+   ```
+   For a 5-min preset (default 300000ms), this = `min(420000, 600000)` = **420000ms (7 min)**.
+   The default TaskOutput timeout is only 30s — far too short for API tasks that typically take 2-5 min.
+3. If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
 
 The script:
 1. Spawns `api-task-runner.ts` with the preset, model, and task (via stdin)
@@ -138,12 +141,15 @@ TASK_EOF
 
 **IMPORTANT:** The Bash tool has a hard max timeout of 600,000ms (10 min). CLI tasks can run much longer (e.g., Codex with 20-min timeout). Always use `run_in_background: true` to prevent the Bash tool from killing the process prematurely.
 
-After launching, save the returned `task_id`. If `run_in_background` does not return a `task_id`, report a dispatch failure to the user — do not retry in foreground mode.
-Then poll for completion:
-```
-TaskOutput(task_id: "<task_id>", block: true, timeout: min(timeout_ms + 120000, 600000))
-```
-If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
+After launching:
+1. Save the returned `task_id` from the Bash tool. If `run_in_background` does not return a `task_id`, report a dispatch failure to the user — do not retry in foreground mode.
+2. **CRITICAL — Poll with the correct timeout (NOT the default 30s):**
+   ```
+   TaskOutput(task_id: "<task_id>", block: true, timeout: min(timeout_ms + 120000, 600000))
+   ```
+   For a 20-min CLI preset (default 1200000ms), this = `min(1320000, 600000)` = **600000ms (10 min)**.
+   The default TaskOutput timeout is only 30s — far too short for CLI tasks that typically take 5-20 min.
+3. If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
 
 The CLI tool runs directly in the project directory (e.g., Codex `exec --full-auto`). Its output streams to the terminal.
 
@@ -204,3 +210,6 @@ Report that the task timed out. Suggest increasing `timeout_ms` on the preset vi
 - Do NOT skip the preset resolution step — always validate provider and model first
 - Do NOT guess the preset type — always read it from the presets file
 - For subscription: do NOT run the one-shot-runner.ts script — use Task tool directly
+- Do NOT fall back to foreground Bash when background TaskOutput returns empty — the task is likely still running. Increase the TaskOutput timeout instead.
+- Do NOT retry the same API/CLI task in foreground mode — the Bash tool's 2-minute default timeout is always shorter than the typical task duration (2-5 min for API, 5-20 min for CLI). Foreground mode will always kill the process prematurely.
+- Do NOT use the default TaskOutput timeout (30s) for API/CLI tasks — always pass the computed timeout as specified in the polling instructions above.

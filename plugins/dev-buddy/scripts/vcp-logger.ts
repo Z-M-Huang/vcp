@@ -2,11 +2,11 @@
  * VCP-compatible file logger for dev-buddy plugin.
  *
  * Writes to <projectRoot>/.vcp/dev-buddy.log using the same line format as
- * VCP core's vcpLog(). Always logs — no debug gate. Rotates at 2 MB, keeping
+ * VCP core's vcpLog(). Always logs — no debug gate. Rotates at 5 MB, keeping
  * 3 versions (.log, .log.1, .log.2). Never throws — logging failures are
  * silently ignored to prevent breaking plugin execution.
  */
-import { appendFile, readFile, mkdir, stat, rename, unlink } from 'fs/promises';
+import { appendFile, chmod, readFile, mkdir, stat, rename, unlink } from 'fs/promises';
 import { isAbsolute, join } from 'path';
 import { homedir } from 'os';
 
@@ -17,7 +17,7 @@ export interface LogEntry {
   details?: string;
 }
 
-const MAX_LOG_SIZE = 2 * 1024 * 1024; // 2 MB
+const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_LOG_VERSIONS = 3; // .log, .log.1, .log.2
 
 /**
@@ -59,6 +59,14 @@ export async function vcpLog(
     const det = entry.details ? ` — ${entry.details}` : '';
     const line = `${ts} [${entry.event}] ${entry.source}: ${entry.decision}${det}\n`;
     await appendFile(logFile, line);
+    // Set restrictive permissions on log file (contains API keys in masked form)
+    // chmod is a no-op on Windows — that's acceptable
+    try {
+      await chmod(logFile, 0o600);
+    } catch (chmodErr) {
+      // Log chmod failures as warnings, not silently ignored
+      console.warn(`[vcp-logger] chmod(0o600) on log file failed: ${(chmodErr as Error).message}`);
+    }
   } catch {
     // Never let logging failure break execution
   }

@@ -534,7 +534,9 @@ The config server (`scripts/config-server.ts`) exposes these REST endpoints:
 
 The API task runner (`scripts/api-task-runner.ts`) is a per-invocation script that creates a V2 Agent SDK session, runs one task, outputs the result as JSON to stdout, and exits. Each invocation is an independent process with its own V2 session — no shared state, no ports, no file locks. Multiple instances can run in parallel safely.
 
-### Env Var Mapping
+The runner supports two protocols via `ApiPreset.protocol` ('anthropic' | 'openai', defaults to 'anthropic').
+
+### Env Var Mapping — Anthropic Protocol (default)
 
 The subprocess env is built from an allowlist of safe host vars
 (PATH, HOME, proxy, TLS certs, Windows essentials) plus provider overrides.
@@ -553,17 +555,67 @@ Not `...process.env` (avoids leaking full host env), not Linux-hardcoded
 All aliases set to the same provider model name (case-sensitive).
 Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers.
 
+### Env Var Mapping — OpenAI Protocol
+
+When `preset.protocol === 'openai'`, `buildOpenAISessionEnv()` is used instead.
+It shares the same `buildBaseEnv()` helper (same allowlist, no broader leakage).
+
+| Env Var | Source | Purpose |
+|---------|--------|---------|
+| `OPENAI_BASE_URL` | `preset.base_url` | Route to OpenAI-compatible provider |
+| `CODEX_API_KEY` | `preset.api_key` | Authenticate with provider |
+
+ANTHROPIC_* vars and model alias vars are NOT set for the OpenAI path.
+
+### Protocol Routing in main()
+
+```
+const protocol = preset.protocol ?? 'anthropic';
+
+if (protocol === 'openai') {
+  env = buildOpenAISessionEnv(preset)
+  result = await runOpenAISession(preset, model, task, timeoutMs)
+} else {
+  env = buildSessionEnv(preset, model)
+  session = unstable_v2_createSession(...)
+  // Anthropic V2 SDK path
+}
+```
+
+If adding a 3rd protocol, extract to a ProtocolAdapter interface.
+
+### OpenAI Session (runOpenAISession)
+
+- Dynamically imports `@openai/codex-sdk` (optional peer dependency)
+- Import failure emits JSON error envelope `{ event: 'error', phase: 'validation', error: '...' }` + exit code 1 with install instructions
+- Falls back to raw HTTP fetch to `/v1/chat/completions` if SDK API surface doesn't match expected shape
+- System prompt prepended to task text as `[SYSTEM INSTRUCTIONS]` block (SDK may not support native system prompts)
+- Promise.race timeout (same pattern as collectSessionResult)
+
 ### Per-Invocation Lifecycle
 
 1. Parse args (`--preset`, `--model`, `--task`, `--cwd`, `--task-timeout`, `--system-prompt`)
 2. Load + validate preset from `readPresets()`
-3. Build env: `buildSessionEnv(preset, model)` — platform-aware allowlist
+3. Read task from stdin if `--task-stdin` (avoids argv size limits + ps exposure)
 4. If `--system-prompt` provided: validate path under `docs/`, read file content
-5. Create V2 session: `unstable_v2_createSession({ model, env, permissionMode: 'default', allowedTools, systemPrompt? })`
-5. Warmup: `session.send('Respond with OK')` + `collectSessionResult()`
-6. Send actual task: `session.send(task)` + `collectSessionResult(session, taskTimeoutMs)`
-7. Output result JSON to stdout: `{ event: "complete", result: "..." }` or `{ event: "error", error: "..." }`
-8. `session.close()`, exit (0=success, 1=validation, 2=execution, 3=timeout)
+5. Determine protocol: `preset.protocol ?? 'anthropic'`
+6. **Anthropic path:** Build env via `buildSessionEnv()`. Write 4 debug log entries. Create V2 session, warmup, send task, collect result.
+7. **OpenAI path:** Build env via `buildOpenAISessionEnv()`. Write 4 debug log entries. Call `runOpenAISession()`.
+8. Output result JSON to stdout: `{ event: "complete", result: "..." }` or `{ event: "error", error: "..." }`
+9. Exit (0=success, 1=validation, 2=execution, 3=timeout)
+
+### Debug Logging (4 entries per protocol path)
+
+When `isDebugEnabled()` returns true (reads `~/.vcp/config.json`), 4 individual `vcpLog()` calls are written per invocation:
+
+| Event | Content |
+|-------|---------|
+| `session_env` | All env keys with API key values masked via `maskApiKey()` |
+| `session_config` | Protocol, model, preset name, SDK options |
+| `session_system_prompt` | Full system prompt content or 'none' |
+| `session_task` | Full task text |
+
+Individual writes (not batched) — guaranteed to be flushed even on crash.
 
 ### Key Design Decisions
 
@@ -572,6 +624,9 @@ Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers.
 - **Warmup failure exits with non-zero** — prevents running on a broken session
 - **Timeout via `Promise.race`** — wall-clock timeout fires even if `session.stream()` yields nothing; on timeout, `session.close()` kills the orphaned stream consumer
 - **Platform-aware env allowlist** — handles Windows (USERPROFILE, APPDATA, SystemRoot), proxy (HTTP_PROXY, HTTPS_PROXY), and TLS certs (NODE_EXTRA_CA_CERTS)
+- **Shared `buildBaseEnv()` helper** — both `buildSessionEnv()` and `buildOpenAISessionEnv()` call this to iterate ENV_ALLOWLIST once, avoiding duplication
+- **OpenAI SDK is dynamically imported** — keeps it optional; users who only use Anthropic presets do not need it installed
+- **OpenAI SDK fallback** — if `@openai/codex-sdk` is not installed or has unexpected API shape, `runOpenAISession()` falls back to raw HTTP fetch (same endpoint as `testOpenAIModel()` in config-server)
 - **Bash tool timeout constraint** — The Bash tool has a hard max timeout of 600,000ms (10 min). API tasks with `timeout_ms` > 8 min must use `run_in_background: true` on the Bash tool, then poll with `TaskOutput(task_id, block: true, timeout: 600000)`. Pipeline SKILL.md files always use this pattern for API dispatch to avoid premature process termination.
 
 ---
