@@ -60,6 +60,7 @@ function devBuddyApp() {
       models_str: '',
       protocol: 'anthropic',
       reasoning_effort_api: '',
+      max_output_tokens: '',
       timeout_minutes: '',
       // CLI preset fields
       command: '',
@@ -152,6 +153,10 @@ function devBuddyApp() {
           // Only include reasoning_effort when protocol is 'openai' and a value is set
           reasoning_effort: this.newPreset.protocol === 'openai' && this.newPreset.reasoning_effort_api
             ? this.newPreset.reasoning_effort_api
+            : undefined,
+          // Only include max_output_tokens when protocol is 'openai' and a value is set
+          max_output_tokens: this.newPreset.protocol === 'openai' && this.newPreset.max_output_tokens
+            ? Number(this.newPreset.max_output_tokens)
             : undefined,
         };
       } else if (this.newPreset.type === 'subscription') {
@@ -318,6 +323,7 @@ function devBuddyApp() {
         this.newPreset.timeout_minutes = preset.timeout_ms ? String(Math.round(preset.timeout_ms / 60000)) : '';
         this.newPreset.protocol = preset.protocol || 'anthropic';
         this.newPreset.reasoning_effort_api = preset.reasoning_effort || '';
+        this.newPreset.max_output_tokens = preset.max_output_tokens || '';
       } else if (preset.type === 'cli') {
         this.newPreset.command = preset.command || '';
         this.newPreset.args_template = preset.args_template || '';
@@ -365,6 +371,9 @@ function devBuddyApp() {
           body.api_key = this.newPreset.api_key;
           body.models = this.newPreset.models_str.split(',').map(m => m.trim()).filter(Boolean);
           body.protocol = this.newPreset.protocol || 'anthropic';
+          if (this.newPreset.protocol === 'openai' && this.newPreset.max_output_tokens) {
+            body.max_output_tokens = Number(this.newPreset.max_output_tokens);
+          }
         } else if (this.newPreset.type === 'cli') {
           body.command = this.newPreset.command;
         }
@@ -400,6 +409,7 @@ function devBuddyApp() {
         models_str: '',
         protocol: 'anthropic',
         reasoning_effort_api: '',
+        max_output_tokens: '',
         timeout_minutes: '',
         // CLI preset fields
         command: '',

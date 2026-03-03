@@ -27,7 +27,7 @@ import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
 
 // Allowed fields per preset type for field allowlisting (CWE-915)
 const ALLOWED_PRESET_FIELDS: Record<string, Set<string>> = {
-  api: new Set(['type', 'name', 'base_url', 'api_key', 'models', 'timeout_ms', 'protocol', 'reasoning_effort']),
+  api: new Set(['type', 'name', 'base_url', 'api_key', 'models', 'timeout_ms', 'protocol', 'reasoning_effort', 'max_output_tokens']),
   subscription: new Set(['type', 'name']),
   cli: new Set(['type', 'name', 'command', 'args_template', 'resume_args_template', 'one_shot_args_template', 'supports_resume', 'supports_reasoning_effort', 'reasoning_effort', 'timeout_ms', 'models']),
 };
@@ -101,6 +101,8 @@ interface ModelTestResult {
   latency_ms: number;
   attempts: number;
   error_category?: ErrorCategory;
+  /** Actionable hint for the user, e.g. when a token-limit error is detected. */
+  hint?: string;
 }
 
 function classifyError(err: unknown, statusCode?: number): { category: ErrorCategory; retryable: boolean } {
@@ -197,9 +199,10 @@ async function testApiModel(baseUrl: string, apiKey: string, model: string): Pro
  * Test an OpenAI-compatible API endpoint by sending a minimal request to /v1/chat/completions.
  * Uses a 30s timeout (increased from 15s to accommodate reasoning models that may be slow).
  */
-async function testOpenAIModel(baseUrl: string, apiKey: string, model: string): Promise<ModelTestResult> {
+async function testOpenAIModel(baseUrl: string, apiKey: string, model: string, maxOutputTokens?: number): Promise<ModelTestResult> {
   const TIMEOUT_MS = 30_000;
   const startTime = Date.now();
+  const effectiveMaxTokens = maxOutputTokens ?? 16384;
 
   try {
     const resp = await fetchWithTimeout(
@@ -212,7 +215,7 @@ async function testOpenAIModel(baseUrl: string, apiKey: string, model: string): 
         },
         body: JSON.stringify({
           model,
-          max_tokens: 1,
+          max_tokens: effectiveMaxTokens,
           messages: [{ role: 'user', content: 'Hi' }],
         }),
       },
@@ -221,6 +224,20 @@ async function testOpenAIModel(baseUrl: string, apiKey: string, model: string): 
 
     if (resp.ok) {
       return { model, success: true, latency_ms: Date.now() - startTime, attempts: 1 };
+    }
+
+    // Detect token-limit 400 errors and produce actionable hint
+    if (resp.status === 400) {
+      const body = await resp.text().catch(() => '');
+      const lower = body.toLowerCase();
+      if (lower.includes('max_tokens') || lower.includes('token limit') || lower.includes('maximum')) {
+        const { category } = classifyError(null, resp.status);
+        return {
+          model, success: false, latency_ms: Date.now() - startTime, attempts: 1,
+          error_category: category,
+          hint: 'Try lowering Max Output Tokens in preset settings',
+        };
+      }
     }
 
     const { category } = classifyError(null, resp.status);
@@ -265,7 +282,7 @@ async function handleTestPreset(
     const models = Array.isArray(preset.models) ? preset.models : [];
     const protocol = preset.protocol ?? 'anthropic';
     const testFn = protocol === 'openai'
-      ? (model: string) => testOpenAIModel(preset.base_url, preset.api_key, model)
+      ? (model: string) => testOpenAIModel(preset.base_url, preset.api_key, model, preset.max_output_tokens)
       : (model: string) => testApiModel(preset.base_url, preset.api_key, model);
     const results = await Promise.allSettled(models.map(testFn));
     const modelResults: ModelTestResult[] = results.map((r, i) =>
@@ -398,8 +415,9 @@ async function handleTestPresetInline(
       );
     }
 
+    const maxOutputTokens = typeof body.max_output_tokens === 'number' ? body.max_output_tokens : undefined;
     const testFn = protocol === 'openai'
-      ? (model: string) => testOpenAIModel(base_url.trim(), api_key, model.trim())
+      ? (model: string) => testOpenAIModel(base_url.trim(), api_key, model.trim(), maxOutputTokens)
       : (model: string) => testApiModel(base_url.trim(), api_key, model.trim());
     const results = await Promise.allSettled((models as string[]).map(testFn));
     const modelResults: ModelTestResult[] = results.map((r, i) =>

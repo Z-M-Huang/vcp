@@ -17,6 +17,8 @@ export interface ApiPreset {
   protocol?: 'anthropic' | 'openai';
   /** Reasoning effort level for OpenAI-compatible models that support it. Only used when protocol is 'openai'. */
   reasoning_effort?: '' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  /** Maximum output tokens for OpenAI-compatible completions. Only used when protocol is 'openai'. Default: 16384. */
+  max_output_tokens?: number;
 }
 
 export interface SubscriptionPreset {

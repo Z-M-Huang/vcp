@@ -573,11 +573,15 @@ export class OpenAIRunner implements AgentRunner {
         throw new Error(`OpenAI session timed out after ${options.timeoutMs / 1000}s`);
       }
 
+      // Use preset max_output_tokens with defensive type check and fallback to constant
+      const effectiveMaxTokens = typeof this.preset.max_output_tokens === 'number' && this.preset.max_output_tokens > 0
+        ? this.preset.max_output_tokens
+        : OPENAI_MAX_TOKENS;
       const body: Record<string, unknown> = {
         model: options.model,
         messages,
         tools: OPENAI_TOOLS,
-        max_tokens: OPENAI_MAX_TOKENS,
+        max_tokens: effectiveMaxTokens,
       };
       if (this.preset.reasoning_effort) {
         body.reasoning_effort = this.preset.reasoning_effort;

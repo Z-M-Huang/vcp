@@ -1111,4 +1111,66 @@ describe('OpenAIRunner', () => {
     await runner.run('test', baseOptions);
     expect(capturedHeaders['Authorization']).toBe(`Bearer ${FAKE_KEY}`);
   });
+
+  test('max_output_tokens override: preset value sent as max_tokens', async () => {
+    let capturedBody: any = null;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
+        }),
+        text: async () => '',
+      };
+    }) as typeof fetch;
+
+    const presetWithMaxTokens: ApiPreset = {
+      ...mockOpenAIPreset,
+      max_output_tokens: 4096,
+    };
+    const runner = new OpenAIRunner(presetWithMaxTokens);
+    await runner.run('test', baseOptions);
+    expect(capturedBody.max_tokens).toBe(4096);
+  });
+
+  test('max_output_tokens fallback: uses 16384 when not set on preset', async () => {
+    let capturedBody: any = null;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
+        }),
+        text: async () => '',
+      };
+    }) as typeof fetch;
+
+    const runner = new OpenAIRunner(mockOpenAIPreset);
+    await runner.run('test', baseOptions);
+    expect(capturedBody.max_tokens).toBe(16384);
+  });
+
+  test('max_output_tokens defensive: non-numeric value falls back to 16384', async () => {
+    let capturedBody: any = null;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
+        }),
+        text: async () => '',
+      };
+    }) as typeof fetch;
+
+    const presetWithInvalidTokens: ApiPreset = {
+      ...mockOpenAIPreset,
+      max_output_tokens: 'invalid' as unknown as number,
+    };
+    const runner = new OpenAIRunner(presetWithInvalidTokens);
+    await runner.run('test', baseOptions);
+    expect(capturedBody.max_tokens).toBe(16384);
+  });
 });

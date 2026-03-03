@@ -272,6 +272,64 @@ describe('validatePreset: CLI resume_args_template whitespace normalization', ()
   });
 });
 
+// ================== validatePreset: API max_output_tokens ==================
+
+/** Minimal valid API preset for testing. */
+const FAKE_KEY = 'FAKE-TEST-KEY-NOT-REAL';
+
+function makeApiPreset(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: 'api',
+    name: 'Test API',
+    base_url: 'https://api.example.com',
+    api_key: FAKE_KEY,
+    models: ['test-model'],
+    ...overrides,
+  };
+}
+
+describe('validatePreset: API max_output_tokens', () => {
+  test('accepts valid positive integer (4096)', () => {
+    const preset = makeApiPreset({ max_output_tokens: 4096 });
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+
+  test('rejects zero (0)', () => {
+    const preset = makeApiPreset({ max_output_tokens: 0 });
+    expect(() => validatePreset(preset)).toThrow('max_output_tokens must be a positive integer');
+  });
+
+  test('rejects negative value (-100)', () => {
+    const preset = makeApiPreset({ max_output_tokens: -100 });
+    expect(() => validatePreset(preset)).toThrow('max_output_tokens must be a positive integer');
+  });
+
+  test('rejects non-integer float (12.5)', () => {
+    const preset = makeApiPreset({ max_output_tokens: 12.5 });
+    expect(() => validatePreset(preset)).toThrow('max_output_tokens must be a positive integer');
+  });
+
+  test('rejects non-number string', () => {
+    const preset = makeApiPreset({ max_output_tokens: 'abc' });
+    expect(() => validatePreset(preset)).toThrow('max_output_tokens must be a positive integer');
+  });
+
+  test('accepts absent field (optional)', () => {
+    const preset = makeApiPreset();
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+
+  test('rejects value exceeding upper bound (1000001)', () => {
+    const preset = makeApiPreset({ max_output_tokens: 1_000_001 });
+    expect(() => validatePreset(preset)).toThrow('max_output_tokens must not exceed 1000000');
+  });
+
+  test('accepts exactly upper bound (1000000)', () => {
+    const preset = makeApiPreset({ max_output_tokens: 1_000_000 });
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+});
+
 // ================== maskApiKey ==================
 
 describe('maskApiKey', () => {

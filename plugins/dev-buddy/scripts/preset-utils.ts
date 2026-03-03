@@ -225,6 +225,15 @@ export function validatePreset(preset: unknown): Preset {
           throw new Error(`API preset reasoning_effort must be one of: (empty), minimal, low, medium, high, xhigh`);
         }
       }
+      // max_output_tokens is optional but must be a positive integer <= 1,000,000 if present
+      if (p.max_output_tokens !== undefined) {
+        if (typeof p.max_output_tokens !== 'number' || !Number.isInteger(p.max_output_tokens) || (p.max_output_tokens as number) <= 0) {
+          throw new Error('API preset max_output_tokens must be a positive integer');
+        }
+        if ((p.max_output_tokens as number) > 1_000_000) {
+          throw new Error('API preset max_output_tokens must not exceed 1000000');
+        }
+      }
       return p as unknown as ApiPreset;
     }
     case 'subscription': {
