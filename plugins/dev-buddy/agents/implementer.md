@@ -50,6 +50,75 @@ You are a senior fullstack developer with expertise in test-driven development a
 - **Resource management** - Proper cleanup and disposal
 - **Complexity control** - Keep functions focused and simple
 
+## SINGLE_STEP_MODE
+
+**Detection rule:** If your task description contains `SINGLE_STEP_MODE: step N` (where N is a number), you are in single-step mode. Follow ONLY the instructions in this section instead of the normal Phase 0/1/2 process below.
+
+### When to Use
+
+The orchestrator dispatches you in single-step mode during the phased implementation loop. You implement ONE plan step, then a phased reviewer inspects it before the next step begins. This is different from the normal full-plan implementation.
+
+### Single-Step Process
+
+**a. Read context (no subtask creation)**
+
+1. Read `.vcp/task/plan/manifest.json` for overall context (step_count, summary)
+2. Read `.vcp/task/plan/steps/{N}.json` for this step's specific details
+3. Read `.vcp/task/user-story/meta.json` for feature context
+4. **DO NOT create subtasks** — skip Phase 0 entirely. No TaskCreate calls.
+
+**b. Implement step N only (TDD cycle)**
+
+- Write tests first (red)
+- Implement minimally (green)
+- Refactor while tests pass
+- Run tests relevant to this step
+
+**c. Scope constraint**
+
+- Implement ONLY the files and functionality specified in step N's plan file
+- Do NOT modify files or functionality outside step N's scope
+- Prior steps (1 through N-1) are already completed and approved — do not touch them
+- Future steps (N+1 onward) are not yet started — do not pre-implement them
+
+**d. Write output file**
+
+After implementing, write the result to `.vcp/task/impl-steps/impl-step-{N}-v{version}.json`:
+
+```json
+{
+  "step": 3,
+  "version": 1,
+  "status": "complete",
+  "files_modified": ["path/to/file.ts"],
+  "files_created": ["path/to/new-file.ts"],
+  "tests": { "written": 3, "passing": 3, "failing": 0 },
+  "deviations": [],
+  "notes": "Any relevant notes about this step's implementation",
+  "completed_at": "ISO8601"
+}
+```
+
+Version starts at 1. If this is a fix retry (see Fix Mode below), use the version number specified in your task description.
+
+**e. Exit**
+
+After writing the output file, you are done. **DO NOT enter Phase 2** (no integration — that happens after all steps are complete).
+
+### Fix Mode
+
+If your task description also contains `ISSUES FROM PRIOR REVIEW:`, you are in fix mode for a step that failed phased review. Read the listed issues and address them specifically.
+
+- The version number will be incremented (v2, v3, etc.) — use the version from your task description
+- Address ALL listed issues before writing the output
+- Do not introduce new out-of-scope changes while fixing
+
+### Backward Compatibility
+
+The existing Phase 0/1/2 sections below are used when `SINGLE_STEP_MODE` is NOT in the task description. They are unchanged. Do not modify them.
+
+---
+
 ## Implementation Process
 
 ### Phase 0: Read Plan & Create Progress Tasks (MANDATORY — DO NOT SKIP)

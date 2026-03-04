@@ -441,11 +441,11 @@
         <div class="pipeline-sub-tabs">
           <button
             x-bind:class="{ active: pipelineSubTab === 'feature' }"
-            x-on:click="pipelineSubTab = 'feature'; $nextTick(() => initSortable('feature-pipeline-list'))"
+            x-on:click="pipelineSubTab = 'feature'; $nextTick(() => { initSortable('feature-pipeline-list'); pipelineConfig.feature_pipeline.forEach((s, i) => { if (s.type === 'implementation' && Array.isArray(s.phased_reviews) && s.phased_reviews.length > 0) initPhasedReviewSortable('feature-phased-' + i, 'feature', i); }); })"
           >Feature Pipeline</button>
           <button
             x-bind:class="{ active: pipelineSubTab === 'bugfix' }"
-            x-on:click="pipelineSubTab = 'bugfix'; $nextTick(() => initSortable('bugfix-pipeline-list'))"
+            x-on:click="pipelineSubTab = 'bugfix'; $nextTick(() => { initSortable('bugfix-pipeline-list'); pipelineConfig.bugfix_pipeline.forEach((s, i) => { if (s.type === 'implementation' && Array.isArray(s.phased_reviews) && s.phased_reviews.length > 0) initPhasedReviewSortable('bugfix-phased-' + i, 'bugfix', i); }); })"
           >Bug-Fix Pipeline</button>
         </div>
 
@@ -498,7 +498,52 @@
                     </template>
                   </select>
                 </div>
-                <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('feature', idx)">x</button>
+                <!-- Phased Reviews section (implementation stages only) -->
+                <div class="phased-reviews-section" x-show="stage.type === 'implementation'">
+                  <div class="phased-reviews-toggle" x-on:click="stage._phasedExpanded = !stage._phasedExpanded">
+                    <span>Phased Reviews</span>
+                    <span class="phased-reviews-badge"
+                      x-bind:class="{'phased-reviews-badge-muted': !(stage.phased_reviews && stage.phased_reviews.length)}"
+                      x-text="'(' + (stage.phased_reviews ? stage.phased_reviews.length : 0) + ')'"></span>
+                  </div>
+                  <div x-show="stage._phasedExpanded" x-transition>
+                    <div x-bind:id="'feature-phased-' + idx" class="phased-reviews-list">
+                      <template x-for="(pr, prIdx) in (stage.phased_reviews || [])" x-bind:key="pr._id">
+                        <div class="phased-review-entry">
+                          <div class="phased-drag-handle" title="Drag to reorder">
+                            <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor">
+                              <circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/>
+                              <circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/>
+                              <circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/>
+                            </svg>
+                          </div>
+                          <select x-model="pr.provider" class="stage-select"
+                            x-init="$nextTick(() => $el.value = pr.provider || '')"
+                            x-on:change="onPhasedProviderChange('feature', idx, prIdx)">
+                            <template x-for="[pName, pPreset] in Object.entries(presets)" x-bind:key="pName">
+                              <option x-bind:value="pName" x-text="pName + ' (' + pPreset.type + ')'"></option>
+                            </template>
+                          </select>
+                          <label class="parallel-checkbox" title="Run in parallel with adjacent phased reviewers">
+                            <input type="checkbox" x-model="pr.parallel">
+                            <span class="parallel-label">Parallel</span>
+                          </label>
+                          <select x-model="pr.model" x-init="$nextTick(() => $el.value = pr.model || '')" class="stage-select model-select" required>
+                            <option value="" disabled>Select model</option>
+                            <template x-for="m in (stageModelOptions[pr.provider] || [])" x-bind:key="m">
+                              <option x-bind:value="m" x-text="m"></option>
+                            </template>
+                          </select>
+                          <button class="stage-delete btn-danger btn-sm"
+                            x-on:click="removePhasedReview('feature', idx, prIdx)">x</button>
+                        </div>
+                      </template>
+                    </div>
+                    <button class="btn-secondary btn-sm phased-reviews-add"
+                      x-on:click="addPhasedReview('feature', idx)">+ Add Reviewer</button>
+                  </div>
+                </div>
+                <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('feature', idx)" x-show="stage.type !== 'implementation'">x</button>
               </div>
             </template>
           </div>
@@ -568,7 +613,52 @@
                     </template>
                   </select>
                 </div>
-                <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('bugfix', idx)">x</button>
+                <!-- Phased Reviews section (implementation stages only) -->
+                <div class="phased-reviews-section" x-show="stage.type === 'implementation'">
+                  <div class="phased-reviews-toggle" x-on:click="stage._phasedExpanded = !stage._phasedExpanded">
+                    <span>Phased Reviews</span>
+                    <span class="phased-reviews-badge"
+                      x-bind:class="{'phased-reviews-badge-muted': !(stage.phased_reviews && stage.phased_reviews.length)}"
+                      x-text="'(' + (stage.phased_reviews ? stage.phased_reviews.length : 0) + ')'"></span>
+                  </div>
+                  <div x-show="stage._phasedExpanded" x-transition>
+                    <div x-bind:id="'bugfix-phased-' + idx" class="phased-reviews-list">
+                      <template x-for="(pr, prIdx) in (stage.phased_reviews || [])" x-bind:key="pr._id">
+                        <div class="phased-review-entry">
+                          <div class="phased-drag-handle" title="Drag to reorder">
+                            <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor">
+                              <circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/>
+                              <circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/>
+                              <circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/>
+                            </svg>
+                          </div>
+                          <select x-model="pr.provider" class="stage-select"
+                            x-init="$nextTick(() => $el.value = pr.provider || '')"
+                            x-on:change="onPhasedProviderChange('bugfix', idx, prIdx)">
+                            <template x-for="[pName, pPreset] in Object.entries(presets)" x-bind:key="pName">
+                              <option x-bind:value="pName" x-text="pName + ' (' + pPreset.type + ')'"></option>
+                            </template>
+                          </select>
+                          <label class="parallel-checkbox" title="Run in parallel with adjacent phased reviewers">
+                            <input type="checkbox" x-model="pr.parallel">
+                            <span class="parallel-label">Parallel</span>
+                          </label>
+                          <select x-model="pr.model" x-init="$nextTick(() => $el.value = pr.model || '')" class="stage-select model-select" required>
+                            <option value="" disabled>Select model</option>
+                            <template x-for="m in (stageModelOptions[pr.provider] || [])" x-bind:key="m">
+                              <option x-bind:value="m" x-text="m"></option>
+                            </template>
+                          </select>
+                          <button class="stage-delete btn-danger btn-sm"
+                            x-on:click="removePhasedReview('bugfix', idx, prIdx)">x</button>
+                        </div>
+                      </template>
+                    </div>
+                    <button class="btn-secondary btn-sm phased-reviews-add"
+                      x-on:click="addPhasedReview('bugfix', idx)">+ Add Reviewer</button>
+                  </div>
+                </div>
+                <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('bugfix', idx)" x-show="stage.type !== 'implementation'">x</button>
               </div>
             </template>
           </div>
@@ -595,6 +685,10 @@
           <label>
             Max Iterations per Reviewer
             <input type="number" min="1" max="50" x-model.number="pipelineConfig.max_iterations">
+          </label>
+          <label>
+            Max Phased Review Iterations per Step
+            <input type="number" min="1" max="20" x-model.number="pipelineConfig.max_phased_iterations" placeholder="3">
           </label>
           <label>
             Team Name Pattern

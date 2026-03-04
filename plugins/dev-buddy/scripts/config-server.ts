@@ -824,11 +824,14 @@ function handleGetPipelineConfigDefaults(corsHeaders: Record<string, string>): R
 
 // Allowed top-level pipeline config fields (CWE-915)
 const ALLOWED_TOP_LEVEL_FIELDS = new Set([
-  'feature_pipeline', 'bugfix_pipeline', 'max_iterations', 'team_name_pattern',
+  'feature_pipeline', 'bugfix_pipeline', 'max_iterations', 'max_phased_iterations', 'team_name_pattern',
 ]);
 
-// Allowed stage entry fields
-const ALLOWED_STAGE_ENTRY_FIELDS = new Set(['type', 'provider', 'model', 'parallel']);
+// Allowed stage entry fields (CWE-915)
+const ALLOWED_STAGE_ENTRY_FIELDS = new Set(['type', 'provider', 'model', 'parallel', 'phased_reviews']);
+
+// Allowed phased review entry fields (CWE-915)
+const ALLOWED_PHASED_REVIEW_FIELDS = new Set(['provider', 'model', 'parallel']);
 
 /**
  * Validate a stage entry object for field allowlisting and structural correctness.
@@ -850,6 +853,31 @@ function validateStageEntry(entry: unknown, label: string): string | null {
     return `${label}: provider must be a non-empty string`;
   }
   if (typeof obj.model !== 'string' || obj.model.trim() === '') {
+    return `${label}: model must be a non-empty string`;
+  }
+  if ('parallel' in obj && typeof obj.parallel !== 'boolean') {
+    return `${label}: parallel must be a boolean`;
+  }
+  return null;
+}
+
+/**
+ * Validate a phased review sub-entry for field allowlisting and structural correctness.
+ * Returns an error message string, or null if valid.
+ */
+function validatePhasedReviewEntry(entry: unknown, label: string): string | null {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    return `${label}: must be an object`;
+  }
+  const obj = entry as Record<string, unknown>;
+  const unknownFields = Object.keys(obj).filter(k => !ALLOWED_PHASED_REVIEW_FIELDS.has(k));
+  if (unknownFields.length > 0) {
+    return `${label}: unknown fields rejected: ${unknownFields.join(', ')}`;
+  }
+  if (typeof obj.provider !== 'string' || (obj.provider as string).trim() === '') {
+    return `${label}: provider must be a non-empty string`;
+  }
+  if (typeof obj.model !== 'string' || (obj.model as string).trim() === '') {
     return `${label}: model must be a non-empty string`;
   }
   if ('parallel' in obj && typeof obj.parallel !== 'boolean') {
@@ -897,12 +925,38 @@ async function handlePutPipelineConfig(req: Request, corsHeaders: Record<string,
       if (err) {
         return jsonResponse({ error: { code: 'INVALID_CONFIG', message: err } }, 400, corsHeaders);
       }
+      // Validate phased_reviews sub-entries
+      const featureStage = featurePipeline[i] as Record<string, unknown>;
+      if (featureStage && 'phased_reviews' in featureStage) {
+        if (!Array.isArray(featureStage.phased_reviews)) {
+          return jsonResponse({ error: { code: 'INVALID_CONFIG', message: `feature_pipeline[${i}].phased_reviews must be an array` } }, 400, corsHeaders);
+        }
+        for (let j = 0; j < (featureStage.phased_reviews as unknown[]).length; j++) {
+          const prErr = validatePhasedReviewEntry((featureStage.phased_reviews as unknown[])[j], `feature_pipeline[${i}].phased_reviews[${j}]`);
+          if (prErr) {
+            return jsonResponse({ error: { code: 'INVALID_CONFIG', message: prErr } }, 400, corsHeaders);
+          }
+        }
+      }
     }
     const bugfixPipeline = body.bugfix_pipeline as unknown[];
     for (let i = 0; i < bugfixPipeline.length; i++) {
       const err = validateStageEntry(bugfixPipeline[i], `bugfix_pipeline[${i}]`);
       if (err) {
         return jsonResponse({ error: { code: 'INVALID_CONFIG', message: err } }, 400, corsHeaders);
+      }
+      // Validate phased_reviews sub-entries
+      const bugfixStage = bugfixPipeline[i] as Record<string, unknown>;
+      if (bugfixStage && 'phased_reviews' in bugfixStage) {
+        if (!Array.isArray(bugfixStage.phased_reviews)) {
+          return jsonResponse({ error: { code: 'INVALID_CONFIG', message: `bugfix_pipeline[${i}].phased_reviews must be an array` } }, 400, corsHeaders);
+        }
+        for (let j = 0; j < (bugfixStage.phased_reviews as unknown[]).length; j++) {
+          const prErr = validatePhasedReviewEntry((bugfixStage.phased_reviews as unknown[])[j], `bugfix_pipeline[${i}].phased_reviews[${j}]`);
+          if (prErr) {
+            return jsonResponse({ error: { code: 'INVALID_CONFIG', message: prErr } }, 400, corsHeaders);
+          }
+        }
       }
     }
 
@@ -912,6 +966,16 @@ async function handlePutPipelineConfig(req: Request, corsHeaders: Record<string,
       if (!Number.isInteger(mi) || (mi as number) <= 0) {
         return jsonResponse(
           { error: { code: 'INVALID_CONFIG', message: "'max_iterations' must be a positive integer" } },
+          400,
+          corsHeaders
+        );
+      }
+    }
+    if ('max_phased_iterations' in body) {
+      const mpi = body.max_phased_iterations;
+      if (!Number.isInteger(mpi) || (mpi as number) <= 0) {
+        return jsonResponse(
+          { error: { code: 'INVALID_CONFIG', message: "'max_phased_iterations' must be a positive integer" } },
           400,
           corsHeaders
         );

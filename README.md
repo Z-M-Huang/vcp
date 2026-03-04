@@ -2,11 +2,13 @@
 
 <div align="center">
 
-<img src="assets/logo.png" alt="VCP Logo" width="600">
+<img src="assets/logo.png" alt="VCP Logo" width="400">
+
+<img src="assets/hero.png" alt="VCP — Multi-AI Pipelines with Built-in Security" width="700">
 
 # VCP — Vibe Coding Protocol
 
-**The security gate for AI-generated code.**
+**Multi-AI development pipelines with built-in security enforcement.**
 
 ![Visitors](https://visitor-badge.laobi.icu/badge?page_id=Z-M-Huang.vcp&style=flat-square)
 ![GitHub release](https://img.shields.io/github/v/release/Z-M-Huang/vcp?style=flat-square)
@@ -25,7 +27,11 @@
 
 </div>
 
-Other tools scan code *after* your AI writes it. VCP prevents bad code *before* it reaches disk — injecting 100+ rules into the AI's context, blocking dangerous patterns in real time, and providing deep analysis on demand.
+One AI writing and reviewing its own code is like grading your own homework. VCP orchestrates **multiple AI models** through structured pipelines — then enforces 41 security and quality standards with real-time blocking.
+
+<div align="center">
+<img src="assets/pipeline.png" alt="Multi-AI Pipeline Orchestration" width="800">
+</div>
 
 ```
 ❌ VCP Security Gate — BLOCKED:
@@ -39,8 +45,9 @@ Other tools scan code *after* your AI writes it. VCP prevents bad code *before* 
 - [Quick Start](#quick-start)
 - [Two Plugins, One Protocol](#two-plugins-one-protocol)
 - [Why This Matters](#why-this-matters)
-- [VCP — Three-Layer Enforcement](#vcp--three-layer-enforcement)
+- [The Echo Chamber Problem](#the-echo-chamber-problem)
 - [Dev Buddy — Multi-AI Pipeline](#dev-buddy--multi-ai-pipeline)
+- [VCP — Three-Layer Enforcement](#vcp--three-layer-enforcement)
 - [Standards Coverage](#standards-coverage)
 - [Organization-Wide Standards](#organization-wide-standards)
 - [Configuration](#configuration)
@@ -121,65 +128,13 @@ VCP breaks this cycle by making the AI aware of engineering principles *before* 
 
 ---
 
-## VCP — Three-Layer Enforcement
+## The Echo Chamber Problem
 
 <div align="center">
-<img src="assets/three-layer-enforcement.png" alt="Three-Layer Enforcement: Prevent, Scan, Block" width="800">
+<img src="assets/echo-chamber.png" alt="The Echo Chamber Problem" width="800">
 </div>
 
-No single layer catches everything. Layer 1 prevents violations at the source. Layer 3 blocks the most dangerous patterns instantly. Layer 2 catches the nuanced issues through deep analysis. Together they provide defense in depth.
-
-### Layer 1: Proactive Context — Prevent Before Writing
-
-At session start, VCP injects a compact summary of all applicable rules into the AI's context. The AI internalizes security, architecture, testing, and quality rules *while it writes code* — preventing violations at the source.
-
-Run `/vcp-context` to re-inject rules at any time (useful after context compaction in long sessions).
-
-### Layer 2: On-Demand Scanning — Deep Analysis
-
-Skills scan code against 41 standards across 12 scopes using AI-driven analysis:
-
-| Skill | What It Does |
-|-------|-------------|
-| `/vcp-audit` | Full audit against all applicable standards — security, architecture, quality, compliance |
-| `/vcp-pre-commit-review` | Reviews all changed files before commit, produces PASS/BLOCK verdict |
-| `/vcp-dependency-check` | Lockfile hygiene, version ranges, package existence, typosquatting detection |
-| `/vcp-review-tests` | Test quality: over-mocking, tautological tests, missing edge cases |
-| `/vcp-coverage-gaps` | Maps source to test files, finds untested functions and missing edge cases |
-| `/vcp-test-plan` | Generates test plans with unit/integration tests, edge cases, and mock guidance |
-| `/vcp-root-cause-check` | Analyzes bug fixes for root cause vs. symptom patching |
-
-### Layer 3: Real-Time Blocking — Stop Dangerous Code Instantly
-
-A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking dangerous patterns before they reach disk:
-
-<details>
-<summary><strong>21 patterns across 9 CWEs</strong> — click to expand</summary>
-
-| CWE | What It Catches |
-|-----|----------------|
-| CWE-798 | Hardcoded secrets, AWS keys, private keys, JWT tokens, DB connection strings, Bearer tokens, API key prefixes |
-| CWE-89 | SQL injection via string concatenation and template literals |
-| CWE-95 | Code injection via `eval()` with user input |
-| CWE-79 | XSS via `innerHTML` with variable assignment |
-| CWE-502 | Insecure deserialization: pickle, unsafe YAML, node-serialize |
-| CWE-643 | XPath injection via string concatenation |
-| CWE-1321 | Prototype pollution via `__proto__` or `constructor.prototype` |
-| CWE-1336 | Server-side template injection (SSTI): Jinja2, Handlebars with variable input |
-| CWE-116 | Encoded data piped to shell execution |
-
-</details>
-
-### Coverage Backed by Industry Standards
-
-VCP standards are mapped against authoritative security frameworks:
-
-- **OWASP Top 10:2025** — All 10 categories covered
-- **OWASP Agentic AI Security Top 10 (ASI)** — All 10 categories covered (ASI01–ASI10)
-- **CWE Top 25:2024** — 19/25 covered (6 uncovered are memory-safety, out of scope for managed languages)
-- **OWASP API Security Top 10:2023** — All 10 categories addressed
-- **OWASP ASVS v5.0** — 15/17 chapters covered
-- **OWASP Docker Security** — 11/13 controls covered
+When a single AI family writes and reviews code, it shares the same training biases, the same blind spots, and the same failure modes. A Claude model reviewing Claude-generated code — or GPT reviewing GPT — misses the same classes of bugs because the models share architectural lineage and training distributions. Cross-model review breaks this pattern: routing code through independent models from different providers catches issues that same-family review consistently overlooks. Dev Buddy makes this practical with configurable pipelines that enforce cross-model review at every stage.
 
 ---
 
@@ -277,6 +232,72 @@ The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. 
 # Configure pipeline stages and providers via web portal
 /dev-buddy-config
 ```
+
+<div align="center">
+<img src="assets/real-screenshot.png" alt="Real pipeline in action — 5 concurrent reviews across MiniMax, Qwen, Kimi, GLM, Codex" width="800">
+</div>
+
+---
+
+## VCP — Three-Layer Enforcement
+
+<div align="center">
+<img src="assets/three-layer-enforcement.png" alt="Three-Layer Enforcement: Prevent, Scan, Block" width="800">
+</div>
+
+No single layer catches everything. Layer 1 prevents violations at the source. Layer 3 blocks the most dangerous patterns instantly. Layer 2 catches the nuanced issues through deep analysis. Together they provide defense in depth.
+
+### Layer 1: Proactive Context — Prevent Before Writing
+
+At session start, VCP injects a compact summary of all applicable rules into the AI's context. The AI internalizes security, architecture, testing, and quality rules *while it writes code* — preventing violations at the source.
+
+Run `/vcp-context` to re-inject rules at any time (useful after context compaction in long sessions).
+
+### Layer 2: On-Demand Scanning — Deep Analysis
+
+Skills scan code against 41 standards across 12 scopes using AI-driven analysis:
+
+| Skill | What It Does |
+|-------|-------------|
+| `/vcp-audit` | Full audit against all applicable standards — security, architecture, quality, compliance |
+| `/vcp-pre-commit-review` | Reviews all changed files before commit, produces PASS/BLOCK verdict |
+| `/vcp-dependency-check` | Lockfile hygiene, version ranges, package existence, typosquatting detection |
+| `/vcp-review-tests` | Test quality: over-mocking, tautological tests, missing edge cases |
+| `/vcp-coverage-gaps` | Maps source to test files, finds untested functions and missing edge cases |
+| `/vcp-test-plan` | Generates test plans with unit/integration tests, edge cases, and mock guidance |
+| `/vcp-root-cause-check` | Analyzes bug fixes for root cause vs. symptom patching |
+
+### Layer 3: Real-Time Blocking — Stop Dangerous Code Instantly
+
+A security gate hook runs on every `Write`, `Edit`, and `Bash` call, blocking dangerous patterns before they reach disk:
+
+<details>
+<summary><strong>21 patterns across 9 CWEs</strong> — click to expand</summary>
+
+| CWE | What It Catches |
+|-----|----------------|
+| CWE-798 | Hardcoded secrets, AWS keys, private keys, JWT tokens, DB connection strings, Bearer tokens, API key prefixes |
+| CWE-89 | SQL injection via string concatenation and template literals |
+| CWE-95 | Code injection via dangerous dynamic code execution with user input |
+| CWE-79 | XSS via `innerHTML` with variable assignment |
+| CWE-502 | Insecure deserialization: unsafe Python object loading, unsafe YAML, node-serialize |
+| CWE-643 | XPath injection via string concatenation |
+| CWE-1321 | Prototype pollution via `__proto__` or `constructor.prototype` |
+| CWE-1336 | Server-side template injection (SSTI): Jinja2, Handlebars with variable input |
+| CWE-116 | Encoded data piped to shell execution |
+
+</details>
+
+### Coverage Backed by Industry Standards
+
+VCP standards are mapped against authoritative security frameworks:
+
+- **OWASP Top 10:2025** — All 10 categories covered
+- **OWASP Agentic AI Security Top 10 (ASI)** — All 10 categories covered (ASI01–ASI10)
+- **CWE Top 25:2024** — 19/25 covered (6 uncovered are memory-safety, out of scope for managed languages)
+- **OWASP API Security Top 10:2023** — All 10 categories addressed
+- **OWASP ASVS v5.0** — 15/17 chapters covered
+- **OWASP Docker Security** — 11/13 controls covered
 
 ---
 

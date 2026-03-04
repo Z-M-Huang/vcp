@@ -310,6 +310,7 @@ const baseApiArgs = {
   model: 'ModelA',
   cwd: '/project',
   task: 'do something',
+  taskFromStdin: false,
 };
 
 const baseApiPreset: ApiPreset = {
@@ -472,6 +473,89 @@ describe('runApiPath', () => {
   });
 });
 
+// ================== runApiPath stream mode (null stdout) ==================
+
+/** Helper: build mock deps for stream mode (stdout: null). */
+function mockStreamApiDeps(opts: {
+  exitCode?: number;
+  exitDelay?: number;
+  shouldHang?: boolean;
+}): { deps: ApiPathDeps; calls: { spawnCalls: Array<{ args: unknown; taskTimeoutMs: number }>; killCalls: (number | string | undefined)[] } } {
+  const calls = {
+    spawnCalls: [] as Array<{ args: unknown; taskTimeoutMs: number }>,
+    killCalls: [] as (number | string | undefined)[],
+  };
+
+  const exitCode = opts.exitCode ?? 0;
+
+  const deps: ApiPathDeps = {
+    spawnTaskRunner(args, taskTimeoutMs) {
+      calls.spawnCalls.push({ args, taskTimeoutMs });
+
+      const proc = {
+        exitCode: opts.shouldHang ? null : exitCode,
+        stdout: null as ReadableStream<Uint8Array> | null, // stream mode
+        kill: (sig?: number | string) => { calls.killCalls.push(sig); proc.exitCode = exitCode; },
+      };
+
+      const exited = opts.shouldHang
+        ? new Promise<void>(() => {}) // never resolves
+        : new Promise<void>((resolve) => setTimeout(resolve, opts.exitDelay ?? 0));
+
+      return { proc, exited };
+    },
+    log: async () => {},
+  };
+
+  return { deps, calls };
+}
+
+describe('runApiPath stream mode', () => {
+  test('returns success for exit code 0', async () => {
+    const { deps } = mockStreamApiDeps({ exitCode: 0 });
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.exitCode).toBe(0);
+    expect(result.output.event).toBe('complete');
+    expect(result.output.provider).toBe('test-preset');
+    expect(result.output.model).toBe('ModelA');
+  });
+
+  test('returns timeout error for exit code 3', async () => {
+    const { deps } = mockStreamApiDeps({ exitCode: 3 });
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.exitCode).toBe(3);
+    expect(result.output.event).toBe('error');
+    expect(result.output.error).toContain('timed out');
+  });
+
+  test('returns execution error for exit code 2', async () => {
+    const { deps } = mockStreamApiDeps({ exitCode: 2 });
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.exitCode).toBe(2);
+    expect(result.output.event).toBe('error');
+    expect(result.output.error).toContain('exited with code 2');
+  });
+
+  test('returns validation error for exit code 1', async () => {
+    const { deps } = mockStreamApiDeps({ exitCode: 1 });
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.exitCode).toBe(1);
+    expect(result.output.event).toBe('error');
+  });
+
+  test('returns timeout error when process hangs in stream mode', async () => {
+    const presetWithShortTimeout = { ...baseApiPreset, timeout_ms: 50 };
+    const { deps, calls } = mockStreamApiDeps({ shouldHang: true });
+    deps.processTimeoutBufferMs = 0;
+    deps.killGraceMs = 50;
+
+    const result = await runApiPath(baseApiArgs, presetWithShortTimeout, false, deps);
+    expect(result.exitCode).toBe(3);
+    expect(result.output.error).toContain('timed out');
+    expect(calls.killCalls.length).toBe(2);
+  });
+});
+
 // ================== runCliPath (runtime placeholder validation) ==================
 
 const baseCliArgs = {
@@ -480,6 +564,7 @@ const baseCliArgs = {
   model: 'test-model',
   cwd: '/project',
   task: 'do something',
+  taskFromStdin: false,
 };
 
 function makeCliPreset(overrides: Partial<CliPreset> = {}): CliPreset {

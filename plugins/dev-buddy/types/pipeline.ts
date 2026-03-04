@@ -11,6 +11,19 @@ import type { StageType } from './stage-definitions.ts';
 // ─── Pipeline Types ──────────────────────────────────────────────────────────
 
 /**
+ * A single phased review entry for per-step implementation reviews.
+ * Configured on implementation stage entries only.
+ */
+export interface PhasedReviewEntry {
+  /** The preset name to use for this phased reviewer (references ~/.vcp/ai-presets.json). */
+  provider: string;
+  /** Model name. Required. Validated against /^[a-zA-Z0-9._-]+$/. */
+  model: string;
+  /** When true, this reviewer runs in parallel with adjacent phased reviewers that also have parallel: true. */
+  parallel?: boolean;
+}
+
+/**
  * A single stage entry in a pipeline array.
  * Both provider and model are required — no defaults.
  */
@@ -23,6 +36,12 @@ export interface StageEntry {
   model: string;
   /** When true, this review stage runs in parallel with adjacent same-type parallel stages. Only applies to plan-review and code-review. */
   parallel?: boolean;
+  /**
+   * Phased review entries for per-step implementation reviews.
+   * Only valid on implementation stages.
+   * Each step is reviewed by these agents before the next step begins.
+   */
+  phased_reviews?: PhasedReviewEntry[];
 }
 
 /**
@@ -36,6 +55,11 @@ export interface PipelineConfig {
   bugfix_pipeline: StageEntry[];
   /** Maximum fix/re-review iterations per pipeline execution. Default: 10. */
   max_iterations: number;
+  /**
+   * Maximum fix/re-review iterations per implementation step during phased reviews.
+   * Default: 3. Resolved at config load time — consumers must not apply their own fallback.
+   */
+  max_phased_iterations?: number;
   /** Team name pattern with {BASENAME} and {HASH} placeholders. */
   team_name_pattern: string;
 }

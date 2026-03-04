@@ -301,6 +301,7 @@ describe('parseArgs', () => {
       cwd: '/project',
       taskTimeoutMs: 300_000,
       taskFromStdin: false,
+      stream: false,
     });
   });
 
@@ -346,6 +347,29 @@ describe('parseArgs', () => {
       '--task', 't',
     ]);
     expect(result.taskTimeoutMs).toBe(DEFAULT_TASK_TIMEOUT_MS);
+  });
+
+  test('parses --stream flag', () => {
+    const result = parseArgs([
+      ...base,
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--stream',
+    ]);
+    expect(result.stream).toBe(true);
+  });
+
+  test('defaults stream to false', () => {
+    const result = parseArgs([
+      ...base,
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+    ]);
+    expect(result.stream).toBe(false);
   });
 
   test('rejects missing required arguments', () => {

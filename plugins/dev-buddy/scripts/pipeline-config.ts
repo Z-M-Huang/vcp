@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { readPresets } from './preset-utils.ts';
-import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
+import type { PipelineConfig, StageEntry, PhasedReviewEntry } from '../types/pipeline.ts';
 import { STAGE_DEFINITIONS, MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 import type { StageType } from '../types/stage-definitions.ts';
 
@@ -52,6 +52,7 @@ export const DEFAULT_CONFIG: PipelineConfig = {
     { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
   ],
   max_iterations: 10,
+  max_phased_iterations: 3,
   team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
 };
 
@@ -170,12 +171,62 @@ export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' 
           `${name}[${i}]: invalid model name '${entry.model}'. Must match /^[a-zA-Z0-9._-]+$/`
         );
       }
+
+      // Validate phased_reviews if present
+      if ('phased_reviews' in entry && entry.phased_reviews !== undefined) {
+        if (entry.type !== 'implementation') {
+          throw new Error(
+            `${name}[${i}]: phased_reviews is only allowed on implementation stage entries, not '${entry.type}'`
+          );
+        }
+        if (!Array.isArray(entry.phased_reviews)) {
+          throw new Error(`${name}[${i}]: phased_reviews must be an array`);
+        }
+        if (entry.phased_reviews.length > 10) {
+          throw new Error(
+            `${name}[${i}]: phased_reviews array length ${entry.phased_reviews.length} exceeds maximum of 10`
+          );
+        }
+        for (let j = 0; j < entry.phased_reviews.length; j++) {
+          const pr = entry.phased_reviews[j] as PhasedReviewEntry;
+          if (typeof pr.provider !== 'string' || pr.provider.trim() === '') {
+            throw new Error(
+              `${name}[${i}].phased_reviews[${j}]: provider must be a non-empty string`
+            );
+          }
+          if (typeof pr.model !== 'string' || pr.model.trim() === '') {
+            throw new Error(
+              `${name}[${i}].phased_reviews[${j}]: model is required and must be a non-empty string`
+            );
+          }
+          if (!MODEL_NAME_REGEX.test(pr.model)) {
+            throw new Error(
+              `${name}[${i}].phased_reviews[${j}]: invalid model name '${pr.model}'. Must match /^[a-zA-Z0-9._-]+$/`
+            );
+          }
+          if ('parallel' in pr && typeof pr.parallel !== 'boolean') {
+            throw new Error(
+              `${name}[${i}].phased_reviews[${j}]: parallel must be a boolean, got ${typeof pr.parallel}`
+            );
+          }
+        }
+      }
     }
 
     // Minimum constraint: every pipeline must have at least one implementation stage
     if (implementationCount === 0) {
       throw new Error(
         `${name}: every pipeline must have at least one implementation stage`
+      );
+    }
+  }
+
+  // Validate max_phased_iterations if present
+  if ('max_phased_iterations' in config && config.max_phased_iterations !== undefined) {
+    const mpi = config.max_phased_iterations;
+    if (!Number.isInteger(mpi) || mpi <= 0) {
+      throw new Error(
+        `max_phased_iterations must be a positive integer, got ${mpi}`
       );
     }
   }
@@ -206,6 +257,9 @@ export function loadPipelineConfig(): PipelineConfig {
 
   const config = parsed as unknown as PipelineConfig;
   validateConfig(config);
+  // Canonical default resolution: max_phased_iterations defaults to 3.
+  // This is the ONLY place this default is applied. Downstream consumers must not apply their own fallback.
+  config.max_phased_iterations = config.max_phased_iterations ?? 3;
   return config;
 }
 
@@ -222,6 +276,12 @@ export function validateProviderReferences(config: PipelineConfig): void {
   const providerNames = new Set<string>();
   for (const entry of [...config.feature_pipeline, ...config.bugfix_pipeline]) {
     providerNames.add(entry.provider);
+    // Also collect providers from phased_reviews entries
+    if (Array.isArray(entry.phased_reviews)) {
+      for (const pr of entry.phased_reviews) {
+        providerNames.add(pr.provider);
+      }
+    }
   }
 
   const errors: string[] = [];

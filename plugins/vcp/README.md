@@ -1,6 +1,16 @@
-# vcp
+# VCP
 
-Vibe Coding Protocol plugin — project initialization, security enforcement, quality checks, dependency verification, auditing, and test quality analysis for AI-generated code.
+**The security gate for AI-generated code.**
+
+VCP enforces 41 standards across 12 scopes — injecting rules into the AI's context at session start, blocking dangerous patterns in real time, and providing deep analysis on demand through 10 scanning skills. No single layer catches everything, so VCP combines proactive prevention, on-demand scanning, and real-time blocking for defense in depth.
+
+<div align="center">
+<img src="../../assets/why-vcp.png" alt="Without guardrails vs With VCP" width="700">
+</div>
+
+<div align="center">
+<img src="../../assets/three-layer-enforcement.png" alt="Three-Layer Enforcement: Prevent, Scan, Block" width="700">
+</div>
 
 ## Prerequisites
 
@@ -95,13 +105,24 @@ All hooks write diagnostic entries to `.vcp/vcp.log` in the project root via the
 
 ## Known Limitations
 
-- **Standards fetched from mutable `main` branch:** Skills fetch standards from `https://raw.githubusercontent.com/.../main/...`, which is mutable. A force-push or repository compromise could change what all users receive. When VCP reaches v1.0, standards will be pinned to tagged releases. For v0.2.13, the always-latest behavior is intentional while standards are still being written.
+- **Standards fetched from mutable `main` branch:** Skills fetch standards from `https://raw.githubusercontent.com/.../main/...`, which is mutable. A force-push or repository compromise could change what all users receive. When VCP reaches v1.0, standards will be pinned to tagged releases. For v0.2.14, the always-latest behavior is intentional while standards are still being written.
 
 - **Regex-based security gate cannot do taint tracking:** The security-gate hook uses regex pattern matching, which cannot follow data flow (e.g., a SQL query built in a variable then passed to `.query()`). Use the `/vcp-audit` or `/vcp-pre-commit-review` skills for AI-driven analysis that can trace data flow across variables.
 
 - **Bash obfuscation via uncommon techniques:** The Bash obfuscation check catches decode-to-execution patterns (pipe to shell, `sh -c` with decode, `$SHELL`), but misses less common techniques like `python -c`, `perl -e`, variable indirection, or `$'\x...'` escaping. The AI skills provide deeper coverage.
 
 - **Prisma `$queryRaw` tagged templates intentionally not flagged:** Prisma's `$queryRaw\`...\`` syntax with tagged template literals is parameterized and safe. Only `$queryRawUnsafe()` and `$executeRawUnsafe()` with parentheses are flagged.
+
+## Documentation
+
+Full documentation is on the **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)**:
+
+- **[Getting Started](https://github.com/Z-M-Huang/vcp/wiki/Getting-Started)** — Prerequisites, installation, first scan
+- **[Configuration](https://github.com/Z-M-Huang/vcp/wiki/Configuration)** — Scopes, compliance, severity, ignore rules
+- **[Skills Reference](https://github.com/Z-M-Huang/vcp/wiki/Skills-Reference)** — All 10 skills with usage and examples
+- **[Three-Layer Enforcement Model](https://github.com/Z-M-Huang/vcp/wiki/Three%E2%80%90Layer-Enforcement-Model)** — How proactive context, scanning, and blocking work together
+- **[Hooks Reference](https://github.com/Z-M-Huang/vcp/wiki/Hooks-Reference)** — All 4 hooks with triggers and exit codes
+- **[Security Gate Patterns](https://github.com/Z-M-Huang/vcp/wiki/Security-Gate-Patterns)** — All 21 regex patterns across 9 CWEs
 
 ## Installation
 

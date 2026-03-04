@@ -478,17 +478,43 @@ function devBuddyApp() {
           ...(data.config.feature_pipeline || []),
           ...(data.config.bugfix_pipeline || []),
         ];
-        const uniqueProviders = [...new Set(pipelines.map(s => s.provider).filter(Boolean))];
-        await Promise.allSettled(uniqueProviders.map(p => this._fetchModelOptions(p)));
+        // Collect providers from both stage entries and phased_reviews
+        const allProviders = new Set(pipelines.map(s => s.provider).filter(Boolean));
+        for (const stage of pipelines) {
+          if (Array.isArray(stage.phased_reviews)) {
+            for (const pr of stage.phased_reviews) {
+              if (pr.provider) allProviders.add(pr.provider);
+            }
+          }
+        }
+        await Promise.allSettled([...allProviders].map(p => this._fetchModelOptions(p)));
 
         // Now assign config — Alpine renders selects with options already present
         this.pipelineConfig = data.config;
         this._assignStageIds(this.pipelineConfig.feature_pipeline);
         this._assignStageIds(this.pipelineConfig.bugfix_pipeline);
 
+        // Assign _ids to phased review entries on implementation stages
+        for (const stage of [...this.pipelineConfig.feature_pipeline, ...this.pipelineConfig.bugfix_pipeline]) {
+          if (stage.type === 'implementation' && Array.isArray(stage.phased_reviews) && stage.phased_reviews.length > 0) {
+            this._assignPhasedReviewIds(stage.phased_reviews);
+          }
+        }
+
         // Init sortable after DOM renders
         this.$nextTick(() => {
           this.initSortable('feature-pipeline-list');
+          // Init phased review sortables for implementation stages with phased_reviews
+          this.pipelineConfig.feature_pipeline.forEach((stage, idx) => {
+            if (stage.type === 'implementation' && Array.isArray(stage.phased_reviews) && stage.phased_reviews.length > 0) {
+              this.initPhasedReviewSortable('feature-phased-' + idx, 'feature', idx);
+            }
+          });
+          this.pipelineConfig.bugfix_pipeline.forEach((stage, idx) => {
+            if (stage.type === 'implementation' && Array.isArray(stage.phased_reviews) && stage.phased_reviews.length > 0) {
+              this.initPhasedReviewSortable('bugfix-phased-' + idx, 'bugfix', idx);
+            }
+          });
         });
       } catch (e) {
         this.showError('Network error loading pipeline config');
@@ -527,12 +553,39 @@ function devBuddyApp() {
 
     /**
      * Stamp each stage with a non-enumerable _id for stable x-for keys.
+     * Also stamps implementation stages with non-enumerable _phasedExpanded (collapsed by default).
      * Non-enumerable so JSON.stringify() omits it (server rejects unknown fields).
      */
     _assignStageIds(pipeline) {
       for (const stage of pipeline) {
         if (!Object.prototype.hasOwnProperty.call(stage, '_id')) {
           Object.defineProperty(stage, '_id', {
+            value: ++this._stageIdCounter,
+            writable: true,
+            enumerable: false,
+            configurable: true,
+          });
+        }
+        // Stamp implementation stages with _phasedExpanded for collapsible section state
+        if (stage.type === 'implementation' && !Object.prototype.hasOwnProperty.call(stage, '_phasedExpanded')) {
+          Object.defineProperty(stage, '_phasedExpanded', {
+            value: false,
+            writable: true,
+            enumerable: false,
+            configurable: true,
+          });
+        }
+      }
+    },
+
+    /**
+     * Stamp each phased review entry with a non-enumerable _id for stable x-for keys.
+     * Non-enumerable so JSON.stringify() omits it.
+     */
+    _assignPhasedReviewIds(phasedReviews) {
+      for (const pr of phasedReviews) {
+        if (!Object.prototype.hasOwnProperty.call(pr, '_id')) {
+          Object.defineProperty(pr, '_id', {
             value: ++this._stageIdCounter,
             writable: true,
             enumerable: false,
@@ -710,18 +763,156 @@ function devBuddyApp() {
       }
     },
 
+    // ============================================================
+    // Phased Reviews
+    // ============================================================
+
+    /**
+     * Add a new phased review entry to an implementation stage.
+     */
+    addPhasedReview(pipelineType, stageIndex) {
+      const pipeline = pipelineType === 'feature'
+        ? this.pipelineConfig.feature_pipeline
+        : this.pipelineConfig.bugfix_pipeline;
+
+      const stage = pipeline[stageIndex];
+      if (!stage) return;
+
+      if (!Array.isArray(stage.phased_reviews)) {
+        stage.phased_reviews = [];
+      }
+
+      const firstPreset = Object.keys(this.presets)[0] || 'anthropic-subscription';
+      const newEntry = { provider: firstPreset, model: undefined, parallel: false };
+      stage.phased_reviews.push(newEntry);
+      this._assignPhasedReviewIds(stage.phased_reviews);
+
+      // Pre-fetch model options for the default provider
+      this._fetchModelOptions(firstPreset);
+
+      // Re-init phased review sortable after DOM update
+      const containerId = pipelineType + '-phased-' + stageIndex;
+      this.$nextTick(() => {
+        this.initPhasedReviewSortable(containerId, pipelineType, stageIndex);
+      });
+    },
+
+    /**
+     * Remove a phased review entry by index.
+     */
+    removePhasedReview(pipelineType, stageIndex, reviewIndex) {
+      const pipeline = pipelineType === 'feature'
+        ? this.pipelineConfig.feature_pipeline
+        : this.pipelineConfig.bugfix_pipeline;
+
+      const stage = pipeline[stageIndex];
+      if (!stage || !Array.isArray(stage.phased_reviews)) return;
+
+      stage.phased_reviews.splice(reviewIndex, 1);
+
+      const containerId = pipelineType + '-phased-' + stageIndex;
+      this.$nextTick(() => {
+        this.initPhasedReviewSortable(containerId, pipelineType, stageIndex);
+      });
+    },
+
+    /**
+     * Initialize SortableJS for a phased review list container.
+     * Uses .phased-drag-handle to avoid interfering with pipeline-level drag handles.
+     */
+    initPhasedReviewSortable(containerId, pipelineType, stageIndex) {
+      // Destroy existing instance
+      if (this._sortableInstances[containerId]) {
+        this._sortableInstances[containerId].destroy();
+        delete this._sortableInstances[containerId];
+      }
+
+      const el = document.getElementById(containerId);
+      if (!el || typeof Sortable === 'undefined') return;
+
+      const pipeline = pipelineType === 'feature'
+        ? this.pipelineConfig.feature_pipeline
+        : this.pipelineConfig.bugfix_pipeline;
+      const stage = pipeline[stageIndex];
+      if (!stage) return;
+
+      const self = this;
+
+      this._sortableInstances[containerId] = Sortable.create(el, {
+        animation: 150,
+        handle: '.phased-drag-handle',
+        ghostClass: 'ghost',
+        onEnd(evt) {
+          const oldIndex = evt.oldIndex;
+          const newIndex = evt.newIndex;
+          if (oldIndex === newIndex) return;
+
+          // Revert SortableJS's DOM mutation — let Alpine own rendering exclusively.
+          const parent = evt.from;
+          evt.item.remove();
+          const entries = parent.querySelectorAll(':scope > .phased-review-entry');
+          if (oldIndex >= entries.length) {
+            parent.appendChild(evt.item);
+          } else {
+            parent.insertBefore(evt.item, entries[oldIndex]);
+          }
+
+          // Update phased_reviews data — Alpine re-renders
+          const phasedReviews = stage.phased_reviews;
+          if (!phasedReviews || oldIndex < 0 || oldIndex >= phasedReviews.length || newIndex < 0 || newIndex >= phasedReviews.length) return;
+
+          const moved = phasedReviews.splice(oldIndex, 1)[0];
+          phasedReviews.splice(newIndex, 0, moved);
+        },
+      });
+    },
+
+    /**
+     * Handle provider change on a phased reviewer entry.
+     * Clears the model and fetches model options for the new provider.
+     */
+    async onPhasedProviderChange(pipelineType, stageIndex, reviewIndex) {
+      const pipeline = pipelineType === 'feature'
+        ? this.pipelineConfig.feature_pipeline
+        : this.pipelineConfig.bugfix_pipeline;
+
+      const stage = pipeline[stageIndex];
+      if (!stage || !Array.isArray(stage.phased_reviews)) return;
+
+      const pr = stage.phased_reviews[reviewIndex];
+      if (!pr) return;
+
+      pr.model = undefined;
+      await this._fetchModelOptions(pr.provider);
+    },
+
     /**
      * Save pipeline config via REST API.
+     * Strips empty phased_reviews arrays before sending to keep config clean.
      */
     async savePipelineConfig() {
       this.saving.pipeline = true;
       try {
+        // Strip empty phased_reviews arrays from both pipelines before saving
+        const cleanPipeline = (pipeline) => pipeline.map(stage => {
+          if (stage.phased_reviews && stage.phased_reviews.length === 0) {
+            const { phased_reviews, ...rest } = stage;
+            return rest;
+          }
+          return stage;
+        });
+
         const payload = {
-          feature_pipeline: this.pipelineConfig.feature_pipeline,
-          bugfix_pipeline: this.pipelineConfig.bugfix_pipeline,
+          feature_pipeline: cleanPipeline(this.pipelineConfig.feature_pipeline),
+          bugfix_pipeline: cleanPipeline(this.pipelineConfig.bugfix_pipeline),
           max_iterations: this.pipelineConfig.max_iterations,
           team_name_pattern: this.pipelineConfig.team_name_pattern,
         };
+
+        // Include max_phased_iterations only if explicitly set
+        if (this.pipelineConfig.max_phased_iterations != null) {
+          payload.max_phased_iterations = this.pipelineConfig.max_phased_iterations;
+        }
 
         const resp = await fetch('/api/pipeline-config', {
           method: 'PUT',

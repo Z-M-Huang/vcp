@@ -139,7 +139,7 @@ export const VALID_STAGE_TYPES: ReadonlySet<string> = new Set(Object.keys(STAGE_
  * Output filenames must be safe paths: no traversal, each segment starts with alphanumeric.
  * Allows paths like 'user-story/manifest.json' but rejects '../evil.json'.
  */
-const SAFE_PATH_RE = /^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*\.json$/;
+export const SAFE_PATH_RE = /^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._-]*)*\.json$/;
 
 /** Validate a single stages[] entry from pipeline-tasks.json.
  *  Checks: type is a known StageType, output_file is a safe JSON basename. */
@@ -162,3 +162,38 @@ export function isValidStageEntry(entry: unknown): entry is { type: string; outp
  * Prevents shell metacharacter injection (CWE-78).
  */
 export const MODEL_NAME_REGEX = /^[a-zA-Z0-9._-]+$/;
+
+// ─── Per-Step Artifact Naming ─────────────────────────────────────────────────
+
+/**
+ * Compute the output file name for a single-step implementation artifact.
+ *
+ * @param step - The 1-based plan step number.
+ * @param version - The version number (starts at 1, incremented on fix retries).
+ * @returns The output file name (e.g. 'impl-step-3-v1.json').
+ */
+export function getImplStepFileName(step: number, version: number): string {
+  if (!Number.isInteger(step) || step < 1) throw new Error(`step must be a positive integer, got ${step}`);
+  if (!Number.isInteger(version) || version < 1) throw new Error(`version must be a positive integer, got ${version}`);
+  return `impl-step-${step}-v${version}.json`;
+}
+
+/**
+ * Compute the output file name for a phased review artifact.
+ *
+ * @param step - The 1-based plan step number.
+ * @param provider - The provider/preset name (sanitized for filename safety).
+ * @param model - The model name (sanitized for filename safety).
+ * @param version - The version number (starts at 1, incremented on re-review).
+ * @returns The output file name (e.g. 'phased-review-anthropic-claude-sonnet-4-step-3-v1.json').
+ */
+export function getPhasedReviewFileName(
+  step: number,
+  provider: string,
+  model: string,
+  version: number,
+): string {
+  if (!Number.isInteger(step) || step < 1) throw new Error(`step must be a positive integer, got ${step}`);
+  if (!Number.isInteger(version) || version < 1) throw new Error(`version must be a positive integer, got ${version}`);
+  return `phased-review-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}-step-${step}-v${version}.json`;
+}

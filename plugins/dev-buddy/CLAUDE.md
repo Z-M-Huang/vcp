@@ -198,6 +198,82 @@ This maintains the dependency chain and ensures the same reviewer validates fixe
 
 ---
 
+## Phased Implementation Reviews
+
+Phased reviews add incremental verification gates during the implementation stage: after each plan step is implemented, 1+ reviewer models verify that step before the next step begins. Defects are caught close to where they are introduced rather than only at the final code-review gate.
+
+### How It Works
+
+```
+Implementation Stage (phased_reviews configured)
+  |
+  For each plan step (1..N):
+    ├── implementer (SINGLE_STEP_MODE: step N) → impl-step-N-v1.json
+    ├── phased-reviewer(s) → phased-review-{provider}-{model}-step-N-v1.json
+    │    ├── approved → proceed to step N+1
+    │    └── needs_changes → fix task → re-review → ... up to max_phased_iterations
+    │         └── exhausted iterations → escalate to user (pipeline pauses)
+    └── All steps complete → aggregate results → impl-result.json
+  |
+  Final code-review gate (independent, no phased review context)
+```
+
+### Configuration
+
+Add `phased_reviews` array to an implementation stage entry:
+
+```json
+{
+  "type": "implementation",
+  "provider": "anthropic-subscription",
+  "model": "sonnet",
+  "phased_reviews": [
+    { "provider": "anthropic-subscription", "model": "sonnet" },
+    { "provider": "my-api-preset", "model": "claude-sonnet-4", "parallel": true }
+  ]
+}
+```
+
+Set `max_phased_iterations` at the top level (default 3):
+
+```json
+{ "max_phased_iterations": 3 }
+```
+
+### Per-Step Artifacts
+
+| Artifact | Path | Written By |
+|----------|------|------------|
+| Step implementation | `.vcp/task/impl-steps/impl-step-{N}-v{V}.json` | implementer (SINGLE_STEP_MODE) |
+| Step review | `.vcp/task/phased-reviews/phased-review-{provider}-{model}-step-{N}-v{V}.json` | phased-reviewer |
+| Aggregated result | `.vcp/task/impl-result.json` | orchestrator (inline) |
+
+Version (`V`) starts at 1 and increments with each fix/re-review cycle.
+
+### Resume Support
+
+Partial phased progress is tracked in `pipeline-tasks.json` under the implementation stage's `step_progress` field:
+
+```json
+"step_progress": {
+  "current_step": 4,
+  "total_steps": 8,
+  "completed_steps": [1, 2, 3]
+}
+```
+
+On resume, the orchestrator skips completed steps and resumes the per-step loop from `current_step`.
+
+### Escalation
+
+When `max_phased_iterations` is exhausted for a step, the orchestrator pauses the pipeline and presents two options: take over manually or abort. It never skips to the next step automatically.
+
+### Final Code Review
+
+The final code-review stage is independent of phased reviews. It receives no phased review context — it reviews the complete codebase as assembled by all steps.
+
+---
+
 ## Quick Start
 
 ```
@@ -253,8 +329,12 @@ Model defaults to `sonnet` (subscription) or `preset.models[0]` (api/cli) if omi
 Provider is matched by exact name first, then unique prefix. Run `/dev-buddy-manage-presets list` to see available presets.
 
 The one-shot runner script (`scripts/one-shot-runner.ts`) handles API and CLI lifecycle:
-- **API:** Spawns `api-task-runner.ts` with `--preset`, `--model`, `--task-stdin`, `--cwd`, `--task-timeout` → pipes task text via stdin (avoids argv size limits) → reads result JSON from stdout → process exits on its own
+- **API:** Spawns `api-task-runner.ts` with `--preset`, `--model`, `--task-stdin`, `--cwd`, `--task-timeout`, `--stream` → pipes task text via stdin (avoids argv size limits) → agent output goes directly to terminal via `stdout: 'inherit'` (stream mode) → exit code maps to result (0=success, 2=error, 3=timeout). **Stream mode** means the CC main process sees the agent's output in real time, just like CLI presets.
 - **CLI:** Uses the preset's `one_shot_args_template` (required for CLI presets in one-shot mode). Tokenizes it, substitutes `{model}`, `{prompt}`, `{reasoning_effort}` → platform-aware execution (CWE-78 safe) → wall-clock timeout. If `one_shot_args_template` is not configured, the runner exits with a validation error directing the user to configure it.
+
+**Stream vs Pipe mode (`api-task-runner.ts`):**
+- `--stream` flag: prints result text directly to stdout (no JSON wrapper), errors to stderr, uses exit codes. Used by one-shot runner for terminal visibility.
+- Without `--stream`: outputs JSON `{ event: "complete"|"error", ... }` to stdout. Used by pipeline orchestrator for structured result parsing.
 
 **CLI Preset Templates:**
 - `args_template` — used by the pipeline's `cli-executor.ts`. Must contain `{model}`, `{prompt}`, `{output_file}`. May also use `{schema_path}` and `{reasoning_effort}`.
@@ -271,9 +351,10 @@ The pipeline uses specialized agents defined in `agents/` directory. Model selec
 | **requirements-gatherer** | opus | Business Analyst + Product Manager hybrid (supports synthesis mode with specialist analyses) |
 | **planner** | opus | Architect + Fullstack Developer hybrid |
 | **plan-reviewer** | sonnet/opus | Architect + Security + QA hybrid |
-| **implementer** | sonnet | Fullstack + TDD + Quality hybrid |
+| **implementer** | sonnet | Fullstack + TDD + Quality hybrid (supports SINGLE_STEP_MODE for phased reviews) |
 | **code-reviewer** | sonnet/opus | Security + Performance + QA hybrid |
 | **root-cause-analyst** | sonnet/opus | Debugging + fault isolation for autonomous bug diagnosis |
+| **phased-reviewer** | sonnet | Lightweight per-step reviewer for incremental code quality validation during phased implementation |
 
 ---
 
@@ -441,6 +522,50 @@ Format includes a `resolved_config` snapshot, `config_hash` for resume drift det
 
 Hooks and phase detection read `resolved_config` from this file to derive dynamic stage lists — they never read `~/.vcp/dev-buddy.json` directly (prevents TOCTOU races).
 
+When a phased implementation loop is active, the implementation stage entry also contains a `step_progress` object:
+
+```json
+{
+  "type": "implementation",
+  "task_id": "task-id-6",
+  "step_progress": {
+    "current_step": 4,
+    "total_steps": 8,
+    "completed_steps": [1, 2, 3]
+  }
+}
+```
+
+### Per-Step Artifacts (`.vcp/task/impl-steps/` and `.vcp/task/phased-reviews/`)
+
+**impl-step-N-vV.json** (written by implementer in SINGLE_STEP_MODE):
+```json
+{
+  "step": 3,
+  "version": 1,
+  "status": "complete",
+  "files_modified": ["path/to/file.ts"],
+  "files_created": ["path/to/new-file.ts"],
+  "tests": { "written": 3, "passing": 3, "failing": 0 },
+  "deviations": [],
+  "notes": "Step notes",
+  "completed_at": "ISO8601"
+}
+```
+
+**phased-review-{provider}-{model}-step-N-vV.json** (written by phased-reviewer):
+```json
+{
+  "status": "approved",
+  "step_reviewed": 3,
+  "issues": [],
+  "summary": "Step 3 correctly implements the filename helpers as planned.",
+  "reviewed_at": "ISO8601"
+}
+```
+
+Filename convention: `getImplStepFileName(N, V)` and `getPhasedReviewFileName(N, provider, model, V)` from `types/stage-definitions.ts`.
+
 ---
 
 ## Config Format
@@ -468,7 +593,10 @@ The pipeline is driven by `~/.vcp/dev-buddy.json`. Two ordered arrays of stages 
     { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet", "parallel": true },
     { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus", "parallel": true },
     { "type": "plan-review", "provider": "my-codex-preset", "model": "o3" },
-    { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
+    { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet", "phased_reviews": [
+      { "provider": "anthropic-subscription", "model": "sonnet" },
+      { "provider": "my-api-preset", "model": "claude-sonnet-4", "parallel": true }
+    ]},
     { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet", "parallel": true },
     { "type": "code-review", "provider": "anthropic-subscription", "model": "opus", "parallel": true },
     { "type": "code-review", "provider": "my-codex-preset", "model": "o3" }
@@ -483,6 +611,7 @@ The pipeline is driven by `~/.vcp/dev-buddy.json`. Two ordered arrays of stages 
     { "type": "code-review", "provider": "my-codex-preset", "model": "o3" }
   ],
   "max_iterations": 10,
+  "max_phased_iterations": 3,
   "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
 }
 ```
@@ -499,6 +628,8 @@ See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 - Each pipeline must have **at least one** `implementation` stage
 - `model` is **required** on every stage entry — values must match `/^[a-zA-Z0-9._-]+$/` (prevents shell metacharacter injection)
 - `parallel` is **optional** (boolean, default false) — only meaningful on `plan-review` and `code-review` stages. Setting `parallel: true` on non-review stages fails validation. `parallel: false` (or omitted) is accepted on any stage type.
+- `phased_reviews` is **optional** (array, max 10 entries) — only valid on `implementation` stages. Each entry has `provider` (string), `model` (string matching `/^[a-zA-Z0-9._-]+$/`), and optional `parallel` (boolean). Setting `phased_reviews` on non-implementation stages fails validation.
+- `max_phased_iterations` is **optional** (positive integer, default 3) — maximum fix/re-review cycles per step during phased implementation. Resolved at config load time; downstream consumers must not apply their own fallback.
 
 ### Config Validation
 
@@ -508,6 +639,10 @@ See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 - Stage types are validated against the 6 allowed types
 - Pipeline-specific stage restrictions (e.g., `rca` only in bugfix)
 - `parallel: true` rejected on non-review stages
+- `phased_reviews` on non-implementation stages rejected with clear error
+- `phased_reviews` entries validated: non-empty provider, model matching regex, boolean parallel
+- `phased_reviews` array max length 10
+- `max_phased_iterations` validated as positive integer if present; resolved to 3 if absent
 - If the file is missing, factory defaults are returned
 
 ---
@@ -526,7 +661,7 @@ The config server (`scripts/config-server.ts`) exposes these REST endpoints:
 | POST | `/api/test-preset` | Test unsaved preset credentials from form data (accepts credentials in body) |
 | GET | `/api/stage-definitions` | Return all 6 stage type definitions from registry |
 | GET | `/api/pipeline-config` | Get current pipeline config |
-| PUT | `/api/pipeline-config` | Save pipeline config |
+| PUT | `/api/pipeline-config` | Save pipeline config (accepts `phased_reviews` on implementation stages, `max_phased_iterations` at top level) |
 | GET | `/api/preset-models/:name` | Model list for a preset (subscription: sonnet/opus/haiku; api/cli: from preset) |
 ---
 
@@ -688,6 +823,7 @@ bun api-task-runner.ts --preset <name> --model <model> --task-stdin --cwd <dir> 
 | `--cwd` | string | `process.cwd()` | Working directory for the session |
 | `--task-timeout` | ms | `300000` (5 min) | Per-task wall-clock timeout (from `ApiPreset.timeout_ms`) |
 | `--system-prompt` | path | — | Path to a file under plugin `docs/` to append to the system prompt (CWE-22 safe: path traversal validated) |
+| `--stream` | flag | — | Print result text to stdout directly (no JSON wrapper). Errors go to stderr. Exit code signals status. Used by one-shot runner for terminal visibility. |
 
 \* Either `--task` or `--task-stdin` is required. `one-shot-runner.ts` uses `--task-stdin` to avoid OS argv limits.
 

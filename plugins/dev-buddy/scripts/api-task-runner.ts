@@ -677,6 +677,8 @@ export interface ParsedArgs {
   taskFromStdin: boolean;
   /** Optional path to a file whose content is appended to the system prompt. */
   systemPrompt?: string;
+  /** When true, print result text to stdout instead of JSON wrapper. For one-shot mode. */
+  stream: boolean;
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -723,6 +725,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
         result.systemPrompt = next;
         i++;
         break;
+      case '--stream':
+        result.stream = true;
+        break;
     }
   }
 
@@ -746,6 +751,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
   if (!result.taskFromStdin) {
     result.taskFromStdin = false;
+  }
+
+  if (!result.stream) {
+    result.stream = false;
   }
 
   return result as ParsedArgs;
@@ -843,7 +852,23 @@ async function main(): Promise<void> {
     presetName: args.preset,
   });
 
-  // Map AgentRunResult to OutputEvent
+  // Stream mode: plain text to stdout, errors to stderr (for one-shot / stdio:inherit)
+  if (args.stream) {
+    if (result.timedOut) {
+      process.stderr.write('Error: Task execution timed out\n');
+      process.exit(3);
+    } else if (result.error) {
+      process.stderr.write(`Error: ${result.error}\n`);
+      process.exit(2);
+    } else {
+      if (result.result) {
+        process.stdout.write(result.result);
+      }
+      process.exit(0);
+    }
+  }
+
+  // Pipeline mode: JSON output
   let output: OutputEvent;
   let exitCode: number;
 

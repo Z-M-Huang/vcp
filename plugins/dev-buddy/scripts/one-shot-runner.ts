@@ -241,7 +241,8 @@ interface ApiPathDeps {
   spawnTaskRunner(args: ParsedArgs, taskTimeoutMs: number): {
     proc: {
       exitCode: number | null;
-      stdout: ReadableStream<Uint8Array>;
+      /** null when stream mode — stdout goes directly to terminal via 'inherit'. */
+      stdout: ReadableStream<Uint8Array> | null;
       kill(signal?: number | string): void;
     };
     exited: Promise<void>;
@@ -256,6 +257,8 @@ interface ApiPathDeps {
 const defaultApiDeps: ApiPathDeps = {
   spawnTaskRunner(args, taskTimeoutMs) {
     const taskRunnerPath = path.join(path.dirname(import.meta.path), 'api-task-runner.ts');
+    // Stream mode: agent output goes directly to terminal (like CLI presets).
+    // Pipeline mode: stdout piped for JSON result parsing.
     const proc = Bun.spawn([
       'bun', taskRunnerPath,
       '--preset', args.preset,
@@ -263,7 +266,8 @@ const defaultApiDeps: ApiPathDeps = {
       '--task-stdin',
       '--cwd', args.cwd,
       '--task-timeout', String(taskTimeoutMs),
-    ], { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' });
+      '--stream',
+    ], { stdin: 'pipe', stdout: 'inherit', stderr: 'inherit' });
     // Write task to stdin — avoids argv size limits (E2BIG) and ps exposure
     proc.stdin.write(args.task);
     proc.stdin.end();
@@ -286,8 +290,12 @@ async function runApiPath(
   const taskTimeoutMs = preset.timeout_ms || DEFAULT_API_TIMEOUT_MS;
   const { proc, exited } = deps.spawnTaskRunner(args, taskTimeoutMs);
 
-  // Collect stdout concurrently (start reading before exit to avoid buffer issues)
-  const stdoutPromise = new Response(proc.stdout).text();
+  // Stream mode: stdout is null (inherited to terminal), use exit code for result.
+  // Pipe mode: stdout is a stream, parse JSON from it.
+  const isStreamMode = proc.stdout === null;
+
+  // Only collect stdout when piped (non-stream mode)
+  const stdoutPromise = isStreamMode ? null : new Response(proc.stdout).text();
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
@@ -315,7 +323,20 @@ async function runApiPath(
       return makeError('api_execution', 'api-task-runner process timed out', 3);
     }
 
-    const stdout = await stdoutPromise;
+    // Stream mode: agent output already went to terminal. Map exit code to result.
+    if (isStreamMode) {
+      const code = proc.exitCode ?? 2;
+      if (code === 0) {
+        return makeComplete(args.preset, args.model, 'Task completed successfully');
+      } else if (code === 3) {
+        return makeError('api_execution', 'Task execution timed out', 3);
+      } else {
+        return makeError('api_execution', `api-task-runner exited with code ${code}`, code === 1 ? 1 : 2);
+      }
+    }
+
+    // Pipe mode: parse JSON result from stdout
+    const stdout = await stdoutPromise!;
     const lastLine = stdout.trim().split('\n').pop() || '';
 
     if (!lastLine) {

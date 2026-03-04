@@ -224,6 +224,35 @@ interface ReviewBlockResult {
   reason: string;
 }
 
+interface PhasedReview {
+  status?: string;
+  step_reviewed?: number;
+  issues?: Array<{ id?: string; description?: string; severity?: string; category?: string; file?: string; line?: number | null; suggestion?: string }>;
+  summary?: string;
+  reviewed_at?: string;
+}
+
+/**
+ * Validate a phased-reviewer output against the lighter schema.
+ * Only requires: status (approved|needs_changes), issues (array).
+ * Does NOT require acceptance_criteria_verification or requirements_coverage.
+ */
+function validatePhasedReview(review: PhasedReview): ReviewBlockResult | null {
+  if (!review.status || (review.status !== 'approved' && review.status !== 'needs_changes')) {
+    return {
+      decision: 'block',
+      reason: `Phased review missing valid 'status' field. Must be 'approved' or 'needs_changes', got: ${JSON.stringify(review.status)}`
+    };
+  }
+  if (!Array.isArray(review.issues)) {
+    return {
+      decision: 'block',
+      reason: `Phased review missing 'issues' array field. Got: ${typeof review.issues}`
+    };
+  }
+  return null; // Valid
+}
+
 interface UserStory {
   acceptance_criteria?: Array<{ id: string }>;
 }
@@ -384,9 +413,51 @@ async function main(): Promise<void> {
   const isPlanReviewer = agentType === 'dev-buddy:plan-reviewer';
   const isCodeReviewer = agentType === 'dev-buddy:code-reviewer';
   const isCodexReviewer = agentType === 'dev-buddy:cli-executor';
+  const isPhasedReviewer = agentType === 'dev-buddy:phased-reviewer';
 
-  if (!isPlanReviewer && !isCodeReviewer && !isCodexReviewer) {
+  if (!isPlanReviewer && !isCodeReviewer && !isCodexReviewer && !isPhasedReviewer) {
     process.exit(0); // Not a reviewer, allow
+  }
+
+  // Handle phased-reviewer separately with lighter schema validation
+  if (isPhasedReviewer) {
+    const phasedReviewsDir = path.join(TASK_DIR, 'phased-reviews');
+    if (!fs.existsSync(phasedReviewsDir)) {
+      // Directory not created yet — no output to validate
+      process.exit(0);
+    }
+    // Find the most recently modified phased review file
+    let phasedFiles: string[];
+    try {
+      phasedFiles = fs.readdirSync(phasedReviewsDir)
+        .filter(f => f.endsWith('.json'))
+        .map(f => path.join(phasedReviewsDir, f));
+    } catch {
+      process.exit(0); // Fail open on read error
+    }
+    if (phasedFiles.length === 0) {
+      console.log(JSON.stringify({ decision: 'block', reason: 'No phased review output file found. Phased reviewer must write output to .vcp/task/phased-reviews/.' }));
+      process.exit(0);
+    }
+    // Find most recently modified
+    let mostRecentPath = phasedFiles[0];
+    let mostRecentTime = 0;
+    for (const fp of phasedFiles) {
+      try {
+        const mtime = fs.statSync(fp).mtimeMs;
+        if (mtime > mostRecentTime) { mostRecentTime = mtime; mostRecentPath = fp; }
+      } catch { continue; }
+    }
+    const phasedReview = readJson(mostRecentPath) as PhasedReview | null;
+    if (!phasedReview) {
+      console.log(JSON.stringify({ decision: 'block', reason: `Phased review file ${mostRecentPath} exists but is unreadable or invalid JSON.` }));
+      process.exit(0);
+    }
+    const phasedError = validatePhasedReview(phasedReview);
+    if (phasedError) {
+      console.log(JSON.stringify(phasedError));
+    }
+    process.exit(0);
   }
 
   // Derive review file lists dynamically from pipeline-tasks.json

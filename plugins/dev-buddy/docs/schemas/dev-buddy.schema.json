@@ -23,6 +23,12 @@
       "default": 10,
       "description": "Maximum number of fix/re-review iterations per reviewer stage before escalating to user."
     },
+    "max_phased_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "description": "Maximum fix/re-review iterations per implementation step during phased reviews. Resolved at config load time; consumers must not apply their own fallback."
+    },
     "team_name_pattern": {
       "type": "string",
       "minLength": 1,
@@ -32,6 +38,29 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "PhasedReviewEntry": {
+      "type": "object",
+      "description": "A single phased review entry for per-step implementation reviews. Only valid on implementation stage entries.",
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider preset name (key from ~/.vcp/ai-presets.json)."
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]+$",
+          "description": "Model name. Must match /^[a-zA-Z0-9._-]+$/ to prevent shell metacharacter injection (CWE-78)."
+        },
+        "parallel": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, this reviewer runs in parallel with adjacent phased reviewers that also have parallel: true."
+        }
+      },
+      "additionalProperties": false
+    },
     "StageEntry": {
       "type": "object",
       "description": "A single pipeline stage entry specifying its type, provider preset, and model.",
@@ -56,22 +85,45 @@
           "type": "boolean",
           "default": false,
           "description": "When true, this stage runs in parallel with adjacent same-type stages that also have parallel: true. Only applies to plan-review and code-review types."
+        },
+        "phased_reviews": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/PhasedReviewEntry" },
+          "maxItems": 10,
+          "description": "Per-step phased review entries. Only valid on implementation stages. Each step is reviewed before the next step begins."
         }
       },
       "additionalProperties": false,
-      "if": {
-        "properties": {
-          "parallel": { "const": true }
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "parallel": { "const": true }
+            },
+            "required": ["parallel"]
+          },
+          "then": {
+            "properties": {
+              "type": {
+                "enum": ["plan-review", "code-review"]
+              }
+            }
+          }
         },
-        "required": ["parallel"]
-      },
-      "then": {
-        "properties": {
-          "type": {
-            "enum": ["plan-review", "code-review"]
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "type": { "const": "implementation" }
+              },
+              "required": ["type"]
+            }
+          },
+          "then": {
+            "not": { "required": ["phased_reviews"] }
           }
         }
-      }
+      ]
     }
   }
 }

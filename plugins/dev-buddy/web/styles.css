@@ -524,6 +524,92 @@ form input:focus, form select:focus {
   white-space: nowrap;
 }
 
+/* ---- Phased Reviews ---- */
+
+.phased-reviews-section {
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e5e5e5;
+}
+
+.phased-reviews-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #6e6e73;
+  padding: 4px 0;
+  user-select: none;
+}
+
+.phased-reviews-toggle:hover {
+  color: #1d1d1f;
+}
+
+.phased-reviews-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #2e7d32;
+}
+
+.phased-reviews-badge-muted {
+  color: #c0c0c5;
+}
+
+.phased-reviews-list {
+  margin: 8px 0 4px 0;
+  padding-left: 16px;
+  min-height: 24px;
+}
+
+.phased-review-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.phased-review-entry:last-child {
+  border-bottom: none;
+}
+
+.phased-drag-handle {
+  cursor: grab;
+  color: #d0d0d5;
+  padding: 2px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.phased-drag-handle:hover {
+  color: #6e6e73;
+}
+
+.phased-drag-handle:active {
+  cursor: grabbing;
+}
+
+.phased-reviews-add {
+  margin-top: 6px;
+  margin-left: 16px;
+}
+
+.phased-reviews-empty {
+  color: #c0c0c5;
+  font-size: 0.8rem;
+  font-style: italic;
+  padding: 4px 0;
+}
+
+/* Stage card layout adjustment: allow phased section to span full width */
+.stage-card {
+  flex-wrap: wrap;
+}
+
 /* Stage delete button */
 .stage-delete {
   flex-shrink: 0;
