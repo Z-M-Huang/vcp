@@ -230,6 +230,16 @@ export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' 
       );
     }
   }
+
+  // Validate review_interval if present
+  if ('review_interval' in config && config.review_interval !== undefined) {
+    const ri = config.review_interval;
+    if (!Number.isInteger(ri) || ri <= 0) {
+      throw new Error(
+        `review_interval must be a positive integer, got ${ri}`
+      );
+    }
+  }
 }
 
 // ─── Config Loading ───────────────────────────────────────────────────────────
@@ -260,6 +270,8 @@ export function loadPipelineConfig(): PipelineConfig {
   // Canonical default resolution: max_phased_iterations defaults to 3.
   // This is the ONLY place this default is applied. Downstream consumers must not apply their own fallback.
   config.max_phased_iterations = config.max_phased_iterations ?? 3;
+  // Canonical default resolution: review_interval defaults to 1 (review every step).
+  config.review_interval = config.review_interval ?? 1;
   return config;
 }
 

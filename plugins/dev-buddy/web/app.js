@@ -913,6 +913,10 @@ function devBuddyApp() {
         if (this.pipelineConfig.max_phased_iterations != null) {
           payload.max_phased_iterations = this.pipelineConfig.max_phased_iterations;
         }
+        // Include review_interval only if explicitly set
+        if (this.pipelineConfig.review_interval != null) {
+          payload.review_interval = this.pipelineConfig.review_interval;
+        }
 
         const resp = await fetch('/api/pipeline-config', {
           method: 'PUT',

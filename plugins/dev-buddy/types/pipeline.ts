@@ -60,6 +60,11 @@ export interface PipelineConfig {
    * Default: 3. Resolved at config load time — consumers must not apply their own fallback.
    */
   max_phased_iterations?: number;
+  /**
+   * Review every N implementation steps during phased reviews. Default: 1 (review every step).
+   * Resolved at config load time — consumers must not apply their own fallback.
+   */
+  review_interval?: number;
   /** Team name pattern with {BASENAME} and {HASH} placeholders. */
   team_name_pattern: string;
 }

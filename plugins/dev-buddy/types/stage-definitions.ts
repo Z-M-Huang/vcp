@@ -197,3 +197,27 @@ export function getPhasedReviewFileName(
   if (!Number.isInteger(version) || version < 1) throw new Error(`version must be a positive integer, got ${version}`);
   return `phased-review-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}-step-${step}-v${version}.json`;
 }
+
+/**
+ * Compute the output file name for a batch phased review artifact (review_interval > 1).
+ *
+ * @param startStep - The 1-based first plan step number in the batch.
+ * @param endStep - The 1-based last plan step number in the batch.
+ * @param provider - The provider/preset name (sanitized for filename safety).
+ * @param model - The model name (sanitized for filename safety).
+ * @param version - The version number (starts at 1, incremented on re-review).
+ * @returns The output file name (e.g. 'phased-review-anthropic-sonnet-steps-1-3-v1.json').
+ */
+export function getPhasedBatchReviewFileName(
+  startStep: number,
+  endStep: number,
+  provider: string,
+  model: string,
+  version: number,
+): string {
+  if (!Number.isInteger(startStep) || startStep < 1) throw new Error(`startStep must be a positive integer, got ${startStep}`);
+  if (!Number.isInteger(endStep) || endStep < 1) throw new Error(`endStep must be a positive integer, got ${endStep}`);
+  if (endStep < startStep) throw new Error(`endStep (${endStep}) must be >= startStep (${startStep})`);
+  if (!Number.isInteger(version) || version < 1) throw new Error(`version must be a positive integer, got ${version}`);
+  return `phased-review-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}-steps-${startStep}-${endStep}-v${version}.json`;
+}

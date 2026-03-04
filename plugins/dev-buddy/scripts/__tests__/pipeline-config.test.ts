@@ -5,6 +5,7 @@ import path from 'path';
 import {
   getImplStepFileName,
   getPhasedReviewFileName,
+  getPhasedBatchReviewFileName,
   SAFE_PATH_RE,
 } from '../../types/stage-definitions.ts';
 import {
@@ -407,5 +408,106 @@ describe('validateProviderReferences - phased_reviews providers collected', () =
     });
 
     expect(() => validateProviderReferences(config)).toThrow(/my-api-preset/);
+  });
+});
+
+// ─── validateConfig - review_interval ────────────────────────────────────────
+
+describe('validateConfig - review_interval', () => {
+  test('rejects 0 (not positive)', () => {
+    const config = makeValidConfig({ review_interval: 0 });
+    expect(() => validateConfig(config)).toThrow(/review_interval must be a positive integer/);
+  });
+
+  test('rejects -1 (negative)', () => {
+    const config = makeValidConfig({ review_interval: -1 });
+    expect(() => validateConfig(config)).toThrow(/review_interval must be a positive integer/);
+  });
+
+  test('rejects 3.5 (non-integer)', () => {
+    const config = makeValidConfig({ review_interval: 3.5 });
+    expect(() => validateConfig(config)).toThrow(/review_interval must be a positive integer/);
+  });
+
+  test('accepts 1 (default value)', () => {
+    const config = makeValidConfig({ review_interval: 1 });
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  test('accepts 3 (typical batch size)', () => {
+    const config = makeValidConfig({ review_interval: 3 });
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  test('accepts undefined (uses resolved default after loadPipelineConfig)', () => {
+    const config = makeValidConfig();
+    // review_interval not set -> no error from validateConfig
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+});
+
+// ─── DEFAULT_CONFIG - review_interval ────────────────────────────────────────
+
+describe('DEFAULT_CONFIG - review_interval', () => {
+  test('does not include review_interval (resolved at load time)', () => {
+    // DEFAULT_CONFIG should not set review_interval — it's resolved in loadPipelineConfig
+    expect(DEFAULT_CONFIG.review_interval).toBeUndefined();
+  });
+});
+
+// ─── getPhasedBatchReviewFileName ────────────────────────────────────────────
+
+describe('getPhasedBatchReviewFileName', () => {
+  test('returns correct filename for steps 1-3', () => {
+    expect(getPhasedBatchReviewFileName(1, 3, 'anthropic-subscription', 'sonnet', 1))
+      .toBe('phased-review-anthropic-subscription-sonnet-steps-1-3-v1.json');
+  });
+
+  test('returns correct filename for single step range', () => {
+    expect(getPhasedBatchReviewFileName(5, 5, 'anthropic-subscription', 'opus', 1))
+      .toBe('phased-review-anthropic-subscription-opus-steps-5-5-v1.json');
+  });
+
+  test('increments version correctly', () => {
+    expect(getPhasedBatchReviewFileName(1, 3, 'anthropic-subscription', 'sonnet', 2))
+      .toBe('phased-review-anthropic-subscription-sonnet-steps-1-3-v2.json');
+  });
+
+  test('sanitizes provider and model names', () => {
+    expect(getPhasedBatchReviewFileName(1, 3, 'My API Preset', 'Claude_Sonnet_4', 1))
+      .toBe('phased-review-my-api-preset-claude-sonnet-4-steps-1-3-v1.json');
+  });
+
+  test('output passes SAFE_PATH_RE', () => {
+    expect(SAFE_PATH_RE.test(getPhasedBatchReviewFileName(1, 3, 'anthropic-subscription', 'sonnet', 1))).toBe(true);
+  });
+
+  test('throws on startStep < 1', () => {
+    expect(() => getPhasedBatchReviewFileName(0, 3, 'a', 'b', 1)).toThrow(/startStep must be a positive integer/);
+  });
+
+  test('throws on endStep < startStep', () => {
+    expect(() => getPhasedBatchReviewFileName(5, 3, 'a', 'b', 1)).toThrow(/endStep.*must be >= startStep/);
+  });
+
+  test('throws on version < 1', () => {
+    expect(() => getPhasedBatchReviewFileName(1, 3, 'a', 'b', 0)).toThrow(/version must be a positive integer/);
+  });
+
+  test('throws on non-integer startStep', () => {
+    expect(() => getPhasedBatchReviewFileName(1.5, 3, 'a', 'b', 1)).toThrow(/startStep must be a positive integer/);
+  });
+
+  test('throws on non-integer endStep', () => {
+    expect(() => getPhasedBatchReviewFileName(1, 3.5, 'a', 'b', 1)).toThrow(/endStep must be a positive integer/);
+  });
+});
+
+// ─── getPhasedReviewFileName - backward compat ───────────────────────────────
+
+describe('getPhasedReviewFileName - backward compat', () => {
+  test('still produces single-step filename (not affected by batch helper)', () => {
+    expect(getPhasedReviewFileName(3, 'anthropic-subscription', 'sonnet', 1))
+      .toBe('phased-review-anthropic-subscription-sonnet-step-3-v1.json');
   });
 });

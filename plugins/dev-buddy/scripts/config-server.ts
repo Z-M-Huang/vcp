@@ -824,7 +824,7 @@ function handleGetPipelineConfigDefaults(corsHeaders: Record<string, string>): R
 
 // Allowed top-level pipeline config fields (CWE-915)
 const ALLOWED_TOP_LEVEL_FIELDS = new Set([
-  'feature_pipeline', 'bugfix_pipeline', 'max_iterations', 'max_phased_iterations', 'team_name_pattern',
+  'feature_pipeline', 'bugfix_pipeline', 'max_iterations', 'max_phased_iterations', 'review_interval', 'team_name_pattern',
 ]);
 
 // Allowed stage entry fields (CWE-915)
@@ -976,6 +976,16 @@ async function handlePutPipelineConfig(req: Request, corsHeaders: Record<string,
       if (!Number.isInteger(mpi) || (mpi as number) <= 0) {
         return jsonResponse(
           { error: { code: 'INVALID_CONFIG', message: "'max_phased_iterations' must be a positive integer" } },
+          400,
+          corsHeaders
+        );
+      }
+    }
+    if ('review_interval' in body) {
+      const ri = body.review_interval;
+      if (!Number.isInteger(ri) || (ri as number) <= 0) {
+        return jsonResponse(
+          { error: { code: 'INVALID_CONFIG', message: "'review_interval' must be a positive integer" } },
           400,
           corsHeaders
         );

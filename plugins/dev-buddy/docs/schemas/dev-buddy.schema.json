@@ -34,6 +34,12 @@
       "minLength": 1,
       "default": "pipeline-{BASENAME}-{HASH}",
       "description": "Pattern for generating unique pipeline team names. Supports {BASENAME} and {HASH} placeholders."
+    },
+    "review_interval": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Review after every N implementation steps during phased reviews. Default: 1 (review every step)."
     }
   },
   "additionalProperties": false,

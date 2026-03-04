@@ -505,6 +505,7 @@
                     <span class="phased-reviews-badge"
                       x-bind:class="{'phased-reviews-badge-muted': !(stage.phased_reviews && stage.phased_reviews.length)}"
                       x-text="'(' + (stage.phased_reviews ? stage.phased_reviews.length : 0) + ')'"></span>
+                    <span style="margin-left: auto; font-style: italic; opacity: 0.55; font-size: 0.72rem;">adjust frequency in Pipeline Settings ↓</span>
                   </div>
                   <div x-show="stage._phasedExpanded" x-transition>
                     <div x-bind:id="'feature-phased-' + idx" class="phased-reviews-list">
@@ -620,6 +621,7 @@
                     <span class="phased-reviews-badge"
                       x-bind:class="{'phased-reviews-badge-muted': !(stage.phased_reviews && stage.phased_reviews.length)}"
                       x-text="'(' + (stage.phased_reviews ? stage.phased_reviews.length : 0) + ')'"></span>
+                    <span style="margin-left: auto; font-style: italic; opacity: 0.55; font-size: 0.72rem;">adjust frequency in Pipeline Settings ↓</span>
                   </div>
                   <div x-show="stage._phasedExpanded" x-transition>
                     <div x-bind:id="'bugfix-phased-' + idx" class="phased-reviews-list">
@@ -682,18 +684,24 @@
         <!-- Pipeline Settings -->
         <div class="card">
           <h3>Pipeline Settings</h3>
-          <label>
-            Max Iterations per Reviewer
-            <input type="number" min="1" max="50" x-model.number="pipelineConfig.max_iterations">
-          </label>
-          <label>
-            Max Phased Review Iterations per Step
-            <input type="number" min="1" max="20" x-model.number="pipelineConfig.max_phased_iterations" placeholder="3">
-          </label>
-          <label>
-            Team Name Pattern
-            <input type="text" x-model="pipelineConfig.team_name_pattern">
-          </label>
+          <form x-on:submit.prevent>
+            <label>
+              Max Iterations per Reviewer
+              <input type="number" min="1" max="50" x-model.number="pipelineConfig.max_iterations">
+            </label>
+            <label>
+              Max Phased Review Iterations per Step
+              <input type="number" min="1" max="20" x-model.number="pipelineConfig.max_phased_iterations" placeholder="3">
+            </label>
+            <label>
+              Review Interval (steps per batch)
+              <input type="number" min="1" max="50" x-model.number="pipelineConfig.review_interval" placeholder="1">
+            </label>
+            <label>
+              Team Name Pattern
+              <input type="text" x-model="pipelineConfig.team_name_pattern">
+            </label>
+          </form>
         </div>
       </div>
     </template>

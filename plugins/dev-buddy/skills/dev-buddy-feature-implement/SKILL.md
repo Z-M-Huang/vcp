@@ -1067,7 +1067,16 @@ Read the implementation stage entry in `pipeline-tasks.json`. Check for `step_pr
 - **If `step_progress` exists:** `start_step = step_progress.current_step`; log: "Resuming phased implementation from step {start_step} of {N}"
 - **If `step_progress` absent:** `start_step = 1`
 
-### Step P2: Per-Step Iteration
+Resolve batch state:
+```
+review_interval = resolved_config.review_interval   // already defaulted to 1 at config load time
+last_reviewed_step = step_progress.last_reviewed_step ?? 0
+batch_start = last_reviewed_step + 1
+```
+
+If `start_step > batch_start`, steps `[batch_start..start_step-1]` are already implemented but not yet reviewed. Continue implementing from `start_step`, then review the full batch `[batch_start..batch_end]` when batch is complete.
+
+### Step P2: Per-Step Iteration (Batch-Aware)
 
 For each `step` from `start_step` to `N` (inclusive):
 
@@ -1129,7 +1138,55 @@ NOTE: Implement ONLY step {step}. Do NOT touch prior or future steps."
 
 Wait for completion. Verify `.vcp/task/impl-steps/impl-step-{step}-v1.json` exists and `status != "failed"`.
 
-#### P2b. Dispatch Phased Reviewers
+#### P2b. Check Batch Boundary and Dispatch Reviewers
+
+After each step's implementation completes, check if a batch boundary has been reached:
+
+```
+steps_in_batch = step - batch_start + 1
+is_batch_complete = (steps_in_batch >= review_interval) OR (step == N)
+```
+
+**If batch is NOT complete** (mid-batch):
+- Update `step_progress` with `current_step = step + 1` only (no review dispatch)
+- Continue to next step
+
+**If batch IS complete** (batch boundary reached):
+- `batch_end = step`
+- Proceed to dispatch reviewers for the full batch `[batch_start..batch_end]`
+
+**Generate prior batch summary** (for batch_start > 1):
+```
+prior_summary = ""
+For each completed batch [prev_start..prev_end] (derived from approved phased-review files):
+    Read the approved phased-review file → extract summary field
+    Read each impl-step file in that batch → extract files_modified + files_created
+    Append: "Steps {prev_start}-{prev_end}: {summary}. Files: [{file_list}]"
+```
+
+**Determine output filename:**
+```
+if review_interval == 1:
+    output_file = getPhasedReviewFileName(step, pr.provider, pr.model, 1)   // single-step (backward compat)
+else:
+    output_file = getPhasedBatchReviewFileName(batch_start, batch_end, pr.provider, pr.model, 1)
+```
+
+**Determine reviewer prompt content:**
+```
+if review_interval == 1:
+    // Single-step prompt (unchanged from current behavior)
+    plan_steps = "PLAN STEP: .vcp/task/plan/steps/{step}.json"
+    impl_steps = "IMPL STEP: .vcp/task/impl-steps/impl-step-{step}-v1.json"
+    note = "Review ONLY step {step}. Write output file before completing."
+else:
+    // Batch prompt
+    plan_steps = "PLAN STEPS: .vcp/task/plan/steps/{batch_start}.json ... steps/{batch_end}.json"
+    impl_steps = "IMPL STEPS: .vcp/task/impl-steps/impl-step-{batch_start}-v{latest}.json ... impl-step-{batch_end}-v{latest}.json"
+    prior_batches = "PRIOR BATCHES: {prior_summary}"  // omit if batch_start == 1
+    note = "Review steps {batch_start} through {batch_end}. Check cross-step coherence.
+            step_reviewed = {batch_end}. steps_reviewed = [{batch_start}..{batch_end}]."
+```
 
 Apply the **parallel grouping algorithm** to `phased_reviews[]` (same as main pipeline loop):
 - Consecutive entries with `parallel: true` form a parallel group -- fan-out same `blockedBy`
@@ -1153,10 +1210,11 @@ review_task = Task(
   subagent_type: "dev-buddy:phased-reviewer",
   model: "{pr.model}",
   prompt: "AGENT: dev-buddy:phased-reviewer (model: {pr.model}, provider: {pr.provider})
-PLAN STEP: .vcp/task/plan/steps/{step}.json
-IMPL STEP: .vcp/task/impl-steps/impl-step-{step}-v1.json
-OUTPUT: .vcp/task/phased-reviews/{getPhasedReviewFileName(step, pr.provider, pr.model, 1)}
-NOTE: Review ONLY step {step}. Write output file before completing."
+{plan_steps}
+{impl_steps}
+{prior_batches}
+OUTPUT: .vcp/task/phased-reviews/{output_file}
+{note}"
 )
 ```
 
@@ -1172,10 +1230,11 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/api-task-runner.ts" \
   --system-prompt "${CLAUDE_PLUGIN_ROOT}/docs/review-guidelines.md" \
   --task-stdin <<'TASK_EOF'
 AGENT: dev-buddy:phased-reviewer (model: {pr.model}, provider: {pr.provider})
-PLAN STEP: .vcp/task/plan/steps/{step}.json
-IMPL STEP: .vcp/task/impl-steps/impl-step-{step}-v1.json
-OUTPUT: .vcp/task/phased-reviews/{getPhasedReviewFileName(step, pr.provider, pr.model, 1)}
-NOTE: Review ONLY step {step}. Write output file before completing.
+{plan_steps}
+{impl_steps}
+{prior_batches}
+OUTPUT: .vcp/task/phased-reviews/{output_file}
+{note}
 TASK_EOF
 ```
 Save `task_id`. If no `task_id` returned, treat as dispatch failure.
@@ -1186,10 +1245,11 @@ Repeat if still running. Parse JSON output.
 ```
 review_task = Task(
   subagent_type: "dev-buddy:cli-executor",
-  prompt: "Run cli-executor.ts with --preset <pr.provider>, --model <pr.model>, --output-file .vcp/task/phased-reviews/{getPhasedReviewFileName(step, pr.provider, pr.model, 1)}
-PLAN STEP: .vcp/task/plan/steps/{step}.json
-IMPL STEP: .vcp/task/impl-steps/impl-step-{step}-v1.json
-NOTE: Review ONLY step {step}. Write output file before completing."
+  prompt: "Run cli-executor.ts with --preset <pr.provider>, --model <pr.model>, --output-file .vcp/task/phased-reviews/{output_file}
+{plan_steps}
+{impl_steps}
+{prior_batches}
+{note}"
 )
 ```
 // Do NOT pass model parameter to Task tool.
@@ -1199,14 +1259,14 @@ NOTE: Review ONLY step {step}. Write output file before completing."
 ```json
 {
   "status": "needs_changes",
-  "step_reviewed": {step},
+  "step_reviewed": {batch_end},
   "issues": [{ "id": "DISPATCH_FAIL", "description": "Reviewer dispatch failed, no output produced", "severity": "error", "category": "dispatch" }],
   "summary": "Reviewer {pr.provider}/{pr.model} dispatch failed -- no output file found."
 }
 ```
 - Write this synthetic result to the expected output path so downstream processing is consistent.
 
-Wait for all reviewers for this step to complete.
+Wait for all reviewers for this batch to complete.
 
 #### P2c. Check Verdicts
 
@@ -1215,21 +1275,24 @@ Read each reviewer's output file. Check `status` field.
 - **If ALL reviewers return `"approved"`:** → proceed to P2d
 - **If ANY reviewer returns `"needs_changes"`:** → proceed to P2e
 
-#### P2d. Step Approved — Update Progress
+#### P2d. Batch Approved — Update Progress
 
 Update `pipeline-tasks.json` implementation stage entry:
 
 ```json
 "step_progress": {
-  "current_step": {step + 1},
+  "current_step": {batch_end + 1},
   "total_steps": {N},
-  "completed_steps": [...prev_completed_steps, step]
+  "completed_steps": [...prev_completed_steps, ...range(batch_start, batch_end)],
+  "last_reviewed_step": {batch_end}
 }
 ```
 
-Write updated `pipeline-tasks.json` to disk. Continue to next step (`step + 1`).
+Write updated `pipeline-tasks.json` to disk. Set `batch_start = batch_end + 1`. Continue to next step.
 
-#### P2e. Fix/Re-Review Cycle
+#### P2e. Fix/Re-Review Cycle (Step-Scoped Within Batch)
+
+Fixes stay **step-scoped** — the implementer always runs in `SINGLE_STEP_MODE` for one step at a time.
 
 ```
 phased_iteration = 1
@@ -1237,31 +1300,37 @@ max_phased = resolved_config.max_phased_iterations   // already defaulted to 3 a
 
 while phased_iteration < max_phased:
     Extract issues from reviewer(s) that returned needs_changes (first 500 chars of issues array)
-    next_version = phased_iteration + 1
 
-    // Dispatch fix task using the SAME providerType routing as P2a above.
-    // Read impl_stage.providerType from pipeline-tasks.json stages[] entry.
-    // Route: subscription -> Task(dev-buddy:implementer), api -> Bash(api-task-runner.ts), cli -> Task(dev-buddy:cli-executor)
-    // Use the same task description fields as P2a, with these differences:
-    //   - OUTPUT: .vcp/task/impl-steps/impl-step-{step}-v{next_version}.json
-    //   - Add ISSUES FROM PRIOR REVIEW: {issues_summary} to the prompt
-    //   - Subject: "Fix Step {step} v{next_version}"
-    fix_task = <dispatch using P2a providerType routing with above modifications>
-    Set blockedBy: [last_review_task_id]
+    // Group issues by step: match issue file paths against each step's files_modified in the batch
+    // For each affected step in [batch_start..batch_end]:
+    For each affected_step in batch where issues reference its files:
+        next_version = find max(V) from impl-step-{affected_step}-v*.json files + 1
 
-    Wait for fix to complete.
+        // Dispatch fix task using the SAME providerType routing as P2a above.
+        // Read impl_stage.providerType from pipeline-tasks.json stages[] entry.
+        // Route: subscription -> Task(dev-buddy:implementer), api -> Bash(api-task-runner.ts), cli -> Task(dev-buddy:cli-executor)
+        // Use the same task description fields as P2a, with these differences:
+        //   - OUTPUT: .vcp/task/impl-steps/impl-step-{affected_step}-v{next_version}.json
+        //   - Add ISSUES FROM PRIOR REVIEW: {step_issues_summary} to the prompt
+        //   - Subject: "Fix Step {affected_step} v{next_version}"
+        fix_task = <dispatch using P2a providerType routing with above modifications>
+        Wait for fix to complete.
 
+    // After all step-scoped fixes complete: re-review the same batch [batch_start..batch_end]
+    // reading latest version of each step (max(V) from impl-step-{step}-v*.json glob)
     // Dispatch re-reviews using the SAME per-reviewer providerType routing as P2b above.
     // Each reviewer resolves its own providerType from ai-presets.json.
     // Route: subscription -> Task(dev-buddy:phased-reviewer), api -> Bash(api-task-runner.ts + --system-prompt), cli -> Task(dev-buddy:cli-executor)
-    // Use next_version in output file names: getPhasedReviewFileName(step, pr.provider, pr.model, next_version)
+    // Use next review version in output file names:
+    //   if review_interval == 1: getPhasedReviewFileName(step, pr.provider, pr.model, next_review_version)
+    //   else: getPhasedBatchReviewFileName(batch_start, batch_end, pr.provider, pr.model, next_review_version)
     // Apply the same parallel grouping algorithm as P2b.
     // Apply the same dispatch failure handling as P2b.
-    re_review_tasks = <dispatch using P2b per-reviewer providerType routing with next_version>
+    re_review_tasks = <dispatch using P2b per-reviewer providerType routing with next_review_version>
 
     Wait for all re-reviews to complete.
     Check verdicts again (same as P2c).
-    If all approved: update step_progress (P2d), break to next step.
+    If all approved: update step_progress (P2d), break to next batch.
     phased_iteration++
 ```
 
@@ -1271,12 +1340,12 @@ If `phased_iteration >= max_phased` and last review still returned `needs_change
 
 ```
 AskUserQuestion(
-  "Step {step} has failed phased review {max_phased} times.
-   Most recent issues (step {step}, attempt {max_phased}):
+  "Batch steps {batch_start}-{batch_end} has failed phased review {max_phased} times.
+   Most recent issues (attempt {max_phased}):
    {issues_from_last_review}
 
    Options:
-   1. Take over manually — resolve the issues in step {step} yourself,
+   1. Take over manually — resolve the issues yourself,
       then continue the pipeline when ready
    2. Abort pipeline — stop execution entirely (can resume later via
       step_progress tracking)
@@ -1343,23 +1412,28 @@ PHASED REVIEWERS:
   - {pr.provider}/{pr.model} {pr.parallel ? '(parallel)' : '(sequential)'}
 {end for}
 
+REVIEW_INTERVAL: {review_interval}
+
 WORKFLOW:
   P0: mkdir impl-steps/ + phased-reviews/, read step_count from plan/manifest.json
-  P1: Check step_progress in pipeline-tasks.json for resume
+  P1: Check step_progress in pipeline-tasks.json for resume (batch_start = last_reviewed_step + 1)
   P2: For each step 1..N:
     P2a: Dispatch implementer (route by impl_stage.providerType: subscription|api|cli)
-    P2b: Dispatch phased reviewers (resolve each reviewer's providerType from ai-presets.json)
+    P2b: Check batch boundary (steps_in_batch >= review_interval OR step == N)
+         If batch complete: dispatch phased reviewers for batch [batch_start..batch_end]
+         If mid-batch: update step_progress.current_step, continue to next step
     P2c: Check verdicts (all approved -> P2d, any needs_changes -> P2e)
-    P2d: Update step_progress, continue
-    P2e: Fix/re-review cycle (max {max_phased_iterations} iterations)
+    P2d: Update step_progress (last_reviewed_step = batch_end), continue
+    P2e: Step-scoped fixes + batch re-review (max {max_phased_iterations} iterations)
     P2f: Escalate to user if iterations exhausted
   Aggregate: merge impl-step files -> impl-result.json
 
 MAX_PHASED_ITERATIONS: {max_phased_iterations}
-ESCALATION: After {max_phased_iterations} failed reviews per step, pause pipeline and ask user.
+ESCALATION: After {max_phased_iterations} failed reviews per batch, pause pipeline and ask user.
 OUTPUT NAMING:
   impl-steps/impl-step-{N}-v{V}.json (implementer)
-  phased-reviews/phased-review-{provider}-{model}-step-{N}-v{V}.json (reviewer)
+  phased-reviews/phased-review-{provider}-{model}-step-{N}-v{V}.json (reviewer, interval=1)
+  phased-reviews/phased-review-{provider}-{model}-steps-{start}-{end}-v{V}.json (reviewer, interval>1)
 FINAL OUTPUT: .vcp/task/impl-result.json
 ```
 

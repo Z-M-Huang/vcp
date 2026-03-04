@@ -240,12 +240,21 @@ Set `max_phased_iterations` at the top level (default 3):
 { "max_phased_iterations": 3 }
 ```
 
+Set `review_interval` to batch steps (default 1 = review every step):
+
+```json
+{ "review_interval": 3 }
+```
+
+With `review_interval: 3`, the implementer still runs step-by-step, but reviews trigger every 3 steps. An 11-step plan produces batches [1-3], [4-6], [7-9], [10-11]. Each batch review receives all plan steps + impl-step files in the batch, plus a prior batch summary for cumulative context. Fixes remain step-scoped within the batch.
+
 ### Per-Step Artifacts
 
 | Artifact | Path | Written By |
 |----------|------|------------|
 | Step implementation | `.vcp/task/impl-steps/impl-step-{N}-v{V}.json` | implementer (SINGLE_STEP_MODE) |
-| Step review | `.vcp/task/phased-reviews/phased-review-{provider}-{model}-step-{N}-v{V}.json` | phased-reviewer |
+| Step review (interval=1) | `.vcp/task/phased-reviews/phased-review-{provider}-{model}-step-{N}-v{V}.json` | phased-reviewer |
+| Batch review (interval>1) | `.vcp/task/phased-reviews/phased-review-{provider}-{model}-steps-{start}-{end}-v{V}.json` | phased-reviewer |
 | Aggregated result | `.vcp/task/impl-result.json` | orchestrator (inline) |
 
 Version (`V`) starts at 1 and increments with each fix/re-review cycle.
@@ -256,11 +265,15 @@ Partial phased progress is tracked in `pipeline-tasks.json` under the implementa
 
 ```json
 "step_progress": {
-  "current_step": 4,
-  "total_steps": 8,
-  "completed_steps": [1, 2, 3]
+  "current_step": 7,
+  "total_steps": 11,
+  "completed_steps": [1, 2, 3, 4, 5, 6],
+  "last_reviewed_step": 6
 }
 ```
+
+- `last_reviewed_step`: the highest step number that has passed review (always a batch boundary)
+- `current_step`: next step to implement (may be ahead of `last_reviewed_step` mid-batch)
 
 On resume, the orchestrator skips completed steps and resumes the per-step loop from `current_step`.
 
@@ -531,7 +544,8 @@ When a phased implementation loop is active, the implementation stage entry also
   "step_progress": {
     "current_step": 4,
     "total_steps": 8,
-    "completed_steps": [1, 2, 3]
+    "completed_steps": [1, 2, 3],
+    "last_reviewed_step": 3
   }
 }
 ```
@@ -612,6 +626,7 @@ The pipeline is driven by `~/.vcp/dev-buddy.json`. Two ordered arrays of stages 
   ],
   "max_iterations": 10,
   "max_phased_iterations": 3,
+  "review_interval": 3,
   "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
 }
 ```
@@ -630,6 +645,7 @@ See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 - `parallel` is **optional** (boolean, default false) — only meaningful on `plan-review` and `code-review` stages. Setting `parallel: true` on non-review stages fails validation. `parallel: false` (or omitted) is accepted on any stage type.
 - `phased_reviews` is **optional** (array, max 10 entries) — only valid on `implementation` stages. Each entry has `provider` (string), `model` (string matching `/^[a-zA-Z0-9._-]+$/`), and optional `parallel` (boolean). Setting `phased_reviews` on non-implementation stages fails validation.
 - `max_phased_iterations` is **optional** (positive integer, default 3) — maximum fix/re-review cycles per step during phased implementation. Resolved at config load time; downstream consumers must not apply their own fallback.
+- `review_interval` is **optional** (positive integer, default 1) — review after every N implementation steps during phased reviews. Value of 1 = review every step (current behavior). Value of 3 = implement 3 steps, then review them as a batch. Resolved at config load time; downstream consumers must not apply their own fallback.
 
 ### Config Validation
 
@@ -643,6 +659,7 @@ See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 - `phased_reviews` entries validated: non-empty provider, model matching regex, boolean parallel
 - `phased_reviews` array max length 10
 - `max_phased_iterations` validated as positive integer if present; resolved to 3 if absent
+- `review_interval` validated as positive integer if present; resolved to 1 if absent
 - If the file is missing, factory defaults are returned
 
 ---
