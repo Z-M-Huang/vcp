@@ -1,6 +1,6 @@
 {
   "name": "vcp",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "description": "Vibe Coding Protocol — project initialization, security enforcement, quality checks, and dependency verification for AI-generated code",
   "author": {
     "name": "Z-M-Huang"
