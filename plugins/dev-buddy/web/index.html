@@ -34,6 +34,10 @@
       x-bind:class="{ active: tab === 'pipeline' }"
       x-on:click="tab = 'pipeline'; loadPipelineConfig()"
     >Pipeline Config</button>
+    <button
+      x-bind:class="{ active: tab === 'chatroom' }"
+      x-on:click="tab = 'chatroom'; loadChatroomConfig()"
+    >Chatroom</button>
   </nav>
 
   <!-- Error banner -->
@@ -702,6 +706,87 @@
               <input type="text" x-model="pipelineConfig.team_name_pattern">
             </label>
           </form>
+        </div>
+      </div>
+    </template>
+  </section>
+
+  <!-- ============ Chatroom Config Tab ============ -->
+  <section x-show="tab === 'chatroom'" class="tab-content">
+    <div class="section-header">
+      <h2>Chatroom Configuration</h2>
+      <button class="btn-primary" x-on:click="saveChatroomConfig()" x-bind:disabled="saving.chatroom">
+        <span x-text="saving.chatroom ? 'Saving...' : 'Save Config'"></span>
+      </button>
+    </div>
+
+    <div x-show="loading.chatroom" class="loading">Loading chatroom config...</div>
+
+    <template x-if="!loading.chatroom && chatroomConfig">
+      <div>
+        <div class="card">
+          <h3>Participants</h3>
+          <p class="hint">Add AI models to participate in multi-model deliberation. Each participant critiques your approach from a different perspective.</p>
+
+          <template x-for="(participant, idx) in chatroomConfig.participants" x-bind:key="participant._id">
+            <div class="stage-card">
+              <div class="stage-info">
+                <span class="stage-type-badge stage-type-code_review" x-text="'#' + (idx + 1)"></span>
+              </div>
+              <div class="stage-controls">
+                <select
+                  x-model="participant.preset"
+                  x-init="$nextTick(() => $el.value = participant.preset || '')"
+                  class="stage-select"
+                  x-on:change="onParticipantProviderChange(idx)"
+                >
+                  <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
+                    <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
+                  </template>
+                </select>
+                <select
+                  x-model="participant.model"
+                  x-init="$nextTick(() => $el.value = participant.model || '')"
+                  class="stage-select model-select"
+                  required
+                >
+                  <option value="" disabled>Select model</option>
+                  <template x-for="m in (stageModelOptions[participant.preset] || [])" x-bind:key="m">
+                    <option x-bind:value="m" x-text="m"></option>
+                  </template>
+                </select>
+              </div>
+              <button class="stage-delete btn-danger btn-sm" x-on:click="removeParticipant(idx)">x</button>
+            </div>
+          </template>
+
+          <template x-if="chatroomConfig.participants.length === 0">
+            <p class="empty-state">No participants configured. Add at least one to use /dev-buddy-chatroom.</p>
+          </template>
+
+          <div class="add-stage-row">
+            <button
+              class="btn-secondary btn-sm"
+              x-on:click="addParticipant()"
+              x-bind:disabled="chatroomConfig.participants.length >= 10"
+            >+ Add Participant</button>
+            <span class="hint" x-show="chatroomConfig.participants.length >= 10" style="margin-left: 8px;">Maximum 10 participants</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Settings</h3>
+          <form x-on:submit.prevent>
+            <label>
+              Max Rounds
+              <input type="number" min="1" max="10" x-model.number="chatroomConfig.max_rounds">
+              <span class="hint">Maximum deliberation rounds before presenting results (1-10)</span>
+            </label>
+          </form>
+        </div>
+
+        <div style="margin-top: 12px;">
+          <button class="btn-secondary btn-sm" x-on:click="resetChatroomToDefault()">Reset to Default</button>
         </div>
       </div>
     </template>

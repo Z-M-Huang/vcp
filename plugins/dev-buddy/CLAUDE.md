@@ -2,6 +2,7 @@
 
 > Pipeline orchestration logic lives in `scripts/pipeline-driver.ts` (the TypeScript state machine).
 > SKILL.md files are thin executor loops that call the driver and execute its JSON commands.
+> **Exception:** `/dev-buddy-chatroom` is a standalone orchestration skill that manages its own multi-round deliberation loop directly (no pipeline-driver).
 
 ## Path Reference
 
@@ -18,6 +19,7 @@
 /dev-buddy-feature-implement [description]    # Feature development pipeline
 /dev-buddy-bug-fix [description]              # Bug fix pipeline
 /dev-buddy-once use <provider> [model] <task> # One-shot task (no pipeline)
+/dev-buddy-chatroom <topic>                   # Multi-model deliberation chatroom
 ```
 
 ## Architecture
@@ -140,6 +142,25 @@ Config server (`scripts/config-server.ts`) endpoints:
 | GET | `/api/pipeline-config` | Current pipeline config |
 | PUT | `/api/pipeline-config` | Save pipeline config |
 | GET | `/api/preset-models/:name` | Model list for preset |
+| GET | `/api/chatroom-config` | Current chatroom config |
+| GET | `/api/chatroom-config/defaults` | Factory default chatroom config |
+| PUT | `/api/chatroom-config` | Save chatroom config |
+
+## Chatroom Config
+
+Separate config file `~/.vcp/dev-buddy-chatroom.json` for multi-model deliberation:
+
+```json
+{
+  "participants": [{ "preset": "minimax", "model": "MiniMax-M2.5" }],
+  "max_rounds": 3
+}
+```
+
+- `participants`: 0-10 `{ preset, model }` objects (0 valid for saving; skill validates >=1 at runtime)
+- `max_rounds`: 1-10, default 3
+- CLI presets require `one_shot_args_template`
+- Config helper: `scripts/chatroom-config.ts`
 
 ## API Task Runner
 
@@ -186,6 +207,7 @@ bun api-task-runner.ts --preset <name> --model <model> --task "<text>" --cwd <di
 | `one-shot-runner.ts` | One-shot task runner for `/dev-buddy-once` |
 | `config-server.ts` | Web portal backend |
 | `pipeline-config.ts` | Config loading + validation |
+| `chatroom-config.ts` | Chatroom config loading + validation |
 | `json-tool.ts` | Cross-platform JSON operations |
 | `preset-utils.ts` | Preset file I/O |
 | `cli-executor.ts` | CLI preset execution wrapper |

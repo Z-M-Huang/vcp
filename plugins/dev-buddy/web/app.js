@@ -16,6 +16,7 @@ function devBuddyApp() {
     // Data
     presets: {},
     pipelineConfig: null,
+    chatroomConfig: null,
     stageDefinitions: {},
 
     // Model options per provider (populated via GET /api/preset-models/:name)
@@ -42,8 +43,8 @@ function devBuddyApp() {
     formTestResults: null,
 
     // UI state
-    loading: { presets: false, pipeline: false },
-    saving: { pipeline: false },
+    loading: { presets: false, pipeline: false, chatroom: false },
+    saving: { pipeline: false, chatroom: false },
     errorMsg: '',
     successMsg: '',
     showAddPreset: false,
@@ -933,6 +934,157 @@ function devBuddyApp() {
         this.showError('Network error saving pipeline config');
       } finally {
         this.saving.pipeline = false;
+      }
+    },
+
+    // ============================================================
+    // Chatroom Config
+    // ============================================================
+
+    /**
+     * Load chatroom config from REST API.
+     * Pre-loads model options BEFORE assigning config to prevent
+     * Alpine x-model from clearing saved model values.
+     */
+    async loadChatroomConfig() {
+      this.loading.chatroom = true;
+      try {
+        // Load chatroom config and presets together
+        const [configResp, presetsResp] = await Promise.all([
+          fetch('/api/chatroom-config'),
+          this.presets && Object.keys(this.presets).length > 0
+            ? Promise.resolve(null)
+            : fetch('/api/presets'),
+        ]);
+
+        if (!configResp.ok) {
+          const err = await configResp.json().catch(() => ({ error: { message: 'Request failed' } }));
+          this.showError(err.error?.message || 'Failed to load chatroom config');
+          return;
+        }
+
+        const data = await configResp.json();
+
+        if (presetsResp) {
+          const presetsData = await presetsResp.json();
+          this.presets = presetsData.presets || {};
+        }
+
+        // Pre-load model options BEFORE assigning config — otherwise Alpine
+        // renders <select> with empty options, x-model clears the saved value.
+        const providers = new Set(
+          (data.config.participants || []).map(p => p.preset).filter(Boolean)
+        );
+        await Promise.allSettled([...providers].map(p => this._fetchModelOptions(p)));
+
+        // Now assign config — Alpine renders selects with options already present
+        this._assignParticipantIds(data.config.participants || []);
+        this.chatroomConfig = data.config;
+      } catch (e) {
+        this.showError('Network error loading chatroom config');
+      } finally {
+        this.loading.chatroom = false;
+      }
+    },
+
+    /**
+     * Save chatroom config via REST API.
+     */
+    async saveChatroomConfig() {
+      this.saving.chatroom = true;
+      try {
+        const payload = {
+          participants: this.chatroomConfig.participants,
+          max_rounds: this.chatroomConfig.max_rounds,
+        };
+
+        const resp = await fetch('/api/chatroom-config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: { message: 'Request failed' } }));
+          this.showError(err.error?.message || 'Failed to save chatroom config');
+          return;
+        }
+        this.showSuccess('Chatroom config saved');
+      } catch (e) {
+        this.showError('Network error saving chatroom config');
+      } finally {
+        this.saving.chatroom = false;
+      }
+    },
+
+    /**
+     * Stamp each participant with a non-enumerable _id for stable x-for keys.
+     * Non-enumerable so JSON.stringify() omits it (server rejects unknown fields).
+     */
+    _assignParticipantIds(participants) {
+      for (const p of participants) {
+        if (!Object.prototype.hasOwnProperty.call(p, '_id')) {
+          Object.defineProperty(p, '_id', {
+            value: ++this._stageIdCounter,
+            writable: true,
+            enumerable: false,
+            configurable: true,
+          });
+        }
+      }
+    },
+
+    /**
+     * Add a new participant to the chatroom config.
+     */
+    addParticipant() {
+      if (!this.chatroomConfig) return;
+      if (this.chatroomConfig.participants.length >= 10) {
+        this.showError('Maximum 10 participants allowed');
+        return;
+      }
+
+      const firstPreset = Object.keys(this.presets)[0] || 'anthropic-subscription';
+      const participant = { preset: firstPreset, model: '' };
+      this._assignParticipantIds([participant]);
+      this.chatroomConfig.participants.push(participant);
+      this._fetchModelOptions(firstPreset);
+    },
+
+    /**
+     * Remove a participant from the chatroom config.
+     */
+    removeParticipant(index) {
+      if (!this.chatroomConfig) return;
+      this.chatroomConfig.participants.splice(index, 1);
+    },
+
+    /**
+     * Called when a participant's preset changes — fetch model options for the new preset.
+     */
+    async onParticipantProviderChange(index) {
+      if (!this.chatroomConfig) return;
+      const participant = this.chatroomConfig.participants[index];
+      if (!participant) return;
+      participant.model = '';
+      await this._fetchModelOptions(participant.preset);
+    },
+
+    /**
+     * Reset chatroom config to factory defaults.
+     */
+    async resetChatroomToDefault() {
+      if (!confirm('Reset Chatroom config to factory defaults? This will clear all participants.')) return;
+      try {
+        const resp = await fetch('/api/chatroom-config/defaults');
+        if (!resp.ok) {
+          this.showError('Failed to load factory default config');
+          return;
+        }
+        const data = await resp.json();
+        this.chatroomConfig = data.config;
+        this.showSuccess('Chatroom config reset to defaults');
+      } catch (e) {
+        this.showError('Network error resetting chatroom config');
       }
     },
   };
