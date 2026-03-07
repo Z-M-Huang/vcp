@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Pipeline orchestrator — TypeScript port of orchestrator.sh
+ * Pipeline orchestrator — human-readable CLI wrapper.
  *
  * Commands:
  *   bun orchestrator.ts run       Show current pipeline status (default)
@@ -11,6 +11,9 @@
  *
  * Options:
  *   --cwd <dir>   Project directory (overrides CLAUDE_PROJECT_DIR / cwd)
+ *
+ * Pipeline logic lives in pipeline-driver.ts. This file provides the
+ * human-friendly status display and the setup validation (dry-run).
  */
 
 import fs from 'fs';
@@ -20,19 +23,13 @@ import {
   determinePhase,
   getProgress,
   getPipelineType,
-  type PhaseToken,
-  type PhaseResult,
 } from './pipeline-utils.ts';
 
 // ─── Parse args ─────────────────────────────────────────────────────
-// Strip --cwd <dir> from argv, inject into env, then resolve command
-// from remaining positional args. This lets callers write either:
-//   bun orchestrator.ts reset --cwd /foo
-//   bun orchestrator.ts --cwd /foo reset
 
 const positionalArgs: string[] = [];
 {
-  const args = process.argv.slice(2); // skip 'bun' and script path
+  const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--cwd') {
       const val = args[i + 1];
@@ -41,7 +38,7 @@ const positionalArgs: string[] = [];
         process.exit(1);
       }
       process.env.CLAUDE_PROJECT_DIR = val;
-      i++; // skip value
+      i++;
     } else {
       positionalArgs.push(args[i]);
     }
@@ -60,7 +57,7 @@ const RED = '\x1b[0;31m';
 const GREEN = '\x1b[0;32m';
 const YELLOW = '\x1b[1;33m';
 const BLUE = '\x1b[0;34m';
-const NC = '\x1b[0m'; // No Color
+const NC = '\x1b[0m';
 
 function logInfo(msg: string): void { console.log(`${BLUE}[INFO]${NC} ${msg}`); }
 function logSuccess(msg: string): void { console.log(`${GREEN}[SUCCESS]${NC} ${msg}`); }
@@ -73,22 +70,14 @@ const LOCK_FILE = path.join(TASK_DIR, '.orchestrator.lock');
 
 function getLockPid(): number | null {
   try {
-    const content = fs.readFileSync(LOCK_FILE, 'utf-8').trim();
-    const pid = parseInt(content, 10);
+    const pid = parseInt(fs.readFileSync(LOCK_FILE, 'utf-8').trim(), 10);
     return Number.isFinite(pid) ? pid : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0); // Signal 0: test if process exists, don't kill
-    return true;
-  } catch (e: unknown) {
-    // EPERM = process exists but we lack permission
-    return (e as NodeJS.ErrnoException)?.code === 'EPERM';
-  }
+  try { process.kill(pid, 0); return true; }
+  catch (e: unknown) { return (e as NodeJS.ErrnoException)?.code === 'EPERM'; }
 }
 
 export function acquireLock(): boolean {
@@ -99,14 +88,11 @@ export function acquireLock(): boolean {
       logError(`If this is incorrect, manually remove ${LOCK_FILE}`);
       return false;
     }
-    // Stale lock — remove it
     logWarn(`Removing stale lock (PID ${existingPid} no longer exists)`);
     try { fs.unlinkSync(LOCK_FILE); } catch { /* already removed */ }
   }
-
   fs.mkdirSync(TASK_DIR, { recursive: true });
   try {
-    // wx flag = exclusive create, fails atomically if file exists (equivalent to bash set -C)
     fs.writeFileSync(LOCK_FILE, String(process.pid), { flag: 'wx' });
     return true;
   } catch {
@@ -116,24 +102,42 @@ export function acquireLock(): boolean {
 }
 
 export function releaseLock(): void {
-  const lockPid = getLockPid();
-  if (lockPid === process.pid) {
+  if (getLockPid() === process.pid) {
     try { fs.unlinkSync(LOCK_FILE); } catch { /* already removed */ }
   }
 }
 
-// Trap equivalents
 process.on('exit', releaseLock);
 process.on('SIGINT', () => { releaseLock(); process.exit(130); });
 process.on('SIGTERM', () => { releaseLock(); process.exit(143); });
 
-// ─── Show Status ────────────────────────────────────────────────────
+// ─── Phase descriptions ─────────────────────────────────────────────
+
+const PHASE_DESCRIPTIONS: Record<string, string> = {
+  requirements_gathering: 'Requirements Gathering — use requirements-gatherer agent',
+  requirements_team_pending: 'Requirements (Team Pending) — spawn specialist teammates',
+  requirements_team_exploring: 'Requirements (Team Exploring) — specialists exploring in parallel',
+  plan_drafting: 'Planning — create plan-refined.json',
+  implementation: 'Implementation — use implementer agent',
+  implementation_failed: 'STOPPED: implementation_failed — review impl-result.json',
+  plan_rejected: 'STOPPED: plan_rejected — review feedback',
+  code_rejected: 'STOPPED: code_rejected — review feedback',
+  complete: 'Complete! All reviews approved.',
+  idle: 'Unknown (old pipeline format) — reset to continue',
+};
+
+const PHASE_PREFIXES: Array<[string, string]> = [
+  ['plan_review_', 'Plan Review'],
+  ['code_review_', 'Code Review'],
+  ['fix_plan_review_', 'Fix Plan — address reviewer feedback'],
+  ['fix_code_review_', 'Fix Code — address reviewer feedback'],
+  ['clarification_', 'Clarification Needed — answer reviewer questions'],
+];
 
 function showStatus(): void {
   if (!fs.existsSync(TASK_DIR)) {
     logInfo('No .vcp/task directory found. Pipeline not started.');
-    console.log('');
-    console.log('To start, invoke /dev-buddy-feature-implement or /dev-buddy-bug-fix with your request.');
+    console.log('\nTo start: /dev-buddy-feature-implement or /dev-buddy-bug-fix');
     return;
   }
 
@@ -142,90 +146,62 @@ function showStatus(): void {
   logInfo(`Current phase: ${phase}`);
   console.log('');
 
-  // Static phase tokens (exact match)
-  if (phase === 'requirements_gathering') {
-    console.log('Phase: Requirements Gathering');
-    console.log('Use requirements-gatherer agent (opus) to create user-story.json');
-    console.log('Note: If teams are available, create agent team for specialist exploration first.');
-  } else if (phase === 'requirements_team_pending') {
-    console.log('Phase: Requirements Gathering (Team Pending)');
-    console.log('Pipeline initialized. Spawn specialist teammates into the pipeline team.');
-  } else if (phase === 'requirements_team_exploring') {
-    console.log('Phase: Requirements Gathering (Team Exploring)');
-    console.log('Specialist teammates are exploring codebase and domain in parallel.');
-    console.log('Wait for ALL specialists to finish before synthesizing.');
-  } else if (phase === 'plan_drafting') {
-    const ptDraft = getPipelineType(progress.pipelineTasks);
-    if (ptDraft === 'bug-fix') {
-      console.log('Phase: Planning');
-      console.log('Consolidation incomplete — write plan-refined.json from RCA findings.');
-    } else {
-      console.log('Phase: Planning');
-      console.log('Use planner agent (opus) to create plan-refined.json');
-    }
-  } else if (phase === 'root_cause_analysis') {
-    const rcaEntries = Object.entries(progress.stageOutputs)
-      .filter(([key]) => key.startsWith('rca-'));
-    const rcaDoneCount = rcaEntries.filter(([, v]) => v !== null).length;
-    const rcaTotalCount = rcaEntries.length;
-    if (rcaTotalCount > 0 && rcaDoneCount === rcaTotalCount) {
-      console.log('Phase: RCA Consolidation');
-      console.log('All RCA analyses complete. Consolidate findings into user-story.json + plan-refined.json.');
-    } else if (rcaDoneCount > 0) {
+  // RCA phase needs special handling for sub-states
+  if (phase === 'root_cause_analysis') {
+    const rcaEntries = Object.entries(progress.stageOutputs).filter(([k]) => k.startsWith('rca-'));
+    const done = rcaEntries.filter(([, v]) => v !== null).length;
+    if (rcaEntries.length > 0 && done === rcaEntries.length) {
+      console.log('Phase: RCA Consolidation — all analyses complete, consolidate findings');
+    } else if (done > 0) {
       console.log('Phase: Root Cause Analysis (In Progress)');
-      const statusParts = rcaEntries.map(([key, v]) => `${key}: ${v !== null ? 'complete' : 'running'}`).join(', ');
-      console.log(statusParts);
+      console.log(rcaEntries.map(([k, v]) => `${k}: ${v !== null ? 'complete' : 'running'}`).join(', '));
     } else {
       console.log('Phase: Root Cause Analysis (Pending)');
-      console.log('Spawn root-cause-analyst stages per resolved bugfix_pipeline config.');
     }
-  } else if (phase === 'implementation') {
-    console.log('Phase: Implementation');
-    console.log('Use implementer agent (sonnet) to implement plan-refined.json');
-  } else if (phase === 'implementation_failed') {
-    logError('Pipeline stopped: implementation_failed');
-    console.log('');
-    console.log('Review impl-result.json for failure details.');
-  } else if (phase === 'plan_rejected' || phase === 'code_rejected') {
-    logError(`Pipeline stopped: ${phase}`);
-    console.log('');
-    console.log('Review the feedback files and decide how to proceed.');
-  } else if (phase === 'complete') {
-    logSuccess('Pipeline complete! All reviews approved.');
-    console.log('');
-    console.log('To reset for next task:');
-    console.log(`  bun "${PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd <project-dir>`);
-  // Dynamic phase tokens (prefix match for stage-indexed phases)
-  } else if (phase.startsWith('plan_review_')) {
-    const ptReview = getPipelineType(progress.pipelineTasks);
-    if (ptReview === 'bug-fix') {
-      console.log('Phase: RCA + Plan Validation');
-      console.log('Run plan review stage for consolidated RCA and fix plan.');
-    } else {
-      console.log('Phase: Plan Review');
-      console.log('Run plan review stage per pipeline config.');
-    }
-  } else if (phase.startsWith('code_review_')) {
-    console.log('Phase: Code Review');
-    console.log('Run code review stage per pipeline config.');
-  } else if (phase.startsWith('fix_plan_review_')) {
-    console.log('Phase: Fix Plan');
-    console.log('Address reviewer feedback, create fix + re-review tasks');
-  } else if (phase.startsWith('fix_code_review_')) {
-    console.log('Phase: Fix Code');
-    console.log('Address reviewer feedback, create fix + re-review tasks');
-  } else if (phase.startsWith('clarification_')) {
-    console.log('Phase: Clarification Needed');
-    console.log('Reviewer has questions. Read clarification_questions from review file.');
-    console.log('If you can answer directly, do so. Otherwise use AskUserQuestion.');
-    console.log('After answering, re-run the same reviewer.');
-  } else if (phase === 'idle') {
-    console.log('Phase: Unknown (old pipeline format)');
-    console.log('Pipeline tasks file has no resolved_config. Reset pipeline to continue.');
-  } else {
-    console.log(`Phase: ${phase}`);
-    console.log('Unknown phase. Check .vcp/task/ files for pipeline state.');
+    return;
   }
+
+  // Plan drafting: bug-fix vs feature message
+  if (phase === 'plan_drafting') {
+    const pt = getPipelineType(progress.pipelineTasks);
+    console.log(pt === 'bug-fix'
+      ? 'Phase: Planning — consolidation incomplete, write plan from RCA findings'
+      : 'Phase: Planning — use planner agent to create plan-refined.json');
+    return;
+  }
+
+  // Plan review: bug-fix vs feature message
+  if (phase.startsWith('plan_review_')) {
+    const pt = getPipelineType(progress.pipelineTasks);
+    console.log(pt === 'bug-fix'
+      ? 'Phase: RCA + Plan Validation'
+      : 'Phase: Plan Review');
+    return;
+  }
+
+  // Static phase tokens
+  const desc = PHASE_DESCRIPTIONS[phase];
+  if (desc) {
+    if (phase === 'complete') {
+      logSuccess(desc);
+      console.log(`\nTo reset: bun "${PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd <dir>`);
+    } else if (phase === 'implementation_failed' || phase === 'plan_rejected' || phase === 'code_rejected') {
+      logError(desc);
+    } else {
+      console.log(`Phase: ${desc}`);
+    }
+    return;
+  }
+
+  // Dynamic phase tokens (prefix match)
+  for (const [prefix, label] of PHASE_PREFIXES) {
+    if (phase.startsWith(prefix)) {
+      console.log(`Phase: ${label}`);
+      return;
+    }
+  }
+
+  console.log(`Phase: ${phase} — check .vcp/task/ files for pipeline state`);
 }
 
 // ─── Dry-run ────────────────────────────────────────────────────────
@@ -233,119 +209,37 @@ function showStatus(): void {
 function runDryRun(): void {
   let errors = 0;
   let warnings = 0;
+  console.log('Running dry-run validation...\n');
 
-  console.log('Running dry-run validation...');
-  console.log('');
-
-  // 1. Check .vcp/task/ directory
-  if (fs.existsSync(TASK_DIR)) {
-    console.log(`Task directory: OK (${TASK_DIR})`);
-  } else {
-    console.log(`Task directory: MISSING (${TASK_DIR})`);
-    errors++;
+  function check(label: string, ok: boolean, severity: 'error' | 'warn' = 'error'): void {
+    if (ok) { console.log(`${label}: OK`); return; }
+    console.log(`${label}: ${severity === 'error' ? 'MISSING' : 'WARNING - not found'}`);
+    if (severity === 'error') errors++; else warnings++;
   }
 
-  // 2. Check required scripts
-  const requiredScripts = ['orchestrator.ts'];
-  let scriptsOk = true;
-  for (const script of requiredScripts) {
-    if (!fs.existsSync(path.join(SCRIPT_DIR, script))) {
-      console.log(`Script missing: ${script}`);
-      scriptsOk = false;
-      errors++;
-    }
-  }
-  if (scriptsOk) console.log(`Scripts: OK (${requiredScripts.length} scripts)`);
+  check('Task directory', fs.existsSync(TASK_DIR));
+  check('Scripts', ['orchestrator.ts', 'pipeline-driver.ts'].every(s => fs.existsSync(path.join(SCRIPT_DIR, s))));
 
-  // 3. Check skills
   const skillsDir = path.join(PLUGIN_ROOT, 'skills');
-  const requiredSkills = ['dev-buddy-feature-implement/SKILL.md', 'dev-buddy-bug-fix/SKILL.md'];
-  let skillsOk = true;
-  if (fs.existsSync(skillsDir)) {
-    for (const skill of requiredSkills) {
-      if (!fs.existsSync(path.join(skillsDir, skill))) {
-        console.log(`Skill missing: ${skill}`);
-        skillsOk = false;
-        errors++;
-      }
-    }
-    if (skillsOk) console.log(`Skills: OK (${requiredSkills.length} skills)`);
-  } else {
-    console.log('Skills directory: MISSING (skills/)');
-    errors++;
-  }
+  check('Skills', fs.existsSync(skillsDir) &&
+    ['dev-buddy-feature-implement/SKILL.md', 'dev-buddy-bug-fix/SKILL.md']
+      .every(s => fs.existsSync(path.join(skillsDir, s))));
 
-  // 4. Check custom agents
   const agentsDir = path.join(PLUGIN_ROOT, 'agents');
-  const requiredAgents = [
-    'requirements-gatherer.md',
-    'planner.md',
-    'plan-reviewer.md',
-    'implementer.md',
-    'code-reviewer.md',
-    'cli-executor.md',
-    'root-cause-analyst.md',
-  ];
-  let agentsOk = true;
-  if (fs.existsSync(agentsDir)) {
-    for (const agent of requiredAgents) {
-      if (!fs.existsSync(path.join(agentsDir, agent))) {
-        console.log(`Agent missing: ${agent}`);
-        agentsOk = false;
-        errors++;
-      }
-    }
-    if (agentsOk) console.log(`Agents: OK (${requiredAgents.length} agents)`);
-  } else {
-    console.log('Agents directory: MISSING (agents/)');
-    errors++;
-  }
+  check('Agents', fs.existsSync(agentsDir) &&
+    ['requirements-gatherer', 'planner', 'plan-reviewer', 'implementer', 'code-reviewer', 'cli-executor', 'root-cause-analyst', 'phased-reviewer']
+      .every(a => fs.existsSync(path.join(agentsDir, `${a}.md`))));
 
-  // 5. Check required docs
-  if (fs.existsSync(path.join(PLUGIN_ROOT, 'docs', 'review-guidelines.md'))) {
-    console.log('docs/review-guidelines.md: OK');
-  } else {
-    console.log('docs/review-guidelines.md: MISSING');
-    errors++;
-  }
+  check('docs/review-guidelines.md', fs.existsSync(path.join(PLUGIN_ROOT, 'docs', 'review-guidelines.md')));
+  check('docs/workflow.md', fs.existsSync(path.join(PLUGIN_ROOT, 'docs', 'workflow.md')));
 
-  if (fs.existsSync(path.join(PLUGIN_ROOT, 'docs', 'workflow.md'))) {
-    console.log('docs/workflow.md: OK');
-  } else {
-    console.log('docs/workflow.md: MISSING');
-    errors++;
-  }
+  check('CLI bun', !!Bun.which('bun'));
+  check('CLI claude', !!Bun.which('claude'), 'warn');
+  check('CLI codex', !!Bun.which('codex'), 'warn');
 
-  // 6. Check CLI tools
-  if (Bun.which('bun')) {
-    console.log('CLI bun: OK');
-  } else {
-    console.log('CLI bun: MISSING (required for JSON processing)');
-    errors++;
-  }
-
-  if (Bun.which('claude')) {
-    console.log('CLI claude: OK');
-  } else {
-    console.log('CLI claude: WARNING - not found');
-    warnings++;
-  }
-
-  if (Bun.which('codex')) {
-    console.log('CLI codex: OK');
-  } else {
-    console.log('CLI codex: WARNING - not found');
-    warnings++;
-  }
-
-  // Summary
   console.log('');
   if (errors === 0) {
-    if (warnings > 0) {
-      console.log(`Dry run: PASSED (${warnings} warnings)`);
-    } else {
-      console.log('Dry run: PASSED');
-    }
+    console.log(warnings > 0 ? `Dry run: PASSED (${warnings} warnings)` : 'Dry run: PASSED');
     process.exit(0);
   } else {
     console.log(`Dry run: FAILED (${errors} errors, ${warnings} warnings)`);
@@ -360,16 +254,11 @@ function resetPipeline(): void {
     logError('Cannot reset while another orchestrator is running');
     process.exit(1);
   }
-
   logWarn('Resetting pipeline...');
-
-  // Release lock before nuking the directory (lock file is inside .vcp/task)
-  releaseLock();
-
-  // Remove entire .vcp/task directory and recreate clean
+  // Delete first while we hold the lock, then release
   fs.rmSync(TASK_DIR, { recursive: true, force: true });
   fs.mkdirSync(TASK_DIR, { recursive: true });
-
+  releaseLock();
   logSuccess('Pipeline reset complete');
 }
 
@@ -390,10 +279,7 @@ switch (command) {
     runDryRun();
     break;
   case 'phase': {
-    if (!fs.existsSync(TASK_DIR)) {
-      console.log('idle');
-      break;
-    }
+    if (!fs.existsSync(TASK_DIR)) { console.log('idle'); break; }
     const progress = getProgress(TASK_DIR);
     const { phase } = determinePhase(progress);
     console.log(phase);
@@ -401,15 +287,5 @@ switch (command) {
   }
   default:
     console.log('Usage: bun orchestrator.ts {run|status|reset|dry-run|phase} [--cwd <dir>]');
-    console.log('');
-    console.log('Commands:');
-    console.log('  run       Show current pipeline status (default)');
-    console.log('  status    Show current pipeline status');
-    console.log('  reset     Reset pipeline (remove all artifacts)');
-    console.log('  dry-run   Validate setup without running');
-    console.log('  phase     Output current phase token (for scripting/testing)');
-    console.log('');
-    console.log('Options:');
-    console.log('  --cwd <dir>  Project directory (overrides CLAUDE_PROJECT_DIR / cwd)');
     process.exit(1);
 }
