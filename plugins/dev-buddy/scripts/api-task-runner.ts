@@ -677,8 +677,6 @@ export interface ParsedArgs {
   taskFromStdin: boolean;
   /** Optional path to a file whose content is appended to the system prompt. */
   systemPrompt?: string;
-  /** When true, print result text to stdout instead of JSON wrapper. For one-shot mode. */
-  stream: boolean;
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -725,9 +723,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
         result.systemPrompt = next;
         i++;
         break;
-      case '--stream':
-        result.stream = true;
-        break;
     }
   }
 
@@ -751,10 +746,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
   if (!result.taskFromStdin) {
     result.taskFromStdin = false;
-  }
-
-  if (!result.stream) {
-    result.stream = false;
   }
 
   return result as ParsedArgs;
@@ -852,23 +843,25 @@ async function main(): Promise<void> {
     presetName: args.preset,
   });
 
-  // Stream mode: plain text to stdout, errors to stderr (for one-shot / stdio:inherit)
-  if (args.stream) {
-    if (result.timedOut) {
-      process.stderr.write('Error: Task execution timed out\n');
-      process.exit(3);
-    } else if (result.error) {
-      process.stderr.write(`Error: ${result.error}\n`);
-      process.exit(2);
-    } else {
-      if (result.result) {
-        process.stdout.write(result.result);
-      }
-      process.exit(0);
-    }
+  // Log task result (session lifecycle: setup events logged above, result logged here)
+  if (result.timedOut) {
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_timeout', decision: 'error',
+      details: `preset=${args.preset} model=${args.model} timeout=${args.taskTimeoutMs}ms`,
+    }, debugEnabled);
+  } else if (result.error) {
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_error', decision: 'error',
+      details: `preset=${args.preset} model=${args.model} error=${result.error}`,
+    }, debugEnabled);
+  } else {
+    await vcpLog(args.cwd, {
+      source: 'api-task-runner', event: 'session_complete', decision: 'info',
+      details: `preset=${args.preset} model=${args.model} result_length=${result.result?.length ?? 0}`,
+    }, debugEnabled);
   }
 
-  // Pipeline mode: JSON output
+  // JSON output
   let output: OutputEvent;
   let exitCode: number;
 

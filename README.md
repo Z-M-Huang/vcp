@@ -21,7 +21,7 @@
 ![41 Standards](https://img.shields.io/badge/Standards-41-blue?style=flat-square)
 ![12 Scopes](https://img.shields.io/badge/Scopes-12-green?style=flat-square)
 ![OWASP Top 10](https://img.shields.io/badge/OWASP_Top_10-Covered-critical?style=flat-square)
-![14 Skills](https://img.shields.io/badge/Skills-14-blue?style=flat-square)
+![16 Skills](https://img.shields.io/badge/Skills-16-blue?style=flat-square)
 ![8 Agents](https://img.shields.io/badge/Agents-8-green?style=flat-square)
 ![6 Hooks](https://img.shields.io/badge/Hooks-6-orange?style=flat-square)
 
@@ -100,7 +100,7 @@ VCP ships two complementary plugins:
 | Plugin | What It Does | Install |
 |--------|-------------|---------|
 | **VCP** | Standards enforcement — 41 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
-| **Dev Buddy** | Multi-AI pipeline — configurable stages, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
+| **Dev Buddy** | Multi-AI pipeline — configurable stages, cross-model review gates, multi-model chatroom, 8 specialist agents | `/plugin install vcp@dev-buddy` |
 
 Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.
 
@@ -457,6 +457,7 @@ Full documentation is on the **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)
 - **[Skills Reference](https://github.com/Z-M-Huang/vcp/wiki/Skills-Reference)** — All 10 skills with usage and examples
 - **[Dev Buddy Quick Start](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Quick-Start)** — Multi-AI pipeline setup and first run
 - **[Dev Buddy Configuration](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Configuration)** — Pipeline stages, providers, models
+- **[Chatroom](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Chatroom)** — Multi-model deliberation workflow
 - **[FAQ](https://github.com/Z-M-Huang/vcp/wiki/FAQ)** — Common questions and troubleshooting
 
 ---

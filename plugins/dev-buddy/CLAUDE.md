@@ -185,16 +185,15 @@ All aliases → same provider model (case-sensitive). OpenAI runner uses direct 
 
 ```
 bun api-task-runner.ts --preset <name> --model <model> --task "<text>" --cwd <dir>
-  [--task-stdin] [--task-timeout <ms>] [--system-prompt <path>] [--stream]
+  [--task-stdin] [--task-timeout <ms>] [--system-prompt <path>]
 ```
 
 `--system-prompt`: file under `docs/` appended to system prompt (review stages).
-`--stream`: prints result directly (no JSON wrapper), used by one-shot runner.
 
 ### One-Shot Runner
 
 `scripts/one-shot-runner.ts` handles `/dev-buddy-once` for API and CLI presets:
-- API: spawns `api-task-runner.ts` with `--task-stdin` + `--stream`
+- API: spawns `api-task-runner.ts` with `--task-stdin`, parses JSON result from stdout
 - CLI: uses `one_shot_args_template` from preset config
 
 ## Scripts

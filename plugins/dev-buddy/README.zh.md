@@ -4,8 +4,8 @@
 
 **打破 AI 回音壁。交付安全代码。**
 
-![Skills-5](https://img.shields.io/badge/Skills-5-blue?style=flat-square)
-![Agents-7](https://img.shields.io/badge/Agents-7-green?style=flat-square)
+![Skills-6](https://img.shields.io/badge/Skills-6-blue?style=flat-square)
+![Agents-8](https://img.shields.io/badge/Agents-8-green?style=flat-square)
 ![Hooks-2](https://img.shields.io/badge/Hooks-2-orange?style=flat-square)
 
 <img src="../../assets/hero.png" alt="Dev Buddy — 多 AI Pipeline 编排" width="700">
