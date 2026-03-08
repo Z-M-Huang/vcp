@@ -661,7 +661,9 @@ interface OutputEvent {
 }
 
 function emitAndExit(output: OutputEvent, exitCode: number): never {
-  console.log(JSON.stringify(output));
+  // writeSync(fd=1) bypasses console.log buffering — process.exit() would
+  // otherwise kill the process before buffered stdout is flushed to the pipe.
+  fs.writeSync(1, JSON.stringify(output) + '\n');
   process.exit(exitCode);
 }
 

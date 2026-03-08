@@ -84,6 +84,11 @@ The subagent works in the project directory with full tool access. Report its ou
 
 ### API (`type: "api"`)
 
+Generate a unique output ID for reliable file-based retrieval:
+```
+{preset}-{model}-{unix_timestamp}-{pid}
+```
+
 Run the one-shot runner script:
 
 ```bash
@@ -92,16 +97,19 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
   --preset "<exact_preset_name>" \
   --model "<model>" \
   --cwd "${CLAUDE_PROJECT_DIR}" \
+  --output-id "<preset>-<model>-$(date +%s)-$$" \
   --task-stdin <<'TASK_EOF'
 <task_text>
 TASK_EOF
 ```
 
-Uses `--task-stdin` with heredoc to avoid OS argv size limits and ps exposure.
+Uses `--task-stdin` with heredoc to avoid OS argv size limits and ps exposure. The `$$` in the output ID is the shell PID, ensuring uniqueness even when two tasks launch in the same second.
 
 **Derive timeout:** Read `~/.vcp/ai-presets.json` → find the preset by name → read `timeout_ms` (default: 300000 if not set or lookup fails).
 
 **IMPORTANT:** The Bash tool has a hard max timeout of 600,000ms (10 min). API tasks can run much longer (e.g., 30 min). Always use `run_in_background: true` to prevent the Bash tool from killing the process prematurely.
+
+**Remember the `--output-id` token** — the output file will be at `/tmp/.vcp/oneshot/<id>.json`. You will Read it after the task completes.
 
 After launching:
 1. Save the returned `task_id` from the Bash tool. If `run_in_background` does not return a `task_id`, report a dispatch failure to the user — do not retry in foreground mode.
@@ -112,17 +120,23 @@ After launching:
    For a 5-min preset (default 300000ms), this = `min(420000, 600000)` = **420000ms (7 min)**.
    The default TaskOutput timeout is only 30s — far too short for API tasks that typically take 2-5 min.
 3. If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
+4. **After the task completes**, use the **Read tool** to read the output file at `/tmp/.vcp/oneshot/<id>.json`. Do NOT rely on TaskOutput stdout — background task stdout capture is unreliable.
 
 The script:
 1. Spawns `api-task-runner.ts` with the preset, model, and task (via stdin)
 2. The task runner creates a V2 Agent SDK session, runs the task, and exits
-3. Outputs a JSON event to stdout
+3. Writes a JSON event to `/tmp/.vcp/oneshot/<id>.json` (and also to stdout as backup)
 
 ### CLI (`type: "cli"`)
 
 **Prerequisite:** The CLI preset must have a `one_shot_args_template` configured. This template uses only `{model}`, `{prompt}`, and `{reasoning_effort}` placeholders (no `{output_file}` or `{schema_path}` — those are pipeline-only).
 
 If the preset does not have `one_shot_args_template`, report the error to the user and suggest configuring it via `/dev-buddy-config` or `/dev-buddy-manage-presets`.
+
+Generate a unique output ID (same pattern as API):
+```
+{preset}-{model}-{unix_timestamp}-{pid}
+```
 
 Run the one-shot runner script:
 
@@ -132,6 +146,7 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
   --preset "<exact_preset_name>" \
   --model "<model>" \
   --cwd "${CLAUDE_PROJECT_DIR}" \
+  --output-id "<preset>-<model>-$(date +%s)-$$" \
   --task-stdin <<'TASK_EOF'
 <task_text>
 TASK_EOF
@@ -140,6 +155,8 @@ TASK_EOF
 **Derive timeout:** Read `~/.vcp/ai-presets.json` → find the preset by name → read `timeout_ms` (default: 1200000 for CLI if not set or lookup fails — matches the script's 20-minute default).
 
 **IMPORTANT:** The Bash tool has a hard max timeout of 600,000ms (10 min). CLI tasks can run much longer (e.g., Codex with 20-min timeout). Always use `run_in_background: true` to prevent the Bash tool from killing the process prematurely.
+
+**Remember the `--output-id` token** — the output file will be at `/tmp/.vcp/oneshot/<id>.json`. You will Read it after the task completes.
 
 After launching:
 1. Save the returned `task_id` from the Bash tool. If `run_in_background` does not return a `task_id`, report a dispatch failure to the user — do not retry in foreground mode.
@@ -150,6 +167,7 @@ After launching:
    For a 20-min CLI preset (default 1200000ms), this = `min(1320000, 600000)` = **600000ms (10 min)**.
    The default TaskOutput timeout is only 30s — far too short for CLI tasks that typically take 5-20 min.
 3. If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
+4. **After the task completes**, use the **Read tool** to read the output file at `/tmp/.vcp/oneshot/<id>.json`. For CLI tasks, TaskOutput stdout also contains the streamed output, but the output file has the structured JSON result.
 
 The CLI tool runs directly in the project directory (e.g., Codex `exec --full-auto`). Its output streams to the terminal.
 
@@ -157,7 +175,7 @@ The CLI tool runs directly in the project directory (e.g., Codex `exec --full-au
 
 ## Step 4: Report Results
 
-After the task completes, read the script's stdout JSON output:
+After the task completes, Read the output file at `/tmp/.vcp/oneshot/<id>.json` (where `<id>` is the `--output-id` token you passed):
 
 ### Success (exit code 0)
 ```json

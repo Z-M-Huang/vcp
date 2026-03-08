@@ -192,9 +192,10 @@ bun api-task-runner.ts --preset <name> --model <model> --task "<text>" --cwd <di
 
 ### One-Shot Runner
 
-`scripts/one-shot-runner.ts` handles `/dev-buddy-once` for API and CLI presets:
+`scripts/one-shot-runner.ts` handles `/dev-buddy-once` and `/dev-buddy-chatroom` for API and CLI presets:
 - API: spawns `api-task-runner.ts` with `--task-stdin`, parses JSON result from stdout
 - CLI: uses `one_shot_args_template` from preset config
+- `--output-id <token>`: writes result JSON to `/tmp/.vcp/oneshot/{token}.json` (via `os.tmpdir()`) for reliable retrieval by background tasks (bypasses unreliable stdout capture in Claude Code's background task system). Token must match `/^[a-zA-Z0-9._-]+$/` (no paths). Convention: `{preset}-{model}-{timestamp}-{pid}`
 
 ## Scripts
 

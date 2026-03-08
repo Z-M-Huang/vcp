@@ -18,6 +18,7 @@
  */
 
 import { spawn } from 'child_process';
+import { closeSync, constants, mkdirSync, openSync, writeSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import {
@@ -76,9 +77,43 @@ function makeError(phase: string, error: string, exitCode: number = 2): RunResul
   };
 }
 
+// Module-level output ID, set from --output-id in main().
+// The runner maps the ID to a fixed path: {tmpdir}/.vcp/oneshot/{id}.json
+let outputId: string | null = null;
+
 /** Emit result JSON to stdout and exit. Called only after all cleanup is done. */
 function emitAndExit(result: RunResult): never {
-  console.log(JSON.stringify(result.output));
+  const json = JSON.stringify(result.output) + '\n';
+
+  // Write to output file if an output ID was specified (reliable delivery for
+  // background tasks). File-based output bypasses the unreliable stdout capture
+  // in Claude Code's background task system — the caller reads the file after
+  // task completion using the same ID to derive the path.
+  if (outputId) {
+    try {
+      // Fixed base dir — no caller-controlled path components
+      const baseDir = path.join(os.tmpdir(), '.vcp', 'oneshot');
+      mkdirSync(baseDir, { recursive: true });
+      const outPath = path.join(baseDir, outputId + '.json');
+      // O_EXCL: fail if file exists (blocks hard-link overwrite, enforces uniqueness)
+      // O_NOFOLLOW: refuse symlinks at the final path
+      // 0o600: owner-only permissions
+      const fd = openSync(outPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+      try {
+        writeSync(fd, json);
+      } finally {
+        closeSync(fd);
+      }
+    } catch (err) {
+      // Best-effort — still emit to stdout as fallback
+      console.error(`[one-shot-runner] Failed to write output file: ${(err as Error).message}`);
+    }
+  }
+
+  // Also write to stdout for backward compatibility and foreground/debug use.
+  // writeSync(fd=1) bypasses console.log buffering — process.exit() would
+  // otherwise kill the process before buffered stdout is flushed to the pipe.
+  writeSync(1, json);
   process.exit(result.exitCode);
 }
 
@@ -92,6 +127,8 @@ interface ParsedArgs {
   task: string;
   /** When true, task text is read from stdin instead of --task arg. */
   taskFromStdin: boolean;
+  /** Optional output ID — runner maps to {tmpdir}/.vcp/oneshot/{id}.json for reliable retrieval. */
+  outputId: string | null;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -132,6 +169,19 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--task-stdin':
         result.taskFromStdin = true;
         break;
+      case '--output-id': {
+        if (!next || next.startsWith('--')) throw new Error('--output-id requires a value');
+        // Strict token validation — no path separators, no traversal
+        if (!/^[a-zA-Z0-9._-]+$/.test(next)) {
+          throw new Error('--output-id must match /^[a-zA-Z0-9._-]+$/ (no slashes or special chars)');
+        }
+        if (next.length > 255) {
+          throw new Error('--output-id must be 255 characters or fewer');
+        }
+        result.outputId = next;
+        i++;
+        break;
+      }
     }
   }
 
@@ -153,6 +203,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (!result.taskFromStdin) {
     result.taskFromStdin = false;
   }
+  result.outputId = result.outputId ?? null;
 
   return result as ParsedArgs;
 }
@@ -279,7 +330,7 @@ const defaultApiDeps: ApiPathDeps = {
 async function runApiPath(
   args: ParsedArgs,
   preset: ApiPreset,
-  debugEnabled: boolean,
+  _debugEnabled: boolean,
   deps: ApiPathDeps = defaultApiDeps,
 ): Promise<RunResult> {
   // Validate model against preset
@@ -288,7 +339,14 @@ async function runApiPath(
   }
 
   const taskTimeoutMs = preset.timeout_ms || DEFAULT_API_TIMEOUT_MS;
-  const { proc, exited } = deps.spawnTaskRunner(args, taskTimeoutMs);
+
+  let proc: ReturnType<typeof deps.spawnTaskRunner>['proc'];
+  let exited: Promise<void>;
+  try {
+    ({ proc, exited } = deps.spawnTaskRunner(args, taskTimeoutMs));
+  } catch (err) {
+    return makeError('api_execution', `Failed to spawn api-task-runner: ${(err as Error).message}`, 2);
+  }
 
   const stdoutPromise = new Response(proc.stdout).text();
 
@@ -471,6 +529,9 @@ async function main(): Promise<void> {
   } catch (err) {
     emitAndExit(makeError('validation', (err as Error).message, 1));
   }
+
+  // Set module-level output ID for emitAndExit()
+  outputId = args.outputId;
 
   // Read task from stdin if --task-stdin was set (avoids argv size limits + ps exposure)
   if (args.taskFromStdin) {

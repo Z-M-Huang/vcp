@@ -95,12 +95,18 @@ Tell the subagent to respond with analysis only — no file editing, no tool use
 
 ### API Participants (`type: "api"`)
 
+For each API participant, generate a unique output ID:
+```
+{preset}-{model}-{unix_timestamp}-{pid}
+```
+
 ```bash
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
   --type api \
   --preset "<exact_preset_name>" \
   --model "<model>" \
   --cwd "${CLAUDE_PROJECT_DIR}" \
+  --output-id "<preset>-<model>-$(date +%s)-$$" \
   --task-stdin <<'TASK_EOF'
 <deliberation prompt>
 TASK_EOF
@@ -108,7 +114,14 @@ TASK_EOF
 
 **MUST use `run_in_background: true`** — API tasks take 2-5 minutes.
 
+**Remember each participant's `--output-id` token** — the output file will be at `/tmp/.vcp/oneshot/<id>.json`. You will Read it in Step 5.
+
 ### CLI Participants (`type: "cli"`)
+
+For each CLI participant, generate a unique output ID (same pattern):
+```
+{preset}-{model}-{unix_timestamp}-{pid}
+```
 
 ```bash
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
@@ -116,6 +129,7 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
   --preset "<exact_preset_name>" \
   --model "<model>" \
   --cwd "${CLAUDE_PROJECT_DIR}" \
+  --output-id "<preset>-<model>-$(date +%s)-$$" \
   --task-stdin <<'TASK_EOF'
 <deliberation prompt>
 TASK_EOF
@@ -123,31 +137,49 @@ TASK_EOF
 
 **MUST use `run_in_background: true`** — CLI tasks take 5-20 minutes.
 
-### Timeout Contract (MUST Follow)
+**Remember each participant's `--output-id` token** — the output file will be at `/tmp/.vcp/oneshot/<id>.json`. You will Read it in Step 5.
 
-For API/CLI participants:
+### Dispatch Contract
 
-1. Save the returned `task_id` from the Bash tool. If `run_in_background` does not return a `task_id`, report a dispatch failure — do NOT retry in foreground mode.
-2. **Derive timeout:** Read `timeout_ms` from preset config (default: 300000 for API, 1200000 for CLI).
-3. **Poll with correct timeout (NOT the default 30s):**
-   ```
-   TaskOutput(task_id: "<task_id>", block: true, timeout: min(timeout_ms + 120000, 600000))
-   ```
-4. If TaskOutput returns but the task is still running, repeat with `timeout: 600000` until done.
-5. NEVER use default 30s TaskOutput timeout.
-6. NEVER retry in foreground mode.
+For each API/CLI participant launched with `run_in_background: true`:
+1. Save the returned `task_id` from the Bash tool.
+2. If `run_in_background` does not return a `task_id`, report a dispatch failure — do NOT retry in foreground mode.
+3. Remember both the `task_id` and the `--output-id` token for Step 5.
 
 ---
 
 ## Step 5: Collect Responses
 
-For each participant:
-- **Subscription**: Read the Task tool result directly
-- **API/CLI**: Read `TaskOutput` result, parse the JSON output:
-  - `{"event": "complete", ...}` → extract `result` field
-  - `{"event": "error", ...}` → note the error, continue with other participants
+**CRITICAL: Poll participants ONE AT A TIME.** Never call multiple TaskOutput in the same message — if one fails, Claude Code cascades the failure to all siblings ("Sibling tool call errored").
+
+For each participant, **sequentially** (one per message turn):
+
+- **Subscription**: Read the Task tool result directly (already available from Step 4).
+
+- **API/CLI**: Two-phase retrieval:
+  1. **Wait for completion**: Call `TaskOutput(task_id, block: true, timeout: <computed>)` with the timeout from the Timeout Contract below.
+  2. **Read the output file**: Use the **Read tool** to read `/tmp/.vcp/oneshot/<id>.json` (where `<id>` is the `--output-id` token from Step 4). Parse the JSON:
+     - `{"event": "complete", ...}` → extract `result` field
+     - `{"event": "error", ...}` → note the error, continue with other participants
+     - If the file does not exist, the task likely failed — check TaskOutput for error details
+
+  **Fallback**: If TaskOutput itself errors (sibling cascade, task not found), try Reading the output file directly — the task may have already completed and written its result.
+
+**IMPORTANT**: Do NOT rely on TaskOutput stdout for the result — background task stdout capture is unreliable. Always Read the output file.
 
 If a participant errored or timed out, note it in the output but continue with remaining responses.
+
+### Timeout Contract (for each TaskOutput call)
+
+1. **Derive timeout:** Read `timeout_ms` from preset config (default: 300000 for API, 1200000 for CLI).
+2. **Poll with correct timeout (NOT the default 30s):**
+   ```
+   TaskOutput(task_id: "<task_id>", block: true, timeout: min(timeout_ms + 120000, 600000))
+   ```
+3. If TaskOutput returns but the task is still running, repeat with `timeout: 600000` until done.
+4. NEVER use default 30s TaskOutput timeout.
+5. NEVER retry in foreground mode.
+6. NEVER call multiple TaskOutput in the same message.
 
 ---
 
@@ -253,3 +285,4 @@ State AGREE or DISAGREE clearly at the start, then explain.
 - Do NOT use the default TaskOutput timeout (30s) for API/CLI tasks
 - Do NOT suppress participant errors — always report them to the user
 - Do NOT hide individual model responses — show everything for transparency
+- Do NOT call multiple TaskOutput in the same message — Claude Code cascades failures to sibling tool calls

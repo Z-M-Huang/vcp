@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, afterAll } from 'bun:test';
 import {
   parseArgs,
   tokenizeTemplate,
@@ -12,6 +12,9 @@ import {
 } from '../one-shot-runner.ts';
 import type { ApiPathDeps } from '../one-shot-runner.ts';
 import type { ApiPreset, CliPreset } from '../../types/presets.ts';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync } from 'fs';
+import os from 'os';
+import path from 'path';
 
 // ================== parseArgs ==================
 
@@ -34,6 +37,7 @@ describe('parseArgs', () => {
       cwd: '/project',
       task: 'do something',
       taskFromStdin: false,
+      outputId: null,
     });
   });
 
@@ -108,6 +112,80 @@ describe('parseArgs', () => {
       '--task', 't',
     ]);
     expect(result.model).toBe('MiniMax-M2.5_beta');
+  });
+
+  test('parses --output-id flag', () => {
+    const result = parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--output-id', 'preset-model-12345-678',
+    ]);
+    expect(result.outputId).toBe('preset-model-12345-678');
+  });
+
+  test('defaults outputId to null when not provided', () => {
+    const result = parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+    ]);
+    expect(result.outputId).toBeNull();
+  });
+
+  test('rejects --output-id without value', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--output-id',
+    ])).toThrow('--output-id requires a value');
+  });
+
+  test('rejects --output-id with slashes', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--output-id', 'foo/bar',
+    ])).toThrow('--output-id must match');
+  });
+
+  test('rejects --output-id with special characters', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--output-id', 'foo bar',
+    ])).toThrow('--output-id must match');
+  });
+
+  test('rejects --output-id longer than 255 characters', () => {
+    const longToken = 'a'.repeat(256);
+    expect(() => parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--output-id', longToken,
+    ])).toThrow('255 characters or fewer');
   });
 });
 
@@ -311,6 +389,7 @@ const baseApiArgs = {
   cwd: '/project',
   task: 'do something',
   taskFromStdin: false,
+  outputId: null as string | null,
 };
 
 const baseApiPreset: ApiPreset = {
@@ -471,6 +550,20 @@ describe('runApiPath', () => {
     expect(calls.killCalls[0]).toBe('SIGTERM');
     expect(calls.killCalls[1]).toBe('SIGKILL');
   });
+
+  test('returns error when spawnTaskRunner throws', async () => {
+    const deps: ApiPathDeps = {
+      spawnTaskRunner() {
+        throw new Error('spawn ENOENT');
+      },
+      log: async () => {},
+    };
+
+    const result = await runApiPath(baseApiArgs, baseApiPreset, false, deps);
+    expect(result.exitCode).toBe(2);
+    expect(result.output.error).toContain('Failed to spawn api-task-runner');
+    expect(result.output.error).toContain('spawn ENOENT');
+  });
 });
 
 // ================== runCliPath (runtime placeholder validation) ==================
@@ -482,6 +575,7 @@ const baseCliArgs = {
   cwd: '/project',
   task: 'do something',
   taskFromStdin: false,
+  outputId: null as string | null,
 };
 
 function makeCliPreset(overrides: Partial<CliPreset> = {}): CliPreset {
@@ -542,5 +636,132 @@ describe('runCliPath runtime validation', () => {
     const result = await runCliPath({ ...baseCliArgs, model: 'no-such-model' }, preset, false);
     expect(result.exitCode).toBe(1);
     expect(result.output.error).toContain('no-such-model');
+  });
+});
+
+// ================== --output-id integration tests ==================
+// These test the actual file writing behavior of the runner subprocess.
+// They invoke one-shot-runner.ts as a subprocess since emitAndExit calls process.exit.
+
+describe('--output-id integration', () => {
+  const testToken = 'test-oneshot-' + process.pid;
+  const outputDir = path.join(os.tmpdir(), '.vcp', 'oneshot');
+
+  afterAll(() => {
+    // Clean up test output files
+    try { rmSync(path.join(outputDir, testToken + '-val.json')); } catch { /* best-effort */ }
+    try { rmSync(path.join(outputDir, testToken + '-dup.json')); } catch { /* best-effort */ }
+    try { rmSync(path.join(outputDir, testToken + '-mode.json')); } catch { /* best-effort */ }
+    try { rmSync(path.join(outputDir, testToken + '-sym.json')); } catch { /* best-effort */ }
+    try { rmSync(path.join(outputDir, testToken + '-sym-target.json')); } catch { /* best-effort */ }
+  });
+
+  test('writes result JSON to output file on validation error', async () => {
+    const id = testToken + '-val';
+    const expectedPath = path.join(outputDir, id + '.json');
+    const scriptPath = path.resolve(__dirname, '../one-shot-runner.ts');
+
+    const proc = Bun.spawn([
+      'bun', scriptPath,
+      '--type', 'api',
+      '--preset', 'NONEXISTENT_PRESET_12345',
+      '--model', 'fake',
+      '--cwd', '/tmp',
+      '--task', 'test',
+      '--output-id', id,
+    ], { stdout: 'pipe', stderr: 'pipe' });
+
+    await proc.exited;
+
+    expect(existsSync(expectedPath)).toBe(true);
+    const content = JSON.parse(readFileSync(expectedPath, 'utf-8'));
+    expect(content.event).toBe('error');
+    expect(content.phase).toBe('validation');
+  });
+
+  test('fails if output file already exists (O_EXCL)', async () => {
+    const id = testToken + '-dup';
+    const scriptPath = path.resolve(__dirname, '../one-shot-runner.ts');
+
+    // First run — creates the file
+    const proc1 = Bun.spawn([
+      'bun', scriptPath,
+      '--type', 'api',
+      '--preset', 'NONEXISTENT_PRESET_12345',
+      '--model', 'fake',
+      '--cwd', '/tmp',
+      '--task', 'test',
+      '--output-id', id,
+    ], { stdout: 'pipe', stderr: 'pipe' });
+    await proc1.exited;
+
+    // Second run — same ID, should fail with EEXIST
+    const proc2 = Bun.spawn([
+      'bun', scriptPath,
+      '--type', 'api',
+      '--preset', 'NONEXISTENT_PRESET_12345',
+      '--model', 'fake',
+      '--cwd', '/tmp',
+      '--task', 'test',
+      '--output-id', id,
+    ], { stdout: 'pipe', stderr: 'pipe' });
+    await proc2.exited;
+
+    const stderrText = await new Response(proc2.stderr).text();
+    expect(stderrText).toContain('Failed to write output file');
+  });
+
+  test('writes with mode 0o600', async () => {
+    const id = testToken + '-mode';
+    const expectedPath = path.join(outputDir, id + '.json');
+    const scriptPath = path.resolve(__dirname, '../one-shot-runner.ts');
+
+    const proc = Bun.spawn([
+      'bun', scriptPath,
+      '--type', 'api',
+      '--preset', 'NONEXISTENT_PRESET_12345',
+      '--model', 'fake',
+      '--cwd', '/tmp',
+      '--task', 'test',
+      '--output-id', id,
+    ], { stdout: 'pipe', stderr: 'pipe' });
+
+    await proc.exited;
+
+    expect(existsSync(expectedPath)).toBe(true);
+    const stats = statSync(expectedPath);
+    // 0o600 = owner read+write only (octal 100600 includes file type bits)
+    expect(stats.mode & 0o777).toBe(0o600);
+  });
+
+  test('refuses to write through symlinked final filename', async () => {
+    const id = testToken + '-sym';
+    const symlinkPath = path.join(outputDir, id + '.json');
+    const targetPath = path.join(outputDir, id + '-target.json');
+    const scriptPath = path.resolve(__dirname, '../one-shot-runner.ts');
+
+    // Ensure output directory exists and clean up any prior symlink
+    mkdirSync(outputDir, { recursive: true });
+    try { rmSync(symlinkPath); } catch { /* may not exist */ }
+
+    // Create a dangling symlink at the expected output path
+    symlinkSync(targetPath, symlinkPath);
+
+    const proc = Bun.spawn([
+      'bun', scriptPath,
+      '--type', 'api',
+      '--preset', 'NONEXISTENT_PRESET_12345',
+      '--model', 'fake',
+      '--cwd', '/tmp',
+      '--task', 'test',
+      '--output-id', id,
+    ], { stdout: 'pipe', stderr: 'pipe' });
+
+    await proc.exited;
+
+    const stderrText = await new Response(proc.stderr).text();
+    expect(stderrText).toContain('Failed to write output file');
+    // Target file should NOT have been created
+    expect(existsSync(targetPath)).toBe(false);
   });
 });
