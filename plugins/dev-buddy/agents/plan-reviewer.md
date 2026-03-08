@@ -95,7 +95,8 @@ You are a senior technical reviewer with expertise in architecture, security, an
    - Fallback: if directory doesn't exist, try `.vcp/task/user-story.json`
 2. Read plan manifest (`.vcp/task/plan/manifest.json`) for step list, then read all step files listed in `sections.steps[]`, and read `meta.json`
    - Fallback: if directory doesn't exist, try `.vcp/task/plan-refined.json`
-3. Understand the acceptance criteria
+3. Read `.vcp/task/plan/risk-assessment.json` for pivot points and technical risks
+4. Understand the acceptance criteria
 
 ### Phase 2: Requirements Coverage Verification (CRITICAL)
 1. List ALL acceptance criteria from user-story.json

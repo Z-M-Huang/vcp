@@ -2,16 +2,59 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Plan Review Result",
   "type": "object",
-  "required": ["status", "needs_clarification", "clarification_questions", "summary", "concerns", "requirements_coverage", "reviewed_by", "reviewed_at"],
+  "required": ["status", "needs_clarification", "clarification_questions", "summary", "requirements_coverage", "findings", "reviewed_at"],
   "properties": {
+    "id": {
+      "type": "string",
+      "description": "Review identifier (e.g., review-YYYYMMDD-HHMMSS)"
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "Agent that performed the review (e.g., plan-reviewer, cli-executor)"
+    },
+    "model": {
+      "type": "string",
+      "description": "Model used for the review"
+    },
+    "plan_reviewed": {
+      "type": "string",
+      "description": "ID of the plan being reviewed"
+    },
     "status": {
       "type": "string",
       "enum": ["approved", "needs_changes", "needs_clarification", "rejected"],
       "description": "Overall plan review decision"
     },
+    "summary": {
+      "type": "string",
+      "description": "Brief overall assessment of the plan"
+    },
+    "needs_clarification": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, pauses autonomous pipeline to ask user for clarification"
+    },
+    "clarification_questions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Questions to ask user when needs_clarification is true"
+    },
+    "scores": {
+      "type": "object",
+      "description": "Numerical scores (1-10) for each review dimension",
+      "properties": {
+        "requirements_coverage": { "type": "number" },
+        "architecture": { "type": "number" },
+        "security": { "type": "number" },
+        "testability": { "type": "number" },
+        "step_quality": { "type": "number" },
+        "feasibility": { "type": "number" },
+        "overall": { "type": "number" }
+      }
+    },
     "requirements_coverage": {
       "type": "object",
-      "description": "Maps each acceptance criterion from user-story.json to plan steps that address it",
+      "description": "Maps each acceptance criterion to plan steps that address it",
       "required": ["mapping", "missing"],
       "properties": {
         "mapping": {
@@ -30,8 +73,7 @@
                 "items": { "type": "string" },
                 "description": "Plan step(s) that address this AC"
               }
-            },
-            "additionalProperties": false
+            }
           }
         },
         "missing": {
@@ -39,62 +81,72 @@
           "items": { "type": "string" },
           "description": "List of AC IDs not covered by the plan"
         }
-      },
-      "additionalProperties": false
+      }
     },
-    "needs_clarification": {
-      "type": "boolean",
-      "default": false,
-      "description": "If true, pauses autonomous pipeline to ask user for clarification on ambiguous requirements"
-    },
-    "clarification_questions": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "Questions to ask user when needs_clarification is true"
-    },
-    "summary": {
-      "type": "string",
-      "description": "Brief overall assessment of the plan"
-    },
-    "concerns": {
+    "findings": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["severity", "area", "message", "suggestion"],
+        "required": ["id", "category", "severity", "title", "description", "recommendation"],
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "Finding identifier (e.g., F1, REQ-COVERAGE, STEP-QUALITY)"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["requirements", "security", "architecture", "quality", "step_quality", "feasibility"],
+            "description": "Which aspect of the plan the finding relates to"
+          },
           "severity": {
             "type": "string",
-            "enum": ["error", "warning", "suggestion"],
-            "description": "How serious the concern is"
+            "enum": ["critical", "high", "medium", "low", "info"],
+            "description": "How serious the finding is"
           },
-          "area": {
+          "title": {
             "type": "string",
-            "enum": ["requirements", "approach", "complexity", "risks", "feasibility", "security"],
-            "description": "Which aspect of the plan the concern relates to"
+            "description": "Short description of the finding"
           },
-          "message": {
+          "description": {
             "type": "string",
-            "description": "Description of the concern"
+            "description": "Detailed explanation"
           },
-          "suggestion": {
+          "location": {
             "type": "string",
-            "description": "How to address this concern"
+            "description": "Where in the plan this applies (e.g., plan.steps[2])"
+          },
+          "recommendation": {
+            "type": "string",
+            "description": "How to fix the finding"
+          },
+          "effort": {
+            "type": "string",
+            "enum": ["trivial", "minor", "moderate", "major"],
+            "description": "Estimated effort to fix"
           }
-        },
-        "additionalProperties": false
+        }
       },
-      "description": "List of concerns found during review"
+      "description": "List of findings from the review"
     },
-    "reviewed_by": {
-      "type": "string",
-      "enum": ["plan-reviewer", "cli-executor"],
-      "description": "Agent that performed the review"
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Critical issues that must be fixed before approval"
+    },
+    "recommendations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Suggested improvements"
+    },
+    "approval_conditions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What must be done if status is needs_changes"
     },
     "reviewed_at": {
       "type": "string",
       "format": "date-time",
       "description": "ISO8601 timestamp of when review was completed"
     }
-  },
-  "additionalProperties": false
+  }
 }
