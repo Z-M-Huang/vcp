@@ -481,4 +481,42 @@ describe('pipeline-driver phased implementation', () => {
     expect(cmd.action).toBe('noop');
     expect(cmd.message).toContain('Waiting for phased review');
   });
+
+  test('multi-reviewer batch spawn failure marks impl failed', () => {
+    // Set up state at step 2 batch boundary to trigger reviewer dispatch
+    setupPhasedState({
+      step: 2,
+      phased_state: {
+        impl_stage_index: 2,
+        current_step: 2,
+        total_steps: 4,
+        last_reviewed_step: 0,
+        review_interval: 2,
+        batch_start: 1,
+        batch_end: 0,
+        completed_steps: [],
+        iteration_count: 0,
+        max_iterations: 3,
+        per_reviewer_versions: {},
+      },
+    });
+
+    const cmd = next();
+    // Default config has 4 phased reviewers → parallel_batch
+    expect(cmd.action).toBe('parallel_batch');
+    expect(cmd.commands.length).toBeGreaterThan(1);
+
+    // Report all reviewer spawns as failed
+    const batchResults: Record<string, any> = {};
+    for (const c of cmd.commands) {
+      batchResults[c.command_id] = { ok: false, error: 'reviewer spawn failed' };
+    }
+    report(cmd.command_id, { batch_results: batchResults });
+
+    const state = readState();
+    expect(state.terminal_state).toBe('phased_reviewer_spawn_failed');
+    // Implementation stage should be marked as failed
+    const implStage = state.stages.find((s: any) => s.type === 'implementation');
+    expect(implStage?.status).toBe('failed');
+  });
 });

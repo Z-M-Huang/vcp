@@ -241,7 +241,9 @@ export type TerminalState =
   | 'code_rejected'
   | 'implementation_failed'
   | 'max_iterations_reached'
-  | 'user_aborted';
+  | 'user_aborted'
+  | 'requirements_manifest_invalid'
+  | 'phased_reviewer_spawn_failed';
 
 // ─── Report Protocol ─────────────────────────────────────────────────────────
 

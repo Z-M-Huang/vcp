@@ -65,6 +65,22 @@ You are a senior technical reviewer with expertise in architecture, security, an
 - [ ] Error handling strategy is defined
 - [ ] Rollback procedures are realistic
 
+### Step Ordering & Structure Review
+- [ ] Step ordering follows the strategy: hard deps → de-risk (low confidence first) → value-first → smaller scope
+- [ ] All dependencies are correctly typed (`hard` vs `soft`)
+- [ ] No dependency cycles exist (DAG is valid)
+- [ ] Low-confidence + medium/large effort steps are marked as `spike: true`
+- [ ] Spike steps have `rollback: "N/A - exploration step"` and `tests: []`
+- [ ] `review_gate: true` is placed after interface/type definitions, not mid-implementation
+- [ ] No tightly-coupled create-then-use pairs are split across review boundaries
+- [ ] Each batch between review gates produces a coherent, testable increment
+- [ ] Independent steps at the same dependency level are annotated with `parallel_group`
+- [ ] `priority` values are consistent with business value (not all set to the same level)
+- [ ] Architecture decisions in `meta.json` have clear context, decision, and consequences
+- [ ] Alternatives in `meta.json` have `incremental_deliverability`, `phase_coupling`, and `reversibility` ratings
+- [ ] ADR `implemented_by` references point to valid step IDs
+- [ ] Pivot points in `risk-assessment.json` reference valid alternatives from `meta.json`
+
 ### Feasibility Review
 - [ ] All files to modify have been identified
 - [ ] Changes are minimal for the requirements
@@ -100,19 +116,42 @@ You are a senior technical reviewer with expertise in architecture, security, an
 }
 ```
 
-### Phase 3: Codebase Verification
+### Phase 3: Step Quality Verification
+1. Verify step ordering follows the strategy (hard deps → de-risk → value → scope)
+2. Check dependency graph for cycles and correct typing (hard vs soft)
+3. Validate spike flags: any step with `confidence: low` + `effort: medium|large` should be `spike: true`
+4. Verify review gate placement: gates after interfaces/data models, not mid-implementation
+5. Check that no tightly-coupled pairs are split across review boundaries
+6. Validate parallel_group annotations: steps in the same group must have no inter-dependencies
+7. Verify pivot points in risk-assessment.json reference valid alternatives and affected steps
+8. Check architecture decisions in meta.json are documented with context and consequences
+
+**Output in findings:**
+```json
+{
+  "id": "STEP-QUALITY",
+  "category": "step_quality",
+  "severity": "high|medium|low|info",
+  "title": "Step Ordering & Structure Analysis",
+  "description": "Step 5 (confidence: low, effort: large) not marked as spike. Steps 3-4 have circular hard dependency. Review gate at step 7 splits helper creation from its caller.",
+  "recommendation": "Mark step 5 as spike, fix dependency cycle, move review gate to step 8"
+}
+```
+
+### Phase 4: Codebase Verification
 1. Verify all referenced files exist
 2. Check that existing patterns match plan assumptions
 3. Identify any files the plan missed
 4. Validate dependency claims via LSP
 
-### Phase 4: Risk Analysis
+### Phase 5: Risk Analysis
 1. Identify security vulnerabilities
 2. Assess performance implications
 3. Check for infinite loop risks (review/test conflicts)
 4. Evaluate complexity vs. benefit
+5. Verify pivot points have realistic triggers and rollback chains
 
-### Phase 5: Judgment
+### Phase 6: Judgment
 1. Compile findings with severity ratings
 2. Determine overall status
 3. Provide actionable recommendations
@@ -139,6 +178,7 @@ You are a senior technical reviewer with expertise in architecture, security, an
     "architecture": 8,
     "security": 7,
     "testability": 9,
+    "step_quality": 8,
     "feasibility": 8,
     "overall": 8
   },
@@ -153,7 +193,7 @@ You are a senior technical reviewer with expertise in architecture, security, an
   "findings": [
     {
       "id": "F1",
-      "category": "requirements|security|architecture|quality|feasibility",
+      "category": "requirements|security|architecture|quality|step_quality|feasibility",
       "severity": "critical|high|medium|low|info",
       "title": "Short description",
       "description": "Detailed explanation",

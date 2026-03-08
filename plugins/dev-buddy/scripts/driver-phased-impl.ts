@@ -360,6 +360,11 @@ function dispatchPhasedReviewers(state: PipelineState, cwd: string): PipelineCom
     return emitCommand(state, reviewCmds[0]);
   }
 
+  // Map sub-command IDs → reviewer indices for post-iteration missing-result detection
+  const reviewMapping: Record<string, number> = {};
+  reviewCmds.forEach((cmd, idx) => { reviewMapping[cmd.command_id] = idx; });
+  state.batch_cmd_to_stage = reviewMapping;
+
   return emitCommand(state, {
     action: 'parallel_batch',
     commands: reviewCmds,

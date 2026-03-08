@@ -310,6 +310,40 @@ function processReport(
         state.step = 1;
       }
 
+      // Requirements output file ready — validate manifest before advancing to specialist shutdown.
+      // Phase may be requirements_team_exploring (set at step 3) or requirements.
+      if (state.step === 7 && (
+        state.phase === 'requirements' ||
+        state.phase === 'requirements_team_pending' ||
+        state.phase === 'requirements_team_exploring'
+      )) {
+        let manifestValid = false;
+        if (report.content) {
+          try {
+            const manifest = JSON.parse(report.content) as Record<string, unknown>;
+            manifestValid = typeof manifest.title === 'string' && manifest.title.length > 0
+              && typeof manifest.ac_count === 'number';
+          } catch {
+            // Invalid JSON — not valid
+          }
+        }
+        if (manifestValid) {
+          state.step = 8;
+        } else {
+          state.manifest_retry_count = (state.manifest_retry_count || 0) + 1;
+          if (state.manifest_retry_count >= 5) {
+            state.terminal_state = 'requirements_manifest_invalid';
+            state.terminal_reason = 'Requirements manifest invalid after 5 retries (missing title or ac_count)';
+            console.error(JSON.stringify({
+              error: 'Requirements manifest validation failed after max retries',
+              manifest_retry_count: state.manifest_retry_count,
+              content_preview: report.content?.slice(0, 200),
+            }));
+          }
+          // Stay at step 7 — natural retry via handleReportError on next next() call
+        }
+      }
+
       // VCP detection
       if (state.phase === 'requirements' && state.step === 2) {
         if (report.content) {
@@ -436,6 +470,59 @@ function processReport(
             } catch { /* malformed RCA output — skip for disagreement check */ }
           }
 
+          // Fix 1: Route specialist spawn failures (requirements_team_pending phase)
+          if (state.phase === 'requirements_team_pending' && state.batch_cmd_to_stage && state.specialists) {
+            const specialistIdx = state.batch_cmd_to_stage[cmdId];
+            if (specialistIdx !== undefined && result.ok === false) {
+              const specialist = state.specialists.approved_specialists[specialistIdx];
+              if (specialist) {
+                specialist.status = 'failed';
+                state.specialists.spawn_failures.push(specialist.name);
+                console.error(JSON.stringify({
+                  warning: `Specialist spawn failed: ${specialist.name}`,
+                  command_id: cmdId,
+                  error: result.error || 'unknown',
+                }));
+              }
+            }
+          }
+
+          // Fix 2: Log failed analysis file reads (requirements step 5)
+          if (state.step === 5 && state.batch_cmd_to_stage && result.ok === false && (
+            state.phase === 'requirements' ||
+            state.phase === 'requirements_team_pending' ||
+            state.phase === 'requirements_team_exploring'
+          )) {
+            const specialistIdx = state.batch_cmd_to_stage[cmdId];
+            console.error(JSON.stringify({
+              warning: `Analysis file read failed for specialist index ${specialistIdx}`,
+              command_id: cmdId,
+              error: result.error || 'unknown',
+            }));
+          }
+
+          // Fix 3: Log specialist shutdown failures (best-effort)
+          if (state.phase === 'specialist_shutdown' && result.ok === false) {
+            console.error(JSON.stringify({
+              warning: 'Specialist shutdown failed',
+              command_id: cmdId,
+              error: result.error || 'unknown',
+            }));
+          }
+
+          // Fix 5: Route phased reviewer batch spawn failures
+          if (state.phase === 'phased_implementation' && state.step === 3 && result.ok === false) {
+            const implStage = state.stages.find(s => s.type === 'implementation');
+            if (implStage) implStage.status = 'failed';
+            state.terminal_state = 'phased_reviewer_spawn_failed';
+            state.terminal_reason = `Phased reviewer spawn failed (batch sub-command ${cmdId})`;
+            console.error(JSON.stringify({
+              error: 'Phased reviewer batch spawn failure — marking implementation failed',
+              command_id: cmdId,
+              sub_error: result.error || 'unknown',
+            }));
+          }
+
           // Track parallel group dispatch completions using the cmd→stage map.
           if (state.active_parallel_group) {
             const group = state.active_parallel_group;
@@ -501,6 +588,63 @@ function processReport(
       // Post-iteration: batch task chain dependencies phase transition
       if (state.phase === 'task_chain_dependencies' && state.batch_cmd_to_stage) {
         state.step = state.stages.length;
+        state.batch_cmd_to_stage = undefined;
+      }
+
+      // Post-iteration: Fix 1 — specialist spawn batch (requirements_team_pending)
+      if (state.phase === 'requirements_team_pending' && state.batch_cmd_to_stage && state.specialists) {
+        const resultKeys = report.batch_results ? Object.keys(report.batch_results) : [];
+        for (const [cmdId, specialistIdx] of Object.entries(state.batch_cmd_to_stage)) {
+          if (!resultKeys.includes(cmdId)) {
+            const specialist = state.specialists.approved_specialists[specialistIdx];
+            if (specialist && specialist.status === 'spawned') {
+              specialist.status = 'failed';
+              state.specialists.spawn_failures.push(specialist.name);
+              console.error(JSON.stringify({
+                warning: `Specialist spawn missing result (treating as failed): ${specialist.name}`,
+                command_id: cmdId,
+              }));
+            }
+          }
+        }
+        state.batch_cmd_to_stage = undefined;
+      }
+
+      // Post-iteration: Fix 2 — analysis file read batch (requirements step 5)
+      if (state.step === 5 && state.batch_cmd_to_stage && (
+        state.phase === 'requirements' ||
+        state.phase === 'requirements_team_pending' ||
+        state.phase === 'requirements_team_exploring'
+      )) {
+        const resultKeys = report.batch_results ? Object.keys(report.batch_results) : [];
+        for (const [cmdId, specialistIdx] of Object.entries(state.batch_cmd_to_stage)) {
+          if (!resultKeys.includes(cmdId)) {
+            console.error(JSON.stringify({
+              warning: `Analysis file read missing result for specialist index ${specialistIdx}`,
+              command_id: cmdId,
+            }));
+          }
+        }
+        state.step = 6;
+        state.batch_cmd_to_stage = undefined;
+      }
+
+      // Post-iteration: Fix 5 — phased reviewer spawn batch (phased_implementation step 3)
+      if (state.phase === 'phased_implementation' && state.step === 3 && state.batch_cmd_to_stage) {
+        const resultKeys = report.batch_results ? Object.keys(report.batch_results) : [];
+        for (const [cmdId] of Object.entries(state.batch_cmd_to_stage)) {
+          if (!resultKeys.includes(cmdId)) {
+            const implStage = state.stages.find(s => s.type === 'implementation');
+            if (implStage) implStage.status = 'failed';
+            state.terminal_state = 'phased_reviewer_spawn_failed';
+            state.terminal_reason = `Phased reviewer spawn missing result (batch sub-command ${cmdId})`;
+            console.error(JSON.stringify({
+              error: 'Phased reviewer spawn missing result — marking implementation failed',
+              command_id: cmdId,
+            }));
+            break;
+          }
+        }
         state.batch_cmd_to_stage = undefined;
       }
 

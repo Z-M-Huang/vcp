@@ -106,6 +106,253 @@ describe('pipeline-driver requirements phase', () => {
     expect(names).toContain('technical-analyst');
     expect(names).toContain('ux-domain-analyst');
   });
+
+  /** Helper: drive feature pipeline through to requirements step 7 (wait for output). */
+  function driveToRequirementsStep7(): { reqGathererCmd: any } {
+    const showStatus = driveToShowStatus('feature');
+    report(showStatus.command_id);
+
+    let cmd = next(); // step 0: update_task(in_progress)
+    report(cmd.command_id);
+
+    cmd = next(); // step 1: read_file VCP config
+    report(cmd.command_id, { content: '' });
+
+    cmd = next(); // step 2: parallel_batch (5 specialists)
+    expect(cmd.action).toBe('parallel_batch');
+    const batchResults: Record<string, any> = {};
+    for (const c of cmd.commands) {
+      batchResults[c.command_id] = { ok: true, content: 'spawned' };
+    }
+    report(cmd.command_id, { batch_results: batchResults });
+
+    cmd = next(); // step 3: receive_messages
+    expect(cmd.action).toBe('receive_messages');
+    // Report all specialists completed
+    const specialistMessages = [
+      { from: 'technical-analyst', summary: 'Analysis complete' },
+      { from: 'ux-domain-analyst', summary: 'Analysis complete' },
+      { from: 'security-analyst', summary: 'Analysis complete' },
+      { from: 'performance-analyst', summary: 'Analysis complete' },
+      { from: 'architecture-analyst', summary: 'Analysis complete' },
+    ];
+    report(cmd.command_id, { messages: specialistMessages });
+
+    cmd = next(); // step 5: parallel_batch (read analysis files)
+    expect(cmd.action).toBe('parallel_batch');
+    const readResults: Record<string, any> = {};
+    for (const c of cmd.commands) {
+      readResults[c.command_id] = { ok: true, content: '{}' };
+    }
+    report(cmd.command_id, { batch_results: readResults });
+
+    cmd = next(); // step 6: spawn_agent (requirements-gatherer)
+    expect(cmd.action).toBe('spawn_agent');
+    expect(cmd.subagent_type).toBe('dev-buddy:requirements-gatherer');
+    report(cmd.command_id);
+
+    return { reqGathererCmd: cmd };
+  }
+
+  test('step 7: waits for requirements output file before shutdown', () => {
+    driveToRequirementsStep7();
+
+    // Step 7: should emit read_file for user-story/manifest.json
+    const cmd = next();
+    expect(cmd.action).toBe('read_file');
+    expect(cmd.path).toContain('user-story/manifest.json');
+  });
+
+  test('step 7: retries read_file if output file not found', () => {
+    driveToRequirementsStep7();
+
+    // Step 7: read_file for manifest
+    let cmd = next();
+    expect(cmd.action).toBe('read_file');
+
+    // Report file not found (ok=false) via report helper with error
+    const rptFile = path.join(ctx.testDir, 'rpt.json');
+    fs.writeFileSync(rptFile, JSON.stringify({
+      command_id: cmd.command_id,
+      ok: false,
+      error: 'File does not exist',
+    }));
+    execSync(
+      `bun "${DRIVER}" report --cwd "${ctx.testDir}" --id "${cmd.command_id}" --result-file "${rptFile}" 2>/dev/null`,
+      { encoding: 'utf-8', cwd: EXEC_CWD, timeout: 15000 },
+    );
+
+    // Next should re-emit read_file (retry)
+    cmd = next();
+    expect(cmd.action).toBe('read_file');
+    expect(cmd.path).toContain('user-story/manifest.json');
+  });
+
+  test('step 7→8: advances to specialist shutdown when output file exists', () => {
+    driveToRequirementsStep7();
+
+    // Step 7: read_file
+    let cmd = next();
+    expect(cmd.action).toBe('read_file');
+
+    // Report file found with content — step advances to 8
+    report(cmd.command_id, {
+      content: JSON.stringify({ id: 'us-1', title: 'Test story', ac_count: 3 }),
+    });
+    let state = readState();
+    expect(state.step).toBe(8);
+
+    // Next call enters specialist_shutdown (step 8 → handleSpecialistShutdown)
+    cmd = next();
+    state = readState();
+    expect(state.phase).toBe('specialist_shutdown');
+  });
+
+  // ─── Fix 1: Specialist spawn verification ─────────────────────────────────
+
+  /** Helper: drive to step 2 specialist spawn batch (not yet reported). */
+  function driveToSpecialistSpawnBatch(): { batchCmd: any } {
+    const showStatus = driveToShowStatus('feature');
+    report(showStatus.command_id);
+    let cmd = next(); // step 0: update_task
+    report(cmd.command_id);
+    cmd = next(); // step 1: read_file VCP config
+    report(cmd.command_id, { content: '' });
+    cmd = next(); // step 2: parallel_batch (5 specialists)
+    expect(cmd.action).toBe('parallel_batch');
+    return { batchCmd: cmd };
+  }
+
+  test('specialist spawn failure marks specialist as failed', () => {
+    const { batchCmd } = driveToSpecialistSpawnBatch();
+    const cmds = batchCmd.commands;
+    // Fail the first specialist, succeed the rest
+    const batchResults: Record<string, any> = {};
+    batchResults[cmds[0].command_id] = { ok: false, error: 'spawn rejected' };
+    for (let i = 1; i < cmds.length; i++) {
+      batchResults[cmds[i].command_id] = { ok: true, content: 'spawned' };
+    }
+    report(batchCmd.command_id, { batch_results: batchResults });
+
+    const state = readState();
+    expect(state.specialists!.approved_specialists[0].status).toBe('failed');
+    expect(state.specialists!.approved_specialists[1].status).toBe('spawned');
+  });
+
+  test('failed spawn counted in spawn_failures', () => {
+    const { batchCmd } = driveToSpecialistSpawnBatch();
+    const cmds = batchCmd.commands;
+    const batchResults: Record<string, any> = {};
+    batchResults[cmds[0].command_id] = { ok: false, error: 'spawn rejected' };
+    for (let i = 1; i < cmds.length; i++) {
+      batchResults[cmds[i].command_id] = { ok: true, content: 'spawned' };
+    }
+    report(batchCmd.command_id, { batch_results: batchResults });
+
+    const state = readState();
+    expect(state.specialists!.spawn_failures.length).toBe(1);
+    expect(state.specialists!.spawn_failures[0]).toBe(state.specialists!.approved_specialists[0].name);
+  });
+
+  test('missing specialist spawn sub-result marks failed', () => {
+    const { batchCmd } = driveToSpecialistSpawnBatch();
+    const cmds = batchCmd.commands;
+    // Only return results for first 3 specialists, omit last 2
+    const batchResults: Record<string, any> = {};
+    for (let i = 0; i < 3; i++) {
+      batchResults[cmds[i].command_id] = { ok: true, content: 'spawned' };
+    }
+    report(batchCmd.command_id, { batch_results: batchResults });
+
+    const state = readState();
+    // Last 2 specialists should be marked as failed
+    expect(state.specialists!.approved_specialists[3].status).toBe('failed');
+    expect(state.specialists!.approved_specialists[4].status).toBe('failed');
+    expect(state.specialists!.spawn_failures.length).toBe(2);
+  });
+
+  // ─── Fix 2: Analysis file read verification ───────────────────────────────
+
+  /** Helper: drive to step 5 analysis read batch (not yet reported). */
+  function driveToAnalysisReadBatch(): { batchCmd: any } {
+    const { batchCmd: spawnBatch } = driveToSpecialistSpawnBatch();
+    const batchResults: Record<string, any> = {};
+    for (const c of spawnBatch.commands) {
+      batchResults[c.command_id] = { ok: true, content: 'spawned' };
+    }
+    report(spawnBatch.command_id, { batch_results: batchResults });
+    // step 3: receive_messages
+    let cmd = next();
+    expect(cmd.action).toBe('receive_messages');
+    const msgs = [
+      { from: 'technical-analyst', summary: 'Analysis complete' },
+      { from: 'ux-domain-analyst', summary: 'Analysis complete' },
+      { from: 'security-analyst', summary: 'Analysis complete' },
+      { from: 'performance-analyst', summary: 'Analysis complete' },
+      { from: 'architecture-analyst', summary: 'Analysis complete' },
+    ];
+    report(cmd.command_id, { messages: msgs });
+    // step 5: parallel_batch (read analysis files)
+    cmd = next();
+    expect(cmd.action).toBe('parallel_batch');
+    return { batchCmd: cmd };
+  }
+
+  test('step 5 does not pre-advance before batch completes', () => {
+    const { batchCmd } = driveToAnalysisReadBatch();
+    // Before reporting, step should still be 5
+    const state = readState();
+    expect(state.step).toBe(5);
+    // Verify batch_cmd_to_stage was set
+    expect(state.batch_cmd_to_stage).toBeDefined();
+    expect(Object.keys(state.batch_cmd_to_stage!).length).toBe(batchCmd.commands.length);
+  });
+
+  test('step 5 advances to 6 after batch report', () => {
+    const { batchCmd } = driveToAnalysisReadBatch();
+    const readResults: Record<string, any> = {};
+    for (const c of batchCmd.commands) {
+      readResults[c.command_id] = { ok: true, content: '{}' };
+    }
+    report(batchCmd.command_id, { batch_results: readResults });
+    const state = readState();
+    expect(state.step).toBe(6);
+    expect(state.batch_cmd_to_stage).toBeUndefined();
+  });
+
+  // ─── Fix 4: Manifest validation ───────────────────────────────────────────
+
+  test('step 7 rejects malformed JSON manifest', () => {
+    driveToRequirementsStep7();
+    const cmd = next(); // step 7: read_file
+    expect(cmd.action).toBe('read_file');
+    report(cmd.command_id, { content: 'not valid json' });
+    const state = readState();
+    expect(state.step).toBe(7); // stays at 7
+    expect(state.manifest_retry_count).toBe(1);
+  });
+
+  test('step 7 rejects manifest missing ac_count', () => {
+    driveToRequirementsStep7();
+    const cmd = next(); // step 7: read_file
+    report(cmd.command_id, { content: JSON.stringify({ title: 'Test' }) });
+    const state = readState();
+    expect(state.step).toBe(7);
+    expect(state.manifest_retry_count).toBe(1);
+  });
+
+  test('step 7 terminal failure after max retries', () => {
+    driveToRequirementsStep7();
+    // Retry 5 times with invalid manifest
+    for (let i = 0; i < 5; i++) {
+      const cmd = next(); // step 7: read_file
+      expect(cmd.action).toBe('read_file');
+      report(cmd.command_id, { content: '{}' });
+    }
+    const state = readState();
+    expect(state.terminal_state).toBe('requirements_manifest_invalid');
+    expect(state.terminal_reason).toContain('missing title or ac_count');
+  });
 });
 
 // ─── BUGFIX PIPELINE — MAIN LOOP ──────────────────────────────────────────

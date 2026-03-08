@@ -388,6 +388,11 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
         prompt_file: s.prompt_file,
       }));
 
+      // Map sub-command IDs → specialist indices for post-iteration validation
+      const spawnMapping: Record<string, number> = {};
+      spawnCommands.forEach((cmd, idx) => { spawnMapping[cmd.command_id] = idx; });
+      state.batch_cmd_to_stage = spawnMapping;
+
       return emitCommand(state, {
         action: 'parallel_batch',
         commands: spawnCommands,
@@ -441,7 +446,11 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
         return routeByPhase(state, cwd);
       }
 
-      state.step = 6; // Advance BEFORE emitting so we don't re-enter step 5
+      // Map sub-command IDs → specialist indices for post-iteration validation
+      const readMapping: Record<string, number> = {};
+      readCmds.forEach((cmd, idx) => { readMapping[cmd.command_id] = idx; });
+      state.batch_cmd_to_stage = readMapping;
+
       return emitCommand(state, {
         action: 'parallel_batch',
         commands: readCmds,
@@ -449,6 +458,18 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
     }
 
     case 6: {
+      // Guard: if no specialists completed, don't attempt synthesis
+      const completedCount = state.specialists?.approved_specialists
+        .filter(s => s.status === 'completed').length ?? 0;
+      if (completedCount === 0 && (state.specialists?.approved_specialists.length ?? 0) > 0) {
+        state.terminal_state = 'implementation_failed';
+        state.terminal_reason = 'All specialist spawns failed — no analysis available for synthesis';
+        return emitCommand(state, {
+          action: 'noop',
+          message: 'All specialists failed. Cannot proceed with requirements synthesis.',
+        });
+      }
+
       // Synthesize via requirements-gatherer
       const promptContent = buildSynthesisPrompt(state, cwd);
       const promptFile = writeTempFile(cwd, 'prompt', makeCommandId(), promptContent);
@@ -463,7 +484,22 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
     }
 
     case 7: {
-      // Shutdown specialists
+      // Wait for requirements-gatherer to complete by reading output file.
+      // If the file doesn't exist, handleReportError clears pending_command
+      // without advancing step (read_file is not a dispatch action), so the
+      // next next() call re-enters step 7 and re-emits read_file — natural retry.
+      // Manifest validation in the report handler checks title + ac_count.
+      state.manifest_retry_count = state.manifest_retry_count || 0;
+      const reqStage = state.stages.find(s => s.type === 'requirements');
+      const outputFile = reqStage?.output_file || 'user-story/manifest.json';
+      return emitCommand(state, {
+        action: 'read_file',
+        path: getTaskPath(cwd, outputFile),
+      });
+    }
+
+    case 8: {
+      // Requirements-gatherer completed, shutdown specialists
       state.phase = 'specialist_shutdown';
       state.step = 0;
       return handleSpecialistShutdown(state, cwd, routeByPhase);
@@ -512,7 +548,7 @@ function buildSpecialistBatch(state: PipelineState, cwd: string): Array<{
 
 function buildSynthesisPrompt(state: PipelineState, _cwd: string): string {
   const approved = state.specialists?.approved_specialists
-    .filter(s => s.status === 'completed' || s.status === 'spawned')
+    .filter(s => s.status === 'completed')
     .map(s => s.name) || [];
 
   return [

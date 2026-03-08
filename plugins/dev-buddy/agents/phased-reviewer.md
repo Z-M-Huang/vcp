@@ -51,7 +51,12 @@ Apply this focused checklist — do NOT expand scope beyond what is listed here:
 - No commented-out code, no debug logging, no TODOs without tracking?
 
 **c. Incremental test validation**
-Run the tests relevant to this step:
+Check the plan step file for `spike: true`. If spike:
+- This step is an exploration/research step — no tests are expected.
+- Verify the impl-step output contains a meaningful finding/decision in `notes`.
+- Skip test execution entirely.
+
+Otherwise, run the tests relevant to this step:
 ```bash
 # Look for test commands in the impl-step output's notes or infer from file paths
 bun test <relevant-test-file>

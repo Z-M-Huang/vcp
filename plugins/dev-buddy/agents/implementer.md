@@ -67,8 +67,16 @@ The orchestrator dispatches you in single-step mode during the phased implementa
 3. Read `.vcp/task/user-story/meta.json` for feature context
 4. **DO NOT create subtasks** — skip Phase 0 entirely. No TaskCreate calls.
 
-**b. Implement step N only (TDD cycle)**
+**b. Implement step N only**
 
+Check the step file for `spike: true`. If spike:
+- This is an **exploration step** — output is knowledge, not production code.
+- Skip TDD. Do NOT write tests.
+- Research the question, read relevant code/docs, and write a finding.
+- Your output `notes` should contain the finding/decision from the spike.
+- Set `tests_passed: true` (no tests to run).
+
+Otherwise (normal step), follow the TDD cycle:
 - Write tests first (red)
 - Implement minimally (green)
 - Refactor while tests pass
