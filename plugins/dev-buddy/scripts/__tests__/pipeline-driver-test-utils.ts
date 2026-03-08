@@ -66,10 +66,16 @@ export function next(): any {
 /**
  * Drive the pipeline from init through dependency wiring, returning the
  * final command (show_status after transition).
+ * If descriptionFile is provided, passes --description-file to init.
  */
-export function driveToShowStatus(pipeline: 'feature' | 'bugfix' = 'feature'): any {
+export function driveToShowStatusWithDescription(pipeline: 'feature' | 'bugfix', descriptionFile: string): any {
+  return driveToShowStatus(pipeline, descriptionFile);
+}
+
+export function driveToShowStatus(pipeline: 'feature' | 'bugfix' = 'feature', descriptionFile?: string): any {
   // Init
-  let cmd = run(`init --pipeline ${pipeline} --cwd "${ctx.testDir}"`);
+  const descFlag = descriptionFile ? ` --description-file "${descriptionFile}"` : '';
+  let cmd = run(`init --pipeline ${pipeline} --cwd "${ctx.testDir}"${descFlag}`);
   expect(cmd.action).toBe('create_team');
 
   // create_team → list_tasks

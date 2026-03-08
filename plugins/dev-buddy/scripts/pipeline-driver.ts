@@ -76,6 +76,7 @@ import {
 function handleInit(
   pipelineType: 'feature' | 'bugfix',
   cwd: string,
+  description?: string,
 ): PipelineCommand {
   const config = loadPipelineConfig();
   const pipeline = pipelineType === 'feature'
@@ -89,6 +90,7 @@ function handleInit(
   if (existingTasks) {
     // Existing pipeline detected — return ask_user for resume decision
     const state = createInitialState(pipelineType, teamName, configHash);
+    if (description) state.description = description;
     state.phase = 'resume_detection';
 
     const existingHash = existingTasks.config_hash as string | undefined;
@@ -113,6 +115,7 @@ function handleInit(
 
   // Fresh start
   const state = createInitialState(pipelineType, teamName, configHash);
+  if (description) state.description = description;
   const resolved = resolveStages(pipeline, config);
 
   // Populate stages
@@ -324,10 +327,21 @@ if (import.meta.main) {
     resultFile = args[rfIdx + 1];
   }
 
+  // Parse --description-file (safe file-based transport)
+  let description: string | undefined;
+  const dfIdx = args.indexOf('--description-file');
+  if (dfIdx >= 0 && args[dfIdx + 1]) {
+    try {
+      description = fs.readFileSync(args[dfIdx + 1], 'utf-8').trim();
+    } catch {
+      // File not found or unreadable — proceed without description
+    }
+  }
+
   try {
     switch (command) {
       case 'init': {
-        const cmd = handleInit(pipelineType, cwd);
+        const cmd = handleInit(pipelineType, cwd, description);
         console.log(JSON.stringify(cmd));
         break;
       }

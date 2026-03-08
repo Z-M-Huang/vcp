@@ -102,6 +102,11 @@ export function rebuildStateFromTasks(state: PipelineState, cwd: string): void {
     state.config_hash = tasksData.config_hash;
   }
 
+  // Restore description if available
+  if (typeof tasksData.description === 'string') {
+    state.description = tasksData.description;
+  }
+
   // Rebuild stages from tasks file
   state.stages = stages.map((s, i) => ({
     index: i,
@@ -374,6 +379,8 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
         })),
         spawn_failures: [],
         interactive_loop_active: false,
+        pending_questions: [],
+        qa_transcript: [],
       };
       state.phase = 'requirements_team_pending';
       state.step = 3;
@@ -412,14 +419,49 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
     }
 
     case 4: {
-      // Interactive loop: check if specialists are done, then advance to validation
-      const allDone = state.specialists?.approved_specialists.every(
+      const specs = state.specialists!;
+
+      // (B) Active relay with answer: emit send_message to specialist
+      if (specs.active_relay?.answer) {
+        const relay = specs.active_relay;
+        const content = `Answer to your question: "${relay.question}"\n\n${relay.answer}`;
+        const contentFile = writeTempFile(cwd, `qa-reply-${relay.specialist_name}`, makeCommandId(), content);
+        // Do NOT clear active_relay here — cleared in send_message report handler
+        return emitCommand(state, {
+          action: 'send_message',
+          recipient: relay.specialist_name,
+          content_file: contentFile,
+          summary: 'Answer to your question',
+        });
+      }
+
+      // (C) Active relay without answer: emit ask_user
+      if (specs.active_relay && !specs.active_relay.answer) {
+        return emitCommand(state, {
+          action: 'ask_user',
+          question: specs.active_relay.question,
+          context: `${specs.active_relay.specialist_name} needs this information to continue their analysis`,
+        });
+      }
+
+      // (D) Pending questions in queue: pop first → start relay
+      if (specs.pending_questions.length > 0) {
+        const nextQ = specs.pending_questions.shift()!;
+        specs.active_relay = { specialist_name: nextQ.specialist_name, question: nextQ.question };
+        return emitCommand(state, {
+          action: 'ask_user',
+          question: nextQ.question,
+          context: `${nextQ.specialist_name} needs this information to continue their analysis`,
+        });
+      }
+
+      // (E) Normal polling: check if all done
+      const allDone = specs.approved_specialists.every(
         s => s.status === 'completed' || s.status === 'shutdown' || s.status === 'failed'
-      ) ?? true;
+      );
 
       if (allDone) {
-        // All specialists finished — advance to validation
-        if (state.specialists) state.specialists.interactive_loop_active = false;
+        specs.interactive_loop_active = false;
         state.step = 5;
         return routeByPhase(state, cwd);
       }
@@ -470,10 +512,65 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
         });
       }
 
-      // Synthesize via requirements-gatherer
+      // Shut down specialists BEFORE spawning requirements-gatherer.
+      // This eliminates team context that can cause the executor to run
+      // the requirements-gatherer as a background teammate instead of a
+      // blocking foreground agent (which breaks AskUserQuestion flow).
+      const activeSpecialists = state.specialists?.approved_specialists
+        .filter(s => s.status === 'spawned' || s.status === 'completed') || [];
+
+      if (activeSpecialists.length === 0) {
+        // No specialists to shutdown — skip to delete_team
+        state.step = 8;
+        return routeByPhase(state, cwd);
+      }
+
+      const shutdownCommands: PipelineCommand[] = activeSpecialists.map(s => ({
+        command_id: makeCommandId(),
+        state_version: state.state_version,
+        action: 'shutdown_teammate' as const,
+        recipient: s.name,
+        max_retries: 2,
+      }));
+
+      state.step = 7; // Advance BEFORE emitting
+      return emitCommand(state, {
+        action: 'parallel_batch',
+        commands: shutdownCommands,
+      });
+    }
+
+    case 7: {
+      // Specialist shutdown batch acknowledged — mark specialists as shutdown
+      if (state.specialists) {
+        for (const s of state.specialists.approved_specialists) {
+          if (s.status === 'spawned' || s.status === 'completed') {
+            s.status = 'shutdown';
+          }
+        }
+        state.specialists.interactive_loop_active = false;
+      }
+      state.step = 8;
+      return routeByPhase(state, cwd);
+    }
+
+    case 8: {
+      // Delete team to ensure clean foreground context for requirements-gatherer.
+      // Without the team, spawn_agent cannot be misinterpreted as spawn_teammate.
+      state.step = 9;
+      return emitCommand(state, {
+        action: 'delete_team',
+        team_name: state.team_name,
+      });
+    }
+
+    case 9: {
+      // Synthesize via requirements-gatherer (no team = guaranteed foreground agent).
+      // AskUserQuestion in the requirements-gatherer will surface to the user
+      // because the agent runs as a blocking foreground call, not a teammate.
       const promptContent = buildSynthesisPrompt(state, cwd);
       const promptFile = writeTempFile(cwd, 'prompt', makeCommandId(), promptContent);
-      state.step = 7; // Advance BEFORE emitting so we don't re-dispatch synthesis
+      state.step = 10; // Advance BEFORE emitting so we don't re-dispatch synthesis
       return emitCommand(state, {
         action: 'spawn_agent',
         subagent_type: 'dev-buddy:requirements-gatherer',
@@ -483,11 +580,11 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       });
     }
 
-    case 7: {
+    case 10: {
       // Wait for requirements-gatherer to complete by reading output file.
       // If the file doesn't exist, handleReportError clears pending_command
       // without advancing step (read_file is not a dispatch action), so the
-      // next next() call re-enters step 7 and re-emits read_file — natural retry.
+      // next next() call re-enters step 10 and re-emits read_file — natural retry.
       // Manifest validation in the report handler checks title + ac_count.
       state.manifest_retry_count = state.manifest_retry_count || 0;
       const reqStage = state.stages.find(s => s.type === 'requirements');
@@ -498,11 +595,24 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       });
     }
 
-    case 8: {
-      // Requirements-gatherer completed, shutdown specialists
-      state.phase = 'specialist_shutdown';
+    case 11: {
+      // Requirements-gatherer completed — mark requirements stage complete, enter main loop.
+      const reqStage = state.stages.find(s => s.type === 'requirements');
+      if (reqStage) {
+        reqStage.status = 'completed';
+        if (reqStage.task_id) {
+          state.phase = 'main_loop';
+          state.step = 0;
+          return emitCommand(state, {
+            action: 'update_task',
+            taskId: reqStage.task_id,
+            status: 'completed',
+          });
+        }
+      }
+      state.phase = 'main_loop';
       state.step = 0;
-      return handleSpecialistShutdown(state, cwd, routeByPhase);
+      return routeByPhase(state, cwd);
     }
 
     default:
@@ -521,43 +631,161 @@ function buildSpecialistBatch(state: PipelineState, cwd: string): Array<{
   prompt_file: string;
 }> {
   const specialists = [
-    { name: 'technical-analyst', type: 'technical', expected_analysis_file: 'analysis-technical.json' },
-    { name: 'ux-domain-analyst', type: 'ux-domain', expected_analysis_file: 'analysis-ux-domain.json' },
-    { name: 'security-analyst', type: 'security', expected_analysis_file: 'analysis-security.json' },
-    { name: 'performance-analyst', type: 'performance', expected_analysis_file: 'analysis-performance.json' },
-    { name: 'architecture-analyst', type: 'architecture', expected_analysis_file: 'analysis-architecture.json' },
+    {
+      name: 'technical-analyst',
+      type: 'technical',
+      expected_analysis_file: 'analysis-technical.json',
+      scope: 'Technical feasibility, stack compatibility, API design, data models, integration points',
+    },
+    {
+      name: 'ux-domain-analyst',
+      type: 'ux-domain',
+      expected_analysis_file: 'analysis-ux-domain.json',
+      scope: 'User experience, domain modeling, workflow design, accessibility, edge cases',
+    },
+    {
+      name: 'security-analyst',
+      type: 'security',
+      expected_analysis_file: 'analysis-security.json',
+      scope: 'Authentication, authorization, input validation, data protection, threat modeling',
+    },
+    {
+      name: 'performance-analyst',
+      type: 'performance',
+      expected_analysis_file: 'analysis-performance.json',
+      scope: 'Latency, throughput, resource usage, caching strategy, scalability bottlenecks',
+    },
+    {
+      name: 'architecture-analyst',
+      type: 'architecture',
+      expected_analysis_file: 'analysis-architecture.json',
+      scope: 'Module boundaries, dependency direction, layering, coupling, extension points',
+    },
   ];
 
-  return specialists.map(s => {
-    let prompt = `You are a ${s.type.charAt(0).toUpperCase() + s.type.slice(1)} Analyst. `;
-    prompt += `Explore the codebase and domain. Write your analysis to .vcp/task/${s.expected_analysis_file}. `;
-    prompt += `Message key findings to lead as you discover them.`;
+  const teamListing = specialists.map(s => s.name).join(', ');
+  const vcpActive = state.vcp_detection.detected;
 
-    // VCP-aware security prompt
-    if (s.name === 'security-analyst' && state.vcp_detection.detected) {
-      state.vcp_detection.context_injected = true;
-      prompt = `You are a Security Analyst. This project uses VCP standards. ` +
-        `Perform VCP-aware security analysis. Write to .vcp/task/${s.expected_analysis_file}. ` +
-        `Message key findings to lead as you discover them.`;
+  return specialists.map(s => {
+    const lines: string[] = [];
+
+    // Role
+    lines.push(`# ${s.type.charAt(0).toUpperCase() + s.type.slice(1)} Analyst`);
+    lines.push('');
+
+    // Mission
+    lines.push('## Mission');
+    if (state.description) {
+      lines.push(`Analyze the following feature request from the ${s.type} perspective:`);
+      lines.push('');
+      lines.push(`> ${state.description}`);
+    } else {
+      lines.push(`Analyze the current task from the ${s.type} perspective.`);
+    }
+    lines.push('');
+
+    // Scope
+    lines.push('## Scope');
+    lines.push(`Focus areas: ${s.scope}`);
+    lines.push(`Do NOT duplicate analysis that belongs to other specialists.`);
+    lines.push('');
+
+    // Output schema
+    lines.push('## Output');
+    lines.push(`Write your analysis as JSON to \`.vcp/task/${s.expected_analysis_file}\`.`);
+    lines.push('');
+    lines.push('Required schema:');
+    lines.push('```json');
+    lines.push('{');
+    lines.push('  "findings": [{ "category": "...", "description": "...", "severity": "high|medium|low", "recommendation": "..." }],');
+    lines.push('  "questions_for_user": ["Questions you could not resolve from code alone"],');
+    lines.push('  "out_of_scope": ["Items deliberately left for other specialists"],');
+    lines.push('  "assumptions": ["Assumptions made during analysis"]');
+
+    // Security-specific fields
+    if (s.name === 'security-analyst') {
+      if (vcpActive) {
+        state.vcp_detection.context_injected = true;
+        lines.push(', "vcp_active": true');
+        lines.push(', "vcp_standards_referenced": ["standard-id-1", "standard-id-2"]');
+      }
+      lines.push(', "threat_model": { "attack_surface": [], "mitigations": [] }');
     }
 
+    lines.push('}');
+    lines.push('```');
+    lines.push('');
+
+    // VCP note for security analyst
+    if (s.name === 'security-analyst' && vcpActive) {
+      lines.push('## VCP Standards');
+      lines.push('This project uses VCP standards. Reference applicable VCP rules in each finding:');
+      lines.push('```json');
+      lines.push('{ "category": "...", "vcp_rule": "core-security §3.2", ... }');
+      lines.push('```');
+      lines.push('');
+    }
+
+    // Team
+    lines.push('## Team');
+    lines.push(`Your siblings: ${teamListing}`);
+    lines.push('Each specialist writes to their own analysis file. Do not read or modify other specialists\' files.');
+    lines.push('');
+
+    // Q&A protocol
+    lines.push('## Asking User Questions');
+    lines.push('');
+    lines.push('If you need clarification to continue your analysis:');
+    lines.push('1. SendMessage to lead with summary starting with [QUESTION]:');
+    lines.push('   SendMessage(recipient: "lead", summary: "[QUESTION] What auth framework does this project use?")');
+    lines.push('2. Put the FULL question text in the summary — the lead only sees the summary, not content_file.');
+    lines.push('3. Keep questions concise (under 200 characters in summary).');
+    lines.push('4. Wait for the lead to relay the user\'s answer before continuing.');
+    lines.push('5. You may ask multiple questions (one at a time, sequentially).');
+    lines.push('');
+    lines.push('Do NOT use AskUserQuestion directly — it won\'t reach the user from a background teammate.');
+    lines.push('');
+
+    // Completion protocol
+    lines.push('## Completion');
+    lines.push('When analysis is complete:');
+    lines.push('1. Write your analysis JSON to the output file above.');
+    lines.push('2. SendMessage to lead with summary containing "complete" or "analysis written".');
+
+    const prompt = lines.join('\n');
     const promptFile = writeTempFile(cwd, `specialist-${s.name}`, makeCommandId(), prompt);
-    return { ...s, prompt_file: promptFile };
+    return { name: s.name, type: s.type, expected_analysis_file: s.expected_analysis_file, prompt_file: promptFile };
   });
 }
 
 function buildSynthesisPrompt(state: PipelineState, _cwd: string): string {
   const approved = state.specialists?.approved_specialists
-    .filter(s => s.status === 'completed')
+    .filter(s => s.status === 'completed' || s.status === 'shutdown')
     .map(s => s.name) || [];
 
-  return [
-    `Synthesis mode.`,
-    `APPROVED SPECIALISTS: ${approved.join(', ')}`,
-    `Read the validated analysis files from .vcp/task/.`,
-    `Validate scope with user via AskUserQuestion.`,
-    `Get explicit approval before writing user-story.`,
-  ].join('\n');
+  const lines = ['Synthesis mode.'];
+
+  if (state.description) {
+    lines.push(`FEATURE REQUEST: ${state.description}`);
+  }
+
+  lines.push(`APPROVED SPECIALISTS: ${approved.join(', ')}`);
+
+  // Include Q&A transcript so requirements-gatherer can filter already-answered questions
+  if (state.specialists?.qa_transcript.length) {
+    lines.push('', 'Q&A CONTEXT (questions already answered during specialist exploration):');
+    for (const qa of state.specialists.qa_transcript) {
+      lines.push(`- [${qa.specialist_name}] Q: ${qa.question}`);
+      lines.push(`  A: ${qa.answer}`);
+    }
+  }
+
+  lines.push(
+    'Read the validated analysis files from .vcp/task/.',
+    'Validate scope with user via AskUserQuestion.',
+    'Get explicit approval before writing user-story.',
+  );
+  return lines.join('\n');
 }
 
 // ─── Phase: Specialist Shutdown ─────────────────────────────────────────────

@@ -201,6 +201,7 @@ export function buildPipelineTasksJson(state: PipelineState, config: PipelineCon
     team_name: state.team_name,
     pipeline_type: state.pipeline === 'feature' ? 'feature-implement' : 'bug-fix',
     config_hash: state.config_hash,
+    ...(state.description ? { description: state.description } : {}),
     resolved_config: config,
     stages: state.stages.map(s => ({
       type: s.type,

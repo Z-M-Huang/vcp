@@ -25,9 +25,18 @@ You are a thin executor loop. The pipeline-driver.ts state machine decides what 
 
 ## Step 1: Initialize
 
+Write the user's bug description to a temp file, then pass it via `--description-file`:
+
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-driver.ts" init --pipeline bugfix --cwd "${CLAUDE_PROJECT_DIR}"
+# Write description to temp file (safe from shell injection)
+cat <<'DESCRIPTION_EOF' > /tmp/vcp-description.txt
+<paste the user's bug description here>
+DESCRIPTION_EOF
+
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-driver.ts" init --pipeline bugfix --cwd "${CLAUDE_PROJECT_DIR}" --description-file /tmp/vcp-description.txt
 ```
+
+If no description was provided by the user, omit `--description-file`.
 
 Parse the JSON output. This is your first command.
 
@@ -119,6 +128,8 @@ Read the prompt from `prompt_file` path. Pass to Task tool:
 ```
 Task(subagent_type: cmd.subagent_type, name: cmd.name, model: cmd.model, prompt: <file_content>)
 ```
+
+**CRITICAL: `spawn_agent` MUST run in foreground (blocking) mode.** Do NOT set `run_in_background: true`. The agent may use AskUserQuestion to interact with the user — this only works when the agent blocks the main thread. Wait for the agent to fully complete before reporting.
 
 For `cli` provider types (e.g., Codex): use `subagent_type: "dev-buddy:cli-executor"`. Do NOT pass `model` on the Task tool — the CLI tool receives it via flags in the prompt.
 

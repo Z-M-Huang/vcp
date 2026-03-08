@@ -310,9 +310,9 @@ function processReport(
         state.step = 1;
       }
 
-      // Requirements output file ready — validate manifest before advancing to specialist shutdown.
+      // Requirements output file ready — validate manifest before marking requirements complete.
       // Phase may be requirements_team_exploring (set at step 3) or requirements.
-      if (state.step === 7 && (
+      if (state.step === 10 && (
         state.phase === 'requirements' ||
         state.phase === 'requirements_team_pending' ||
         state.phase === 'requirements_team_exploring'
@@ -328,7 +328,7 @@ function processReport(
           }
         }
         if (manifestValid) {
-          state.step = 8;
+          state.step = 11;
         } else {
           state.manifest_retry_count = (state.manifest_retry_count || 0) + 1;
           if (state.manifest_retry_count >= 5) {
@@ -340,7 +340,7 @@ function processReport(
               content_preview: report.content?.slice(0, 200),
             }));
           }
-          // Stay at step 7 — natural retry via handleReportError on next next() call
+          // Stay at step 10 — natural retry via handleReportError on next next() call
         }
       }
 
@@ -395,16 +395,77 @@ function processReport(
     case 'write_multi_file':
       break;
 
+    case 'send_message': {
+      // Q&A relay: answer sent to specialist → persist transcript, clear active_relay
+      if (state.phase === 'requirements_team_exploring' && state.specialists?.active_relay?.answer) {
+        const relay = state.specialists.active_relay;
+        state.specialists.qa_transcript.push({
+          specialist_name: relay.specialist_name,
+          question: relay.question,
+          answer: relay.answer,
+        });
+        state.specialists.active_relay = undefined;
+
+        // Promote deferred completions: if this specialist has no more pending questions
+        // and was previously deferred, mark as completed now.
+        const specialist = state.specialists.approved_specialists.find(
+          s => s.name === relay.specialist_name
+        );
+        if (specialist?.deferred_completion) {
+          const stillHasPendingQ = state.specialists.pending_questions.some(
+            q => q.specialist_name === relay.specialist_name
+          );
+          if (!stillHasPendingQ) {
+            specialist.status = 'completed';
+            delete specialist.deferred_completion;
+          }
+        }
+      }
+      break;
+    }
+
     case 'receive_messages': {
-      // Track specialist completion from received messages
+      // Track specialist questions and completion from received messages.
+      // Two-pass approach: questions first, then completions. This ensures
+      // completion-before-question ordering in a single poll doesn't bypass
+      // the deferred-completion check (questions must be queued before
+      // completion status is evaluated).
       if (state.phase === 'requirements_team_exploring' && state.specialists && report.messages) {
+        // Pass 1: collect ALL questions from ALL messages
+        const completionMessages: Array<{ from: string; specialist: typeof state.specialists.approved_specialists[0] }> = [];
         for (const msg of report.messages) {
           const specialist = state.specialists.approved_specialists.find(s => s.name === msg.from);
-          if (specialist && specialist.status === 'spawned') {
-            const summaryLower = (msg.summary || '').toLowerCase();
-            if (summaryLower.includes('complete') || summaryLower.includes('done') || summaryLower.includes('finished') || summaryLower.includes('analysis written')) {
-              specialist.status = 'completed';
+          if (!specialist) continue;
+
+          const summary = msg.summary || '';
+          const summaryLower = summary.toLowerCase();
+
+          if (summaryLower.startsWith('[question]')) {
+            const question = summary.replace(/^\[QUESTION\]\s*/i, '');
+            if (question.trim()) {
+              state.specialists.pending_questions.push({
+                specialist_name: msg.from,
+                question: question.trim(),
+              });
             }
+          } else if (specialist.status === 'spawned' && (
+            summaryLower.includes('complete') || summaryLower.includes('done') ||
+            summaryLower.includes('finished') || summaryLower.includes('analysis written')
+          )) {
+            completionMessages.push({ from: msg.from, specialist });
+          }
+        }
+
+        // Pass 2: process completions with awareness of ALL queued questions
+        for (const { from, specialist } of completionMessages) {
+          const hasPendingQ = state.specialists.pending_questions.some(
+            q => q.specialist_name === from
+          );
+          const hasActiveRelay = state.specialists.active_relay?.specialist_name === from;
+          if (hasPendingQ || hasActiveRelay) {
+            specialist.deferred_completion = true;
+          } else {
+            specialist.status = 'completed';
           }
         }
       }
@@ -687,6 +748,12 @@ function processReport(
 }
 
 function processUserAnswer(state: PipelineState, cwd: string, answer: string): void {
+  // Q&A relay: specialist question answered by user
+  if (state.phase === 'requirements_team_exploring' && state.specialists?.active_relay) {
+    state.specialists.active_relay.answer = answer;
+    return; // Don't fall through to other answer handling
+  }
+
   if (state.phase === 'resume_detection') {
     const lowerAnswer = answer.toLowerCase();
     if (lowerAnswer.includes('fresh') || lowerAnswer.includes('reset') || lowerAnswer.includes('start fresh')) {

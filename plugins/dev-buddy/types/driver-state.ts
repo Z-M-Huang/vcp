@@ -98,6 +98,8 @@ export interface SpecialistEntry {
   type: string;
   expected_analysis_file: string;
   status: 'spawned' | 'completed' | 'shutdown' | 'failed';
+  /** Set when specialist sends completion while Q&A questions are still pending. */
+  deferred_completion?: boolean;
 }
 
 export interface SpecialistTeamState {
@@ -105,6 +107,20 @@ export interface SpecialistTeamState {
   /** Specialist names that failed to spawn. */
   spawn_failures: string[];
   interactive_loop_active: boolean;
+  /** Q&A relay queue — all [QUESTION]s appended here, processed FIFO. */
+  pending_questions: Array<{ specialist_name: string; question: string }>;
+  /** Currently being relayed (populated when ask_user emitted, cleared after send_message reported). */
+  active_relay?: {
+    specialist_name: string;
+    question: string;
+    answer?: string;
+  };
+  /** Persisted transcript for synthesis prompt. */
+  qa_transcript: Array<{
+    specialist_name: string;
+    question: string;
+    answer: string;
+  }>;
 }
 
 // ─── VCP Detection State ─────────────────────────────────────────────────────
@@ -165,6 +181,8 @@ export interface PipelineState {
   pipeline: 'feature' | 'bugfix';
   team_name: string;
   config_hash: string;
+  /** User's feature/bug description passed via --description-file. */
+  description?: string;
   /** Monotonic counter. Increments on every `next` call. */
   state_version: number;
 
