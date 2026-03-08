@@ -177,10 +177,17 @@ describe('pipeline-driver state version', () => {
     for (let i = 0; i < 5; i++) {
       const cmd = next();
       versions.push(cmd.state_version);
-      report(
-        cmd.command_id,
-        cmd.action === 'list_tasks' ? { tasks: [] } : {},
-      );
+      let extra: Record<string, any> = {};
+      if (cmd.action === 'list_tasks') {
+        extra = { tasks: [] };
+      } else if (cmd.action === 'parallel_batch' && cmd.commands) {
+        const batchResults: Record<string, { ok: boolean; taskId?: string }> = {};
+        cmd.commands.forEach((sub: any, idx: number) => {
+          batchResults[sub.command_id] = { ok: true, taskId: `task-${idx + 1}` };
+        });
+        extra = { batch_results: batchResults };
+      }
+      report(cmd.command_id, extra);
     }
 
     for (let i = 1; i < versions.length; i++) {

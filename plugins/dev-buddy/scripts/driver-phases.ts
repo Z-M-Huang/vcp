@@ -173,38 +173,53 @@ export function detectStageStatus(
 // ─── Phase: Task Chain Creation ─────────────────────────────────────────────
 
 export function handleTaskChainCreation(state: PipelineState, cwd: string): PipelineCommand {
-  // Create tasks one at a time, tracking progress via state.step
-  const stageIndex = state.step;
-
-  if (stageIndex >= state.stages.length) {
-    // All tasks created, move to dependency wiring
+  // Post-batch: report handler set step >= stages.length → move to dependencies
+  if (state.step >= state.stages.length) {
     state.phase = 'task_chain_dependencies';
     state.step = 0;
     return handleTaskChainDependencies(state, cwd, handleTaskChainDependencies);
   }
 
-  const stage = state.stages[stageIndex];
-  const resolvedInfo = buildResolvedStageInfo(stage, state);
-  const subject = deriveSubject(resolvedInfo);
-  const description = deriveDescription(state, stage, resolvedInfo, cwd);
+  // Idempotency: filter to stages without task_ids (handles partial replay)
+  const stagesToCreate = state.stages
+    .map((stage, idx) => ({ stage, idx }))
+    .filter(({ stage }) => !stage.task_id);
 
+  if (stagesToCreate.length === 0) {
+    // All stages already have task_ids — skip to dependencies
+    state.phase = 'task_chain_dependencies';
+    state.step = 0;
+    return handleTaskChainDependencies(state, cwd, handleTaskChainDependencies);
+  }
+
+  // Build batch of create_task sub-commands
+  const batchCmdToStage: Record<string, number> = {};
+  const commands = stagesToCreate.map(({ stage, idx }) => {
+    const cmdId = makeCommandId();
+    batchCmdToStage[cmdId] = idx;
+    const resolvedInfo = buildResolvedStageInfo(stage, state);
+    return {
+      command_id: cmdId,
+      action: 'create_task' as const,
+      subject: deriveSubject(resolvedInfo),
+      description: deriveDescription(state, stage, resolvedInfo, cwd),
+      activeForm: `Setting up ${stage.type}...`,
+    };
+  });
+
+  state.batch_cmd_to_stage = batchCmdToStage;
+  // Do NOT advance state.step — report handler does that after successful processing
   return emitCommand(state, {
-    action: 'create_task',
-    subject,
-    description,
-    activeForm: `Setting up ${stage.type}...`,
+    action: 'parallel_batch',
+    commands,
   });
 }
 
 // ─── Phase: Task Chain Dependencies ─────────────────────────────────────────
 
-export function handleTaskChainDependencies(state: PipelineState, _cwd: string, routeByPhase?: PhaseRouter): PipelineCommand {
-  // Wire dependencies based on stage ordering and parallel groups.
-  // state.step tracks which stage we're wiring (0-based).
-  const stageIndex = state.step;
-
-  if (stageIndex >= state.stages.length) {
-    // All dependencies wired. Transition to the appropriate first phase.
+export function handleTaskChainDependencies(state: PipelineState, _cwd: string, _routeByPhase?: PhaseRouter): PipelineCommand {
+  // Post-batch: report handler set step >= stages.length → show status + transition
+  if (state.step >= state.stages.length) {
     if (state.pipeline === 'feature') {
       state.phase = 'requirements';
       state.step = 0;
@@ -218,31 +233,43 @@ export function handleTaskChainDependencies(state: PipelineState, _cwd: string, 
     });
   }
 
-  const stage = state.stages[stageIndex];
-  if (!stage.task_id) {
-    // Task not yet created (shouldn't happen), skip
-    state.step++;
-    if (routeByPhase) return routeByPhase(state, _cwd);
-    return handleTaskChainDependencies(state, _cwd, routeByPhase);
-  }
+  // Build batch of update_task sub-commands for all stages with predecessors
+  const batchCmdToStage: Record<string, number> = {};
+  const commands: Array<{
+    command_id: string;
+    action: 'update_task';
+    taskId: string;
+    addBlockedBy: string[];
+  }> = [];
 
-  // Compute predecessors
-  const predecessors = computePredecessors(state, stageIndex);
+  for (let i = 0; i < state.stages.length; i++) {
+    const stage = state.stages[i];
+    if (!stage.task_id) continue;
 
-  if (predecessors.length === 0) {
-    // First stage or no dependency needed
-    state.step++;
-    return emitCommand(state, {
-      action: 'noop',
-      message: `Stage ${stageIndex} has no predecessors.`,
+    const predecessors = computePredecessors(state, i);
+    if (predecessors.length === 0) continue;
+
+    const cmdId = makeCommandId();
+    batchCmdToStage[cmdId] = i;
+    commands.push({
+      command_id: cmdId,
+      action: 'update_task',
+      taskId: stage.task_id,
+      addBlockedBy: predecessors,
     });
   }
 
-  state.step++;
+  if (commands.length === 0) {
+    // No dependencies to wire — go straight to show_status
+    state.step = state.stages.length;
+    return handleTaskChainDependencies(state, _cwd);
+  }
+
+  state.batch_cmd_to_stage = batchCmdToStage;
+  // Do NOT advance state.step — report handler does that
   return emitCommand(state, {
-    action: 'update_task',
-    taskId: stage.task_id,
-    addBlockedBy: predecessors,
+    action: 'parallel_batch',
+    commands,
   });
 }
 
@@ -501,7 +528,6 @@ function buildSynthesisPrompt(state: PipelineState, _cwd: string): string {
 
 export function handleSpecialistShutdown(state: PipelineState, _cwd: string, routeByPhase: PhaseRouter): PipelineCommand {
   if (!state.specialists) {
-    // No specialists to shutdown
     state.phase = 'main_loop';
     state.step = 0;
     return emitCommand(state, {
@@ -533,11 +559,23 @@ export function handleSpecialistShutdown(state: PipelineState, _cwd: string, rou
     return routeByPhase(state, _cwd);
   }
 
-  const specialist = activeSpecialists[state.step];
-  state.step++;
-  return emitCommand(state, {
-    action: 'shutdown_teammate',
+  if (activeSpecialists.length === 0) {
+    // No active specialists — skip to post-shutdown
+    state.step = 0;
+    return handleSpecialistShutdown(state, _cwd, routeByPhase);
+  }
+
+  // Batch all shutdown commands into a single parallel_batch
+  const commands = activeSpecialists.map(specialist => ({
+    command_id: makeCommandId(),
+    action: 'shutdown_teammate' as const,
     recipient: specialist.name,
     max_retries: 2,
+  }));
+
+  state.step = activeSpecialists.length;
+  return emitCommand(state, {
+    action: 'parallel_batch',
+    commands,
   });
 }

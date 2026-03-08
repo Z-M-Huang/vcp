@@ -22,24 +22,28 @@ describe('pipeline-driver e2e feature trace', () => {
     cmd = next();
     expect(cmd.action).toBe('list_tasks');
 
+    // Batch task creation
     report(cmd.command_id, { tasks: [] });
     cmd = next();
-    expect(cmd.action).toBe('create_task');
+    expect(cmd.action).toBe('parallel_batch');
+    const taskCount = cmd.commands.length;
+    expect(taskCount).toBeGreaterThanOrEqual(9);
 
-    let taskCount = 0;
-    while (cmd.action === 'create_task') {
-      taskCount++;
-      report(cmd.command_id, { taskId: `task-${taskCount}` });
-      cmd = next();
-    }
-    expect(taskCount).toBeGreaterThanOrEqual(9); // At least 9 (default config); user config may have more
+    const createResults: Record<string, { ok: boolean; taskId: string }> = {};
+    cmd.commands.forEach((sub: any, i: number) => {
+      createResults[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
+    });
+    report(cmd.command_id, { batch_results: createResults });
+    cmd = next();
 
-    let wireCount = 0;
-    while (cmd.action === 'update_task' || cmd.action === 'noop') {
-      wireCount++;
-      report(cmd.command_id);
-      cmd = next();
+    // Batch dependency wiring
+    expect(cmd.action).toBe('parallel_batch');
+    const depResults: Record<string, { ok: boolean }> = {};
+    for (const sub of cmd.commands) {
+      depResults[sub.command_id] = { ok: true };
     }
+    report(cmd.command_id, { batch_results: depResults });
+    cmd = next();
 
     expect(cmd.action).toBe('show_status');
 
@@ -67,24 +71,27 @@ describe('pipeline-driver e2e bugfix trace', () => {
     cmd = next();
     expect(cmd.action).toBe('list_tasks');
 
+    // Batch task creation
     report(cmd.command_id, { tasks: [] });
     cmd = next();
-    expect(cmd.action).toBe('create_task');
+    expect(cmd.action).toBe('parallel_batch');
+    expect(cmd.commands.length).toBe(7);
 
-    let taskCount = 0;
-    while (cmd.action === 'create_task') {
-      taskCount++;
-      report(cmd.command_id, { taskId: `task-${taskCount}` });
-      cmd = next();
-    }
-    expect(taskCount).toBe(7);
+    const createResults: Record<string, { ok: boolean; taskId: string }> = {};
+    cmd.commands.forEach((sub: any, i: number) => {
+      createResults[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
+    });
+    report(cmd.command_id, { batch_results: createResults });
+    cmd = next();
 
-    let wireCount = 0;
-    while (cmd.action === 'update_task' || cmd.action === 'noop') {
-      wireCount++;
-      report(cmd.command_id);
-      cmd = next();
+    // Batch dependency wiring
+    expect(cmd.action).toBe('parallel_batch');
+    const depResults: Record<string, { ok: boolean }> = {};
+    for (const sub of cmd.commands) {
+      depResults[sub.command_id] = { ok: true };
     }
+    report(cmd.command_id, { batch_results: depResults });
+    cmd = next();
 
     expect(cmd.action).toBe('show_status');
     const state = readState();

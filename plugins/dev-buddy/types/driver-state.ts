@@ -217,6 +217,10 @@ export interface PipelineState {
   terminal_state: TerminalState | null;
   terminal_reason: string | null;
 
+  // ─── Batch Command Mapping ───
+  /** Maps parallel_batch sub-command ID → stage index (for batch task creation/dependency wiring). */
+  batch_cmd_to_stage?: Record<string, number>;
+
   // ─── Global Iteration Counters ───
   /** Per-stage iteration counters. Key: "{stage_type}_{index}". */
   global_iteration_counters: Record<string, number>;

@@ -108,25 +108,28 @@ describe('pipeline-driver dependency wiring', () => {
   beforeEach(setup);
   afterEach(teardown);
 
-  test('first stage has no dependencies (noop)', () => {
+  test('first stage has no dependencies (excluded from batch)', () => {
     const initCmd = run(`init --pipeline feature --cwd "${ctx.testDir}"`);
     report(initCmd.command_id);
 
     let cmd = next(); // list_tasks
     report(cmd.command_id, { tasks: [] });
-    cmd = next(); // first create_task
+    cmd = next(); // parallel_batch (create_task×N)
+    expect(cmd.action).toBe('parallel_batch');
 
-    // Create all tasks
-    let taskNum = 1;
-    while (cmd.action === 'create_task') {
-      report(cmd.command_id, { taskId: `task-${taskNum}` });
-      cmd = next();
-      taskNum++;
-      if (taskNum > 25) break;
-    }
+    // Build batch results
+    const createResults: Record<string, { ok: boolean; taskId: string }> = {};
+    cmd.commands.forEach((sub: any, i: number) => {
+      createResults[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
+    });
+    report(cmd.command_id, { batch_results: createResults });
+    cmd = next(); // parallel_batch (update_task×M for deps)
+    expect(cmd.action).toBe('parallel_batch');
 
-    // First dependency step for stage 0 should be noop (no predecessors)
-    expect(cmd.action).toBe('noop');
+    // Stage 0 (requirements) should NOT appear in the dependency batch
+    // because it has no predecessors
+    const taskIdsInBatch = cmd.commands.map((sub: any) => sub.taskId);
+    expect(taskIdsInBatch).not.toContain('task-1');
   });
 
   test('sequential stages wire to their predecessor', () => {
@@ -135,47 +138,39 @@ describe('pipeline-driver dependency wiring', () => {
 
     let cmd = next(); // list_tasks
     report(cmd.command_id, { tasks: [] });
-    cmd = next(); // create_task
+    cmd = next(); // parallel_batch (create_task×N)
+    expect(cmd.action).toBe('parallel_batch');
 
-    let taskNum = 1;
-    while (cmd.action === 'create_task') {
-      report(cmd.command_id, { taskId: `task-${taskNum}` });
-      cmd = next();
-      taskNum++;
-      if (taskNum > 25) break;
-    }
-
-    // Collect all update_task commands with addBlockedBy
-    const wired: Array<{ taskId: string; blockedBy: string[] }> = [];
-    while (cmd.action === 'update_task' || cmd.action === 'noop') {
-      if (cmd.action === 'update_task' && cmd.addBlockedBy) {
-        wired.push({ taskId: cmd.taskId, blockedBy: cmd.addBlockedBy });
-      }
-      report(cmd.command_id);
-      cmd = next();
-    }
+    const createResults: Record<string, { ok: boolean; taskId: string }> = {};
+    cmd.commands.forEach((sub: any, i: number) => {
+      createResults[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
+    });
+    report(cmd.command_id, { batch_results: createResults });
+    cmd = next(); // parallel_batch (update_task×M for deps)
+    expect(cmd.action).toBe('parallel_batch');
 
     // Stage 1 (planning) should be blocked by stage 0 (requirements)
-    const planningWire = wired.find(w => w.taskId === 'task-2');
+    const planningWire = cmd.commands.find((sub: any) => sub.taskId === 'task-2');
     expect(planningWire).toBeDefined();
-    expect(planningWire!.blockedBy).toContain('task-1');
+    expect(planningWire.addBlockedBy).toContain('task-1');
   });
 
   test('fan-out: parallel group members share same predecessors', () => {
     const initCmd = run(`init --pipeline feature --cwd "${ctx.testDir}"`);
     report(initCmd.command_id);
 
-    let cmd = next();
+    let cmd = next(); // list_tasks
     report(cmd.command_id, { tasks: [] });
-    cmd = next();
+    cmd = next(); // parallel_batch (create)
+    expect(cmd.action).toBe('parallel_batch');
 
-    let taskNum = 1;
-    while (cmd.action === 'create_task') {
-      report(cmd.command_id, { taskId: `task-${taskNum}` });
-      cmd = next();
-      taskNum++;
-      if (taskNum > 25) break;
-    }
+    const createResults: Record<string, { ok: boolean; taskId: string }> = {};
+    cmd.commands.forEach((sub: any, i: number) => {
+      createResults[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
+    });
+    report(cmd.command_id, { batch_results: createResults });
+    cmd = next(); // parallel_batch (deps)
+    expect(cmd.action).toBe('parallel_batch');
 
     const state = readState();
     const firstGroupId = state.stages.find(
@@ -187,13 +182,12 @@ describe('pipeline-driver dependency wiring', () => {
         (s: any) => s.parallel_group_id === firstGroupId,
       );
 
+      // Extract wiring from batch sub-commands
       const wired: Map<string, string[]> = new Map();
-      while (cmd.action === 'update_task' || cmd.action === 'noop') {
-        if (cmd.action === 'update_task' && cmd.addBlockedBy) {
-          wired.set(cmd.taskId, cmd.addBlockedBy);
+      for (const sub of cmd.commands) {
+        if (sub.action === 'update_task' && sub.addBlockedBy) {
+          wired.set(sub.taskId, sub.addBlockedBy);
         }
-        report(cmd.command_id);
-        cmd = next();
       }
 
       const memberBlockedBys = groupMembers
@@ -213,17 +207,18 @@ describe('pipeline-driver dependency wiring', () => {
     const initCmd = run(`init --pipeline feature --cwd "${ctx.testDir}"`);
     report(initCmd.command_id);
 
-    let cmd = next();
+    let cmd = next(); // list_tasks
     report(cmd.command_id, { tasks: [] });
-    cmd = next();
+    cmd = next(); // parallel_batch (create)
+    expect(cmd.action).toBe('parallel_batch');
 
-    let taskNum = 1;
-    while (cmd.action === 'create_task') {
-      report(cmd.command_id, { taskId: `task-${taskNum}` });
-      cmd = next();
-      taskNum++;
-      if (taskNum > 25) break;
-    }
+    const createResults: Record<string, { ok: boolean; taskId: string }> = {};
+    cmd.commands.forEach((sub: any, i: number) => {
+      createResults[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
+    });
+    report(cmd.command_id, { batch_results: createResults });
+    cmd = next(); // parallel_batch (deps)
+    expect(cmd.action).toBe('parallel_batch');
 
     const state = readState();
     const firstGroupId = state.stages.find(
@@ -240,13 +235,12 @@ describe('pipeline-driver dependency wiring', () => {
         (s: any) => s.index === successorIndex,
       );
 
+      // Extract wiring from batch sub-commands
       const wired: Map<string, string[]> = new Map();
-      while (cmd.action === 'update_task' || cmd.action === 'noop') {
-        if (cmd.action === 'update_task' && cmd.addBlockedBy) {
-          wired.set(cmd.taskId, cmd.addBlockedBy);
+      for (const sub of cmd.commands) {
+        if (sub.action === 'update_task' && sub.addBlockedBy) {
+          wired.set(sub.taskId, sub.addBlockedBy);
         }
-        report(cmd.command_id);
-        cmd = next();
       }
 
       if (successor) {
@@ -258,6 +252,139 @@ describe('pipeline-driver dependency wiring', () => {
         }
       }
     }
+  });
+});
+
+// ─── BATCH CREATION ROBUSTNESS ────────────────────────────────────────────
+
+describe('pipeline-driver batch creation robustness', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  /** Drive from init through list_tasks, return the create batch command. */
+  function driveToCreateBatch(pipeline: 'feature' | 'bugfix' = 'feature'): any {
+    const initCmd = run(`init --pipeline ${pipeline} --cwd "${ctx.testDir}"`);
+    report(initCmd.command_id);
+    let cmd = next(); // list_tasks
+    report(cmd.command_id, { tasks: [] });
+    cmd = next(); // parallel_batch (create_task×N)
+    expect(cmd.action).toBe('parallel_batch');
+    return cmd;
+  }
+
+  /** Report a create batch with sequential task IDs. */
+  function reportCreateBatch(cmd: any): Record<string, { ok: boolean; taskId: string }> {
+    const results: Record<string, { ok: boolean; taskId: string }> = {};
+    cmd.commands.forEach((sub: any, i: number) => {
+      results[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
+    });
+    report(cmd.command_id, { batch_results: results });
+    return results;
+  }
+
+  test('shuffled batch_results ordering maps task IDs correctly', () => {
+    const batchCmd = driveToCreateBatch();
+
+    // Build results in REVERSE order to verify ordering doesn't matter
+    const results: Record<string, { ok: boolean; taskId: string }> = {};
+    const reversed = [...batchCmd.commands].reverse();
+    reversed.forEach((sub: any, i: number) => {
+      // Assign task IDs based on original position, not iteration order
+      const originalIdx = batchCmd.commands.indexOf(sub);
+      results[sub.command_id] = { ok: true, taskId: `task-${originalIdx + 1}` };
+    });
+    report(batchCmd.command_id, { batch_results: results });
+
+    const state = readState();
+    // Each stage should have the task ID matching its index
+    for (let i = 0; i < state.stages.length; i++) {
+      expect(state.stages[i].task_id).toBe(`task-${i + 1}`);
+    }
+  });
+
+  test('failed sub-command marks stage failed, others get task IDs', () => {
+    const batchCmd = driveToCreateBatch();
+
+    // Fail stage 2 (index 2), succeed all others
+    const results: Record<string, any> = {};
+    batchCmd.commands.forEach((sub: any, i: number) => {
+      if (i === 2) {
+        results[sub.command_id] = { ok: false, error: 'Task creation failed' };
+      } else {
+        results[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
+      }
+    });
+    report(batchCmd.command_id, { batch_results: results });
+
+    const state = readState();
+    // Stage 2 should be marked failed with no task_id
+    expect(state.stages[2].status).toBe('failed');
+    // Other stages should have task IDs
+    expect(state.stages[0].task_id).toBe('task-1');
+    expect(state.stages[1].task_id).toBe('task-2');
+    expect(state.stages[3].task_id).toBe('task-4');
+  });
+
+  test('idempotent create batch: stages with existing task_ids are excluded', () => {
+    // Drive to show_status so all stages get task_ids
+    driveToShowStatus('feature');
+    const state = readState();
+    const allHaveIds = state.stages.every((s: any) => s.task_id);
+    expect(allHaveIds).toBe(true);
+
+    // Manually reset phase to task_chain_creation, step 0
+    // Must also clear pending_command (show_status from driveToShowStatus)
+    // so next() enters handleTaskChainCreation instead of replaying show_status
+    state.phase = 'task_chain_creation';
+    state.step = 0;
+    state.pending_command = null;
+    fs.writeFileSync(
+      path.join(ctx.testDir, '.vcp/task/pipeline-state.json'),
+      JSON.stringify(state, null, 2),
+    );
+
+    // next() should skip create batch (all stages have task_ids)
+    // and go directly to task_chain_dependencies (update_task batch)
+    const cmd = next();
+    expect(cmd.action).toBe('parallel_batch');
+    // Verify NO create_task sub-commands — only update_task (dependency wiring)
+    const createCmds = cmd.commands.filter((sub: any) => sub.action === 'create_task');
+    expect(createCmds.length).toBe(0);
+    const updateCmds = cmd.commands.filter((sub: any) => sub.action === 'update_task');
+    expect(updateCmds.length).toBeGreaterThan(0);
+  });
+
+  test('specialist shutdown batched into single parallel_batch', () => {
+    // We need to get to specialist_shutdown phase to test this.
+    // Drive to show_status, then manipulate state to simulate specialist_shutdown.
+    driveToShowStatus('feature');
+    const state = readState();
+
+    // Set up specialists and phase
+    state.phase = 'specialist_shutdown';
+    state.step = 0;
+    state.specialists = {
+      approved_specialists: [
+        { name: 'researcher-1', agentType: 'general-purpose', status: 'spawned' },
+        { name: 'researcher-2', agentType: 'general-purpose', status: 'spawned' },
+        { name: 'researcher-3', agentType: 'general-purpose', status: 'completed' },
+      ],
+    };
+    state.pending_command = null;
+    fs.writeFileSync(
+      path.join(ctx.testDir, '.vcp/task/pipeline-state.json'),
+      JSON.stringify(state, null, 2),
+    );
+
+    const cmd = next();
+    expect(cmd.action).toBe('parallel_batch');
+    // Should have 3 shutdown_teammate sub-commands (2 spawned + 1 completed)
+    expect(cmd.commands.length).toBe(3);
+    for (const sub of cmd.commands) {
+      expect(sub.action).toBe('shutdown_teammate');
+    }
+    const recipients = cmd.commands.map((s: any) => s.recipient).sort();
+    expect(recipients).toEqual(['researcher-1', 'researcher-2', 'researcher-3']);
   });
 });
 

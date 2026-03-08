@@ -77,27 +77,30 @@ export function driveToShowStatus(pipeline: 'feature' | 'bugfix' = 'feature'): a
   cmd = next();
   expect(cmd.action).toBe('list_tasks');
 
-  // list_tasks → first create_task
+  // list_tasks → parallel_batch (create_task×N)
   report(cmd.command_id, { tasks: [] });
   cmd = next();
-  expect(cmd.action).toBe('create_task');
+  expect(cmd.action).toBe('parallel_batch');
 
-  // Create all tasks
+  // Build batch_results from sub-commands, assigning task IDs
+  const createBatchResults: Record<string, { ok: boolean; taskId: string }> = {};
   let taskNum = 1;
-  while (cmd.action === 'create_task') {
-    report(cmd.command_id, { taskId: `task-${taskNum}` });
-    cmd = next();
+  for (const subCmd of cmd.commands) {
+    createBatchResults[subCmd.command_id] = { ok: true, taskId: `task-${taskNum}` };
     taskNum++;
-    if (taskNum > 25) throw new Error('Too many create_task commands');
   }
+  report(cmd.command_id, { batch_results: createBatchResults });
+  cmd = next();
 
-  // Wire dependencies
-  let wireCount = 0;
-  while (cmd.action === 'update_task' || cmd.action === 'noop') {
-    report(cmd.command_id);
+  // parallel_batch (update_task×M for deps) or show_status (if no deps)
+  if (cmd.action === 'parallel_batch') {
+    // Dependency wiring batch — report success
+    const depBatchResults: Record<string, { ok: boolean }> = {};
+    for (const subCmd of cmd.commands) {
+      depBatchResults[subCmd.command_id] = { ok: true };
+    }
+    report(cmd.command_id, { batch_results: depBatchResults });
     cmd = next();
-    wireCount++;
-    if (wireCount > 35) throw new Error('Too many dependency wiring steps');
   }
 
   // Should be show_status

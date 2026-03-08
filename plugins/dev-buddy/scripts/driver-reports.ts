@@ -147,16 +147,7 @@ function processReport(
       break;
 
     case 'create_task': {
-      // Store task ID in the current stage
-      if (state.phase === 'task_chain_creation') {
-        const stageIndex = state.step;
-        if (stageIndex >= 0 && stageIndex < state.stages.length && report.taskId) {
-          state.stages[stageIndex].task_id = report.taskId;
-          // Sync external hook contract so pipeline-tasks.json has real task IDs
-          writePipelineTasks(cwd, buildPipelineTasksJson(state, loadPipelineConfig()));
-        }
-        state.step++;
-      }
+      // Task chain creation is now batched via parallel_batch — see that handler.
       // Fix/re-review task creation in main loop dispatch (steps 10-11)
       if (state.phase === 'main_loop' && state.current_dispatch_index !== null && report.taskId) {
         if (state.dispatch_step === 11) {
@@ -395,13 +386,28 @@ function processReport(
 
       if (report.batch_results) {
         for (const [cmdId, result] of Object.entries(report.batch_results as Record<string, CommandReport>)) {
-          // Route parallel task creation results
-          if (result.taskId && state.phase === 'task_chain_creation') {
-            const stageIndex = state.step;
-            if (stageIndex >= 0 && stageIndex < state.stages.length) {
-              state.stages[stageIndex].task_id = result.taskId;
+          // Route batched task creation results via deterministic cmd_id → stage mapping
+          if (state.phase === 'task_chain_creation' && state.batch_cmd_to_stage) {
+            const stageIdx = state.batch_cmd_to_stage[cmdId];
+            if (stageIdx !== undefined && stageIdx < state.stages.length) {
+              if (result.ok === false) {
+                state.stages[stageIdx].status = 'failed';
+              } else if (result.taskId) {
+                state.stages[stageIdx].task_id = result.taskId;
+              }
             }
-            state.step++;
+          }
+
+          // Log failed dependency wiring sub-commands
+          if (state.phase === 'task_chain_dependencies' && state.batch_cmd_to_stage && result.ok === false) {
+            const stageIdx = state.batch_cmd_to_stage[cmdId];
+            if (stageIdx !== undefined) {
+              console.error(JSON.stringify({
+                warning: `Batch update_task failed for stage ${stageIdx}`,
+                command_id: cmdId,
+                error: result.error || 'unknown',
+              }));
+            }
           }
 
           // Route phased review read_file verdict results (multi-reviewer batch)
@@ -469,6 +475,33 @@ function processReport(
             }
           }
         }
+      }
+
+      // Post-iteration: batch task chain creation phase transition
+      if (state.phase === 'task_chain_creation' && state.batch_cmd_to_stage) {
+        // Validate: log warning for any expected cmd_ids missing from results
+        const resultKeys = report.batch_results ? Object.keys(report.batch_results) : [];
+        for (const [cmdId, stageIdx] of Object.entries(state.batch_cmd_to_stage)) {
+          if (!resultKeys.includes(cmdId)) {
+            console.error(JSON.stringify({
+              warning: `Batch create_task missing result for stage ${stageIdx}`,
+              command_id: cmdId,
+            }));
+          }
+        }
+        // Sync pipeline-tasks.json once (not per-task)
+        writePipelineTasks(cwd, buildPipelineTasksJson(state, loadPipelineConfig()));
+        // Advance step and transition phase
+        state.step = state.stages.length;
+        state.phase = 'task_chain_dependencies';
+        state.step = 0;
+        state.batch_cmd_to_stage = undefined;
+      }
+
+      // Post-iteration: batch task chain dependencies phase transition
+      if (state.phase === 'task_chain_dependencies' && state.batch_cmd_to_stage) {
+        state.step = state.stages.length;
+        state.batch_cmd_to_stage = undefined;
       }
 
       // RCA disagreement detection: compare collected root causes
