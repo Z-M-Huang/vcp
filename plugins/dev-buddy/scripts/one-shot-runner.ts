@@ -169,11 +169,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
+  // Default --cwd to process.cwd() when not provided or empty
+  // (CLAUDE_PROJECT_DIR may be unset in some environments)
+  if (!result.cwd) result.cwd = process.cwd();
+
   const missing: string[] = [];
   if (!result.type) missing.push('--type');
   if (!result.preset) missing.push('--preset');
   if (!result.model) missing.push('--model');
-  if (!result.cwd) missing.push('--cwd');
   if (!result.task && !result.taskFromStdin) missing.push('--task or --task-stdin');
 
   if (missing.length > 0) {

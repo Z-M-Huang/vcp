@@ -41,9 +41,12 @@ function devBuddyApp() {
     formTesting: false,
     formTestResults: null,
 
+    // Chatroom config
+    chatroomConfig: null,
+
     // UI state
-    loading: { presets: false, pipeline: false },
-    saving: { pipeline: false },
+    loading: { presets: false, pipeline: false, chatroom: false },
+    saving: { pipeline: false, chatroom: false },
     errorMsg: '',
     successMsg: '',
     showAddPreset: false,
@@ -934,6 +937,135 @@ function devBuddyApp() {
       } finally {
         this.saving.pipeline = false;
       }
+    },
+
+    // ============================================================
+    // Chatroom Config
+    // ============================================================
+
+    /**
+     * Load chatroom config from REST API.
+     */
+    async loadChatroomConfig() {
+      this.loading.chatroom = true;
+      try {
+        const [configResp, presetsResp] = await Promise.all([
+          fetch('/api/chatroom-config'),
+          this.presets && Object.keys(this.presets).length > 0
+            ? Promise.resolve(null)
+            : fetch('/api/presets'),
+        ]);
+
+        if (!configResp.ok) {
+          const err = await configResp.json().catch(() => ({ error: { message: 'Request failed' } }));
+          this.showError(err.error?.message || 'Failed to load chatroom config');
+          return;
+        }
+
+        const data = await configResp.json();
+
+        if (presetsResp) {
+          const presetsData = await presetsResp.json();
+          this.presets = presetsData.presets || {};
+        }
+
+        // Pre-load model options for existing participant presets
+        const participantPresets = new Set(
+          (data.config.participants || []).map(p => p.preset).filter(Boolean)
+        );
+        await Promise.allSettled([...participantPresets].map(p => this._fetchModelOptions(p)));
+
+        this.chatroomConfig = data.config;
+      } catch (e) {
+        this.showError('Network error loading chatroom config');
+      } finally {
+        this.loading.chatroom = false;
+      }
+    },
+
+    /**
+     * Save chatroom config via REST API.
+     */
+    async saveChatroomConfig() {
+      this.saving.chatroom = true;
+      try {
+        const payload = {
+          participants: this.chatroomConfig.participants,
+          max_rounds: this.chatroomConfig.max_rounds,
+        };
+
+        const resp = await fetch('/api/chatroom-config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: { message: 'Request failed' } }));
+          this.showError(err.error?.message || 'Failed to save chatroom config');
+          return;
+        }
+        this.showSuccess('Chatroom config saved');
+      } catch (e) {
+        this.showError('Network error saving chatroom config');
+      } finally {
+        this.saving.chatroom = false;
+      }
+    },
+
+    /**
+     * Reset chatroom config to factory defaults.
+     */
+    async resetChatroomToDefault() {
+      if (!confirm('Reset chatroom config to factory defaults? This will remove all participants.')) return;
+
+      try {
+        const resp = await fetch('/api/chatroom-config/defaults');
+        if (!resp.ok) {
+          this.showError('Failed to load factory default chatroom config');
+          return;
+        }
+        const data = await resp.json();
+        this.chatroomConfig = data.config;
+        this.showSuccess('Chatroom config reset to factory default');
+      } catch (e) {
+        this.showError('Network error resetting chatroom config');
+      }
+    },
+
+    /**
+     * Add a new participant to the chatroom config.
+     */
+    addParticipant() {
+      if (!this.chatroomConfig) return;
+      if (this.chatroomConfig.participants.length >= 10) return;
+
+      const firstPreset = Object.keys(this.presets)[0] || '';
+      this.chatroomConfig.participants.push({ preset: firstPreset, model: '' });
+
+      // Pre-fetch model options for the default preset
+      if (firstPreset) {
+        this._fetchModelOptions(firstPreset);
+      }
+    },
+
+    /**
+     * Remove a participant by index.
+     */
+    removeParticipant(index) {
+      if (!this.chatroomConfig) return;
+      this.chatroomConfig.participants.splice(index, 1);
+    },
+
+    /**
+     * Handle preset change on a chatroom participant.
+     */
+    async onParticipantProviderChange(index) {
+      if (!this.chatroomConfig) return;
+      const participant = this.chatroomConfig.participants[index];
+      if (!participant) return;
+
+      participant.model = '';
+      await this._fetchModelOptions(participant.preset);
     },
   };
 }

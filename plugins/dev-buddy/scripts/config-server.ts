@@ -21,6 +21,8 @@ import path from 'path';
 import os from 'os';
 import { readPresets, writePresets, validatePreset, maskApiKey, maskPresetKeys, CONFIG_DIR } from './preset-utils.ts';
 import { loadPipelineConfig, fetchWithTimeout, atomicWriteFile, validateConfig, DEFAULT_CONFIG } from './pipeline-config.ts';
+import { loadChatroomConfig, saveChatroomConfig, validateChatroomConfig, DEFAULT_CHATROOM_CONFIG } from './chatroom-config.ts';
+import type { ChatroomConfig } from '../types/chatroom.ts';
 import type { Preset } from '../types/presets.ts';
 import { STAGE_DEFINITIONS } from '../types/stage-definitions.ts';
 import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
@@ -662,6 +664,23 @@ async function handleApiRequest(
       }
     }
 
+    // --- Chatroom config routes ---
+    // NOTE: /api/chatroom-config/defaults must be matched before /api/chatroom-config
+    if (pathname === '/api/chatroom-config/defaults') {
+      if (req.method === 'GET') {
+        return handleGetChatroomConfigDefaults(corsHeaders);
+      }
+    }
+
+    if (pathname === '/api/chatroom-config') {
+      if (req.method === 'GET') {
+        return handleGetChatroomConfig(corsHeaders);
+      }
+      if (req.method === 'PUT') {
+        return await handlePutChatroomConfig(req, corsHeaders);
+      }
+    }
+
     // --- Preset models ---
     if (pathname.startsWith('/api/preset-models/')) {
       const presetName = decodeURIComponent(pathname.slice('/api/preset-models/'.length));
@@ -1020,6 +1039,28 @@ async function handlePutPipelineConfig(req: Request, corsHeaders: Record<string,
   const pipelineConfigPath = path.join(os.homedir(), '.vcp', 'dev-buddy.json');
   atomicWriteFile(pipelineConfigPath, config);
 
+  return jsonResponse({ saved: true }, 200, corsHeaders);
+}
+
+// --- Chatroom config handlers ---
+
+function handleGetChatroomConfig(corsHeaders: Record<string, string>): Response {
+  const config = loadChatroomConfig();
+  return jsonResponse({ config }, 200, corsHeaders);
+}
+
+function handleGetChatroomConfigDefaults(corsHeaders: Record<string, string>): Response {
+  return jsonResponse({ config: DEFAULT_CHATROOM_CONFIG }, 200, corsHeaders);
+}
+
+async function handlePutChatroomConfig(req: Request, corsHeaders: Record<string, string>): Promise<Response> {
+  const body = await parseJsonBody(req);
+  const presets = readPresets();
+  const error = validateChatroomConfig(body, presets);
+  if (error) {
+    return jsonResponse({ error: { code: 'INVALID_CONFIG', message: error } }, 400, corsHeaders);
+  }
+  saveChatroomConfig(body as unknown as ChatroomConfig);
   return jsonResponse({ saved: true }, 200, corsHeaders);
 }
 

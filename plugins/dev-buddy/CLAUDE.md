@@ -699,6 +699,9 @@ The config server (`scripts/config-server.ts`) exposes these REST endpoints:
 | GET | `/api/pipeline-config` | Get current pipeline config |
 | PUT | `/api/pipeline-config` | Save pipeline config (accepts `phased_reviews` on implementation stages, `max_phased_iterations` at top level) |
 | GET | `/api/preset-models/:name` | Model list for a preset (subscription: sonnet/opus/haiku; api/cli: from preset) |
+| GET | `/api/chatroom-config` | Get current chatroom config |
+| PUT | `/api/chatroom-config` | Save chatroom config (validates participants against presets) |
+| GET | `/api/chatroom-config/defaults` | Return factory default chatroom config |
 ---
 
 ## API Task Runner Architecture

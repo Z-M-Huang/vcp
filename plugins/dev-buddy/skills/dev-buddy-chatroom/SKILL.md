@@ -11,7 +11,7 @@ Fan out a topic to ALL configured AIs + Claude simultaneously, synthesize the be
 
 **Usage:** `/dev-buddy-chatroom <topic or question>`
 
-**Config:** `~/.vcp/dev-buddy-chatroom.json` — edit manually.
+**Config:** `~/.vcp/dev-buddy-chatroom.json` — use `/dev-buddy-config` web portal or edit manually.
 
 ---
 
@@ -286,7 +286,7 @@ rm -f "{TMPDIR}/.vcp/oneshot/cr-{SESSION_ID}-"*
 
 2. **CLI output noise:** CLI tools may emit banners, ANSI sequences, progress output, or debug text alongside the actual response. The SKILL strips ANSI and searches for consensus keywords anywhere in the response, but noisy output may still confuse synthesis.
 
-3. **No web portal integration:** Configuration is manual via `~/.vcp/dev-buddy-chatroom.json`. Web portal support is a follow-up.
+3. **Web portal:** Configuration is available via `/dev-buddy-config` web portal (Chatroom tab) or manual editing of `~/.vcp/dev-buddy-chatroom.json`.
 
 ---
 
