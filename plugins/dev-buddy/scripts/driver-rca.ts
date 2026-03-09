@@ -12,6 +12,7 @@ import {
   writeTempFile,
   emitCommand,
 } from './driver-state-io.ts';
+import { driverLog } from './vcp-logger.ts';
 
 // ─── RCA Consolidation (Bugfix Pipeline) ────────────────────────────────────
 
@@ -32,6 +33,7 @@ export function checkRcaConsolidationNeeded(state: PipelineState, cwd: string): 
 }
 
 export function handleRcaConsolidation(state: PipelineState, cwd: string): PipelineCommand {
+  driverLog('rca-consolidation', 'info', `step=${state.step}`);
   if (!state.rca_consolidation) {
     const rcaStages = state.stages.filter(s => s.type === 'rca');
     state.rca_consolidation = {
@@ -65,6 +67,7 @@ export function handleRcaConsolidation(state: PipelineState, cwd: string): Pipel
     case 1: {
       // RCA outputs read — check for disagreement.
       if (state.rca_consolidation!.disagreement_detected && !state.rca_consolidation!.chosen_diagnosis_source) {
+        driverLog('rca-disagreement', 'warn', 'RCA analyses disagree — asking user');
         state.step = 2;
         return emitCommand(state, {
           action: 'ask_user',
@@ -105,6 +108,7 @@ export function handleRcaConsolidation(state: PipelineState, cwd: string): Pipel
         });
       }
 
+      driverLog('rca-complete', 'info', 'Artifacts verified — consolidation done');
       state.rca_consolidation!.consolidation_complete = true;
       state.rca_consolidation!.artifacts_written = true;
       state.phase = 'main_loop';

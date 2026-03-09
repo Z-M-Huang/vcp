@@ -14,7 +14,7 @@
  *
  * Logic is split across focused modules in scripts/:
  *   driver-state-io.ts    — constants, paths, state I/O, emitCommand, derivation helpers
- *   driver-phases.ts      — init, resume, task chain, requirements, specialist shutdown
+ *   driver-phases.ts      — init, resume, requirements, specialist shutdown
  *   driver-main-loop.ts   — main loop dispatch, stage dispatch, parallel groups
  *   driver-rca.ts         — RCA consolidation (bugfix pipeline)
  *   driver-phased-impl.ts — phased implementation sub-state machine
@@ -48,11 +48,11 @@ import {
 import {
   handleInitPhase,
   handleResumePhase,
-  handleTaskChainCreation,
-  handleTaskChainDependencies,
   handleRequirementsPhase,
   handleSpecialistShutdown,
 } from './driver-phases.ts';
+
+import { buildProgressMessage } from './driver-progress.ts';
 
 import {
   handleMainLoop,
@@ -71,6 +71,8 @@ import {
   handleReport,
 } from './driver-reports.ts';
 
+import { isDebugEnabledSync, initDriverLog, driverLog } from './vcp-logger.ts';
+
 // ─── INIT Command ───────────────────────────────────────────────────────────
 
 function handleInit(
@@ -88,6 +90,7 @@ function handleInit(
   // Check for existing state (resume detection)
   const existingTasks = readPipelineTasks(cwd);
   if (existingTasks) {
+    driverLog('init-resume-detect', 'info', 'Existing pipeline found — asking user');
     // Existing pipeline detected — return ask_user for resume decision
     const state = createInitialState(pipelineType, teamName, configHash);
     if (description) state.description = description;
@@ -114,6 +117,7 @@ function handleInit(
   }
 
   // Fresh start
+  driverLog('init-fresh', 'info', `pipeline=${pipelineType} team=${teamName}`);
   const state = createInitialState(pipelineType, teamName, configHash);
   if (description) state.description = description;
   const resolved = resolveStages(pipeline, config);
@@ -126,7 +130,6 @@ function handleInit(
     model: r.model,
     providerType: r.providerType,
     output_file: r.outputFile,
-    task_id: null,
     parallel_group_id: r.parallelGroupId,
     current_version: 1,
     status: 'pending' as const,
@@ -138,14 +141,14 @@ function handleInit(
   fs.mkdirSync(taskDir, { recursive: true });
   writePipelineTasks(cwd, buildPipelineTasksJson(state, config));
 
-  // Transition to team creation phase
+  // Transition directly to init phase
   state.phase = 'init';
-  state.step = 1;
+  state.step = 0;
 
-  // First command: create the pipeline team
+  // First command: show progress
   const cmd = emitCommand(state, {
-    action: 'create_team',
-    team_name: teamName,
+    action: 'show_status',
+    message: buildProgressMessage(state),
   });
 
   // Write state AFTER emitCommand so pending_command is persisted
@@ -172,6 +175,7 @@ function handleNext(cwd: string): PipelineCommand {
 
   // If there's an unacknowledged pending command, replay it
   if (state.pending_command) {
+    driverLog('replay', 'info', `action=${state.pending_command.action} cmd=${state.pending_command.command_id}`);
     // Update state version on the replayed command
     state.pending_command.state_version = state.state_version;
     writeState(cwd, state);
@@ -180,6 +184,7 @@ function handleNext(cwd: string): PipelineCommand {
 
   // Check terminal state
   if (state.terminal_state) {
+    driverLog('terminal', 'info', `state=${state.terminal_state} reason=${state.terminal_reason}`);
     return emitAndSave(state, cwd, {
       action: 'done',
       summary: state.terminal_reason || 'Pipeline completed.',
@@ -190,6 +195,7 @@ function handleNext(cwd: string): PipelineCommand {
 
   // Check paused state
   if (state.paused) {
+    driverLog('paused', 'info', state.pause_reason || 'unknown');
     return emitAndSave(state, cwd, {
       action: 'pause',
       reason: state.pause_reason || 'Pipeline is paused.',
@@ -212,10 +218,6 @@ function routeByPhase(state: PipelineState, cwd: string): PipelineCommand {
       return handleInitPhase(state, cwd);
     case 'resume_detection':
       return handleResumePhase(state, cwd);
-    case 'task_chain_creation':
-      return handleTaskChainCreation(state, cwd);
-    case 'task_chain_dependencies':
-      return handleTaskChainDependencies(state, cwd, routeByPhase);
     case 'requirements':
     case 'requirements_team_pending':
     case 'requirements_team_exploring':
@@ -268,7 +270,6 @@ function handleStatus(cwd: string): void {
     provider: s.provider,
     model: s.model,
     output_file: s.output_file,
-    task_id: s.task_id,
   }));
 
   console.log(JSON.stringify({
@@ -306,6 +307,10 @@ if (import.meta.main) {
     cwd = args[cwdIdx + 1];
   }
 
+  // Initialize logging
+  const debugEnabled = isDebugEnabledSync();
+  initDriverLog(cwd, debugEnabled);
+
   // Parse --pipeline
   let pipelineType: 'feature' | 'bugfix' = 'feature';
   const pipelineIdx = args.indexOf('--pipeline');
@@ -341,12 +346,14 @@ if (import.meta.main) {
   try {
     switch (command) {
       case 'init': {
+        driverLog('cli-init', 'info', `pipeline=${pipelineType}`);
         const cmd = handleInit(pipelineType, cwd, description);
         console.log(JSON.stringify(cmd));
         break;
       }
 
       case 'next': {
+        driverLog('cli-next', 'info');
         const cmd = handleNext(cwd);
         console.log(JSON.stringify(cmd));
         break;
@@ -366,6 +373,7 @@ if (import.meta.main) {
           report = JSON.parse(stdin) as CommandReport;
         }
         report.command_id = commandId;
+        driverLog('cli-report', 'info', `id=${commandId}`);
         const result = handleReport(cwd, commandId, report);
         if (result === 'mismatch') {
           // handleReport already wrote error to stderr
@@ -379,10 +387,12 @@ if (import.meta.main) {
       }
 
       case 'status':
+        driverLog('cli-status', 'info');
         handleStatus(cwd);
         break;
 
       case 'reset':
+        driverLog('cli-reset', 'info');
         resetPipeline(cwd);
         console.log(JSON.stringify({ ok: true, message: 'Pipeline reset complete.' }));
         break;

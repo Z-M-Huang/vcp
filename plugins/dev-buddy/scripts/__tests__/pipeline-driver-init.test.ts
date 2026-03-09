@@ -13,10 +13,10 @@ describe('pipeline-driver init', () => {
   beforeEach(setup);
   afterEach(teardown);
 
-  test('fresh init emits create_team with correct team name', () => {
+  test('fresh init emits show_status with progress', () => {
     const cmd = run(`init --pipeline feature --cwd "${ctx.testDir}"`);
-    expect(cmd.action).toBe('create_team');
-    expect(cmd.team_name).toMatch(/^pipeline-/);
+    expect(cmd.action).toBe('show_status');
+    expect(cmd.message).toBeTruthy();
     expect(cmd.command_id).toMatch(/^cmd-/);
     expect(cmd.state_version).toBe(0);
   });
@@ -26,7 +26,7 @@ describe('pipeline-driver init', () => {
     const state = readState();
     expect(state.pipeline).toBe('feature');
     expect(state.phase).toBe('init');
-    expect(state.step).toBe(1);
+    expect(state.step).toBe(0);
     expect(state.stages.length).toBeGreaterThan(0);
   });
 
@@ -44,12 +44,12 @@ describe('pipeline-driver init', () => {
     const state = readState();
     expect(state.pending_command).not.toBeNull();
     expect(state.pending_command.command_id).toBe(cmd.command_id);
-    expect(state.pending_command.action).toBe('create_team');
+    expect(state.pending_command.action).toBe('show_status');
   });
 
   test('bugfix init creates bugfix pipeline', () => {
     const cmd = run(`init --pipeline bugfix --cwd "${ctx.testDir}"`);
-    expect(cmd.action).toBe('create_team');
+    expect(cmd.action).toBe('show_status');
     const state = readState();
     expect(state.pipeline).toBe('bugfix');
   });
@@ -141,6 +141,7 @@ describe('pipeline-driver status', () => {
 
   test('status with no pipeline returns idle', () => {
     fs.mkdirSync(path.join(ctx.testDir, '.vcp/task'), { recursive: true });
+    // All args are test constants — execSync is safe here
     const output = execSync(
       `bun "${DRIVER}" status --cwd "${ctx.testDir}"`,
       { encoding: 'utf-8', cwd: EXEC_CWD, timeout: 15000 },
@@ -151,6 +152,7 @@ describe('pipeline-driver status', () => {
 
   test('status shows current phase and stages', () => {
     run(`init --pipeline feature --cwd "${ctx.testDir}"`);
+    // All args are test constants — execSync is safe here
     const output = execSync(
       `bun "${DRIVER}" status --cwd "${ctx.testDir}"`,
       { encoding: 'utf-8', cwd: EXEC_CWD, timeout: 15000 },
@@ -177,17 +179,7 @@ describe('pipeline-driver state version', () => {
     for (let i = 0; i < 5; i++) {
       const cmd = next();
       versions.push(cmd.state_version);
-      let extra: Record<string, any> = {};
-      if (cmd.action === 'list_tasks') {
-        extra = { tasks: [] };
-      } else if (cmd.action === 'parallel_batch' && cmd.commands) {
-        const batchResults: Record<string, { ok: boolean; taskId?: string }> = {};
-        cmd.commands.forEach((sub: any, idx: number) => {
-          batchResults[sub.command_id] = { ok: true, taskId: `task-${idx + 1}` };
-        });
-        extra = { batch_results: batchResults };
-      }
-      report(cmd.command_id, extra);
+      report(cmd.command_id);
     }
 
     for (let i = 1; i < versions.length; i++) {
@@ -203,17 +195,20 @@ describe('pipeline-driver team name', () => {
   afterEach(teardown);
 
   test('team name is deterministic for same path', () => {
-    const cmd1 = run(`init --pipeline feature --cwd "${ctx.testDir}"`);
-    const name1 = cmd1.team_name;
+    run(`init --pipeline feature --cwd "${ctx.testDir}"`);
+    const state1 = readState();
+    const name1 = state1.team_name;
 
     run(`reset --cwd "${ctx.testDir}"`);
-    const cmd2 = run(`init --pipeline feature --cwd "${ctx.testDir}"`);
-    expect(cmd2.team_name).toBe(name1);
+    run(`init --pipeline feature --cwd "${ctx.testDir}"`);
+    const state2 = readState();
+    expect(state2.team_name).toBe(name1);
   });
 
   test('team name format: pipeline-{basename}-{hash}', () => {
-    const cmd = run(`init --pipeline feature --cwd "${ctx.testDir}"`);
-    expect(cmd.team_name).toMatch(/^pipeline-[a-z0-9-]+-[a-f0-9]{6}$/);
+    run(`init --pipeline feature --cwd "${ctx.testDir}"`);
+    const state = readState();
+    expect(state.team_name).toMatch(/^pipeline-[a-z0-9-]+-[a-f0-9]{6}$/);
   });
 });
 
@@ -230,7 +225,7 @@ describe('pipeline-driver command history', () => {
     expect(state.command_history.length).toBeGreaterThan(0);
     const entry = state.command_history[0];
     expect(entry.command_id).toBe(cmd.command_id);
-    expect(entry.action).toBe('create_team');
+    expect(entry.action).toBe('show_status');
     expect(entry.acknowledged).toBe(false);
   });
 
@@ -303,7 +298,7 @@ describe('pipeline-driver resume detection', () => {
   });
 
   test('resume rebuilds stages from pipeline-tasks.json', () => {
-    // Drive to show_status (all tasks created + deps wired)
+    // Drive to show_status
     const showStatus = driveToShowStatus('bugfix');
     report(showStatus.command_id);
 

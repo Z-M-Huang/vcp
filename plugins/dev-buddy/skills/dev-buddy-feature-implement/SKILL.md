@@ -2,7 +2,7 @@
 name: dev-buddy-feature-implement
 description: Dev Buddy multi-AI pipeline. Plan -> Review -> Implement (loop until reviews approve). Configurable pipeline with Codex final gate.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete, SendMessage
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion, Skill, TeamCreate, TeamDelete, SendMessage
 ---
 
 # Multi-AI Feature Pipeline — Driver-Based Executor
@@ -44,7 +44,10 @@ Parse the JSON output. This is your first command.
 
 ## Step 2: Execute-Report Loop
 
-Repeat until `action === "done"`:
+Repeat until the driver reaches a terminal outcome:
+
+- If `action === "done"` and `terminal_state === "completed"`, the pipeline succeeded. Show `summary` and exit.
+- If `action === "done"` and `terminal_state !== "completed"`, the pipeline **failed**. Show the `summary` and `terminal_reason` as an error and **stop**. Do NOT continue with manual implementation or ad-hoc recovery outside the pipeline driver.
 
 ### 2a. Execute the command
 
@@ -54,10 +57,6 @@ Map `action` to the corresponding tool call:
 |--------|------|-----------|
 | `create_team` | TeamCreate | `team_name` |
 | `delete_team` | TeamDelete | `team_name` |
-| `create_task` | TaskCreate | `subject`, `description`, `activeForm` |
-| `update_task` | TaskUpdate | `taskId`, `status`, `description`, `activeForm`, `addBlockedBy` |
-| `list_tasks` | TaskList | — |
-| `get_task` | TaskGet | `taskId` |
 | `spawn_agent` | Task | `subagent_type`, `name`, `model`, `prompt_file` (read file for prompt) |
 | `spawn_teammate` | Task | `subagent_type`, `name`, `team_name`, `model`, `prompt_file` |
 | `spawn_background` | Bash | `command` with `run_in_background: true`, `timeout_ms` |
@@ -66,13 +65,13 @@ Map `action` to the corresponding tool call:
 | `receive_messages` | *(automatic)* | Messages are auto-delivered; report any received |
 | `shutdown_teammate` | SendMessage | type: `shutdown_request`, `recipient` |
 | `ask_user` | AskUserQuestion | `question`, `options`, `context` |
-| `show_status` | *(display)* | Show `message` to user |
+| `show_status` | *(display)* | Show `message` to user. If `progress` field present, display it. |
 | `read_file` | Read | `path` |
 | `write_file` | Write | `path`, `content_file` (read for content) |
 | `write_multi_file` | Write (multiple) | `files[]`, `manifest_path` + `manifest_content_file` written LAST |
 | `parallel_batch` | *(multiple)* | Execute all `commands[]` in parallel |
-| `noop` | *(skip)* | Driver handled internally; proceed to report |
-| `done` | *(exit loop)* | Pipeline complete. Show `summary` to user. |
+| `noop` | *(skip)* | Driver handled internally; if `progress` field present, display it. Proceed to report. |
+| `done` | *(terminal)* | If `terminal_state === "completed"`, pipeline succeeded. Otherwise pipeline **failed** — show error and stop. Do NOT implement manually. |
 | `escalate` | AskUserQuestion | Show `error` + `context`, present `recovery_options` |
 | `pause` | *(stop)* | Show `reason`. Wait for user to resume. |
 
@@ -94,13 +93,11 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-driver.ts" report \
 {
   "command_id": "<must match>",
   "ok": true,
-  "taskId": "<from TaskCreate>",
   "task_id": "<from Bash run_in_background>",
   "answer": "<from AskUserQuestion>",
   "content": "<from Read file>",
-  "tasks": [],
   "messages": [{"from": "...", "summary": "..."}],
-  "batch_results": {"<sub_cmd_id>": {"ok": true, "taskId": "...", "task_id": "...", "content": "..."}},
+  "batch_results": {"<sub_cmd_id>": {"ok": true, "task_id": "...", "content": "..."}},
   "interrupted": false,
   "exit_code": 0,
   "still_running": false,
@@ -123,6 +120,10 @@ Parse the JSON output. Go to 2a.
 
 ## Action-Specific Notes
 
+### Progress Display
+
+If the command has a `progress` field, display it to the user **before** executing the command's action. This provides real-time pipeline status without extra round-trips.
+
 ### spawn_agent / spawn_teammate
 
 Read the prompt from `prompt_file` path. Pass to Task tool:
@@ -131,7 +132,11 @@ Read the prompt from `prompt_file` path. Pass to Task tool:
 Task(subagent_type: cmd.subagent_type, name: cmd.name, model: cmd.model, prompt: <file_content>)
 ```
 
-**CRITICAL: `spawn_agent` MUST run in foreground (blocking) mode.** Do NOT set `run_in_background: true`. The agent may use AskUserQuestion to interact with the user — this only works when the agent blocks the main thread. Wait for the agent to fully complete before reporting.
+**CRITICAL: `spawn_agent` MUST run as a foreground blocking Task.** Do NOT set `run_in_background`.
+The agent may use AskUserQuestion to interact with the user — this only works when the Task
+blocks the main thread. **WAIT for the Task to fully complete and return its result.** Only
+THEN file the report and call `next`. If you report before the Task returns, the driver will
+enter a terminal error state because the output file doesn't exist yet.
 
 For `spawn_teammate`, also pass `team_name`. Teammates run in the background as part of the team.
 
@@ -139,7 +144,7 @@ For `cli` provider types (e.g., Codex): use `subagent_type: "dev-buddy:cli-execu
 
 ### spawn_background
 
-Run the command with `Bash(command: cmd.command, run_in_background: true, timeout: cmd.timeout_ms)`. Report back the `task_id` from the Bash result.
+If `prompt_file` is present, pipe it to stdin: `Bash(command: "cat '<prompt_file>' | <cmd.command>", run_in_background: true, timeout: cmd.timeout_ms)`. Otherwise run the command directly: `Bash(command: cmd.command, run_in_background: true, timeout: cmd.timeout_ms)`. Report back the `task_id` from the Bash result.
 
 ### wait_for_task
 

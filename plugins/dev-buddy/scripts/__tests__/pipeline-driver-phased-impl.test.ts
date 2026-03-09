@@ -22,10 +22,10 @@ describe('pipeline-driver phased implementation', () => {
     fs.mkdirSync(taskDir, { recursive: true });
 
     const stages = [
-      { index: 0, type: 'planning', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan/manifest.json', task_id: 'task-1', parallel_group_id: null, current_version: 1, status: 'completed', iteration_count: 0 },
-      { index: 1, type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json', task_id: 'task-2', parallel_group_id: null, current_version: 1, status: 'completed', iteration_count: 0 },
-      { index: 2, type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'impl-result.json', task_id: 'task-3', parallel_group_id: null, current_version: 1, status: 'in_progress', iteration_count: 0 },
-      { index: 3, type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'code-review-anthropic-subscription-sonnet-3-v1.json', task_id: 'task-4', parallel_group_id: null, current_version: 1, status: 'pending', iteration_count: 0 },
+      { index: 0, type: 'planning', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan/manifest.json',  parallel_group_id: null, current_version: 1, status: 'completed', iteration_count: 0 },
+      { index: 1, type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json',  parallel_group_id: null, current_version: 1, status: 'completed', iteration_count: 0 },
+      { index: 2, type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'impl-result.json',  parallel_group_id: null, current_version: 1, status: 'in_progress', iteration_count: 0 },
+      { index: 3, type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'code-review-anthropic-subscription-sonnet-3-v1.json',  parallel_group_id: null, current_version: 1, status: 'pending', iteration_count: 0 },
     ];
 
     const state = {
@@ -84,7 +84,6 @@ describe('pipeline-driver phased implementation', () => {
         model: s.model,
         providerType: s.providerType,
         output_file: s.output_file,
-        task_id: s.task_id,
         parallel_group_id: s.parallel_group_id,
         current_version: s.current_version,
       })),

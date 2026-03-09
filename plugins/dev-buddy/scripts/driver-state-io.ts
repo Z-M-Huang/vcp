@@ -22,6 +22,7 @@ import type {
   PipelineState,
   StageState,
 } from '../types/driver-state.ts';
+import { driverLog } from './vcp-logger.ts';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -177,6 +178,7 @@ export function readState(cwd: string): PipelineState | null {
 }
 
 export function writeState(cwd: string, state: PipelineState): void {
+  driverLog('write-state', 'info', `phase=${state.phase} step=${state.step} v=${state.state_version}`);
   atomicWriteFile(getTaskPath(cwd, PIPELINE_STATE_FILE), state);
 }
 
@@ -209,7 +211,6 @@ export function buildPipelineTasksJson(state: PipelineState, config: PipelineCon
       providerType: s.providerType,
       model: s.model,
       output_file: s.output_file,
-      task_id: s.task_id,
       parallel_group_id: s.parallel_group_id,
       current_version: s.current_version,
     })),
@@ -233,6 +234,7 @@ export function emitCommand(state: PipelineState, cmd: CommandPayload): Pipeline
     command_id: makeCommandId(),
     state_version: state.state_version,
   } as PipelineCommand;
+  driverLog('emit', 'info', `action=${command.action} cmd=${command.command_id} phase=${state.phase} step=${state.step}`);
   state.pending_command = command;
   state.command_history.push({
     command_id: command.command_id,

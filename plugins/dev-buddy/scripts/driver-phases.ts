@@ -1,5 +1,5 @@
 /**
- * Pipeline driver — phase handlers for init, resume, task chain, requirements, and specialist shutdown.
+ * Pipeline driver — phase handlers for init, resume, requirements, and specialist shutdown.
  *
  * Functions that need routeByPhase accept it as a PhaseRouter callback to avoid circular imports.
  */
@@ -9,17 +9,15 @@ import path from 'path';
 
 import type { StageType } from '../types/stage-definitions.ts';
 import type { PipelineCommand } from '../types/commands.ts';
-import { makeCommandId } from '../types/commands.ts';
+import { makeCommandId, REQ_STEP, DISPATCH_STEP } from '../types/commands.ts';
 import type { PipelineState } from '../types/driver-state.ts';
 import {
   getTaskPath,
   writeTempFile,
   readPipelineTasks,
   emitCommand,
-  deriveSubject,
-  deriveDescription,
-  buildResolvedStageInfo,
 } from './driver-state-io.ts';
+import { driverLog } from './vcp-logger.ts';
 
 /** Callback type for routeByPhase — avoids circular imports. */
 export type PhaseRouter = (state: PipelineState, cwd: string) => PipelineCommand;
@@ -27,33 +25,20 @@ export type PhaseRouter = (state: PipelineState, cwd: string) => PipelineCommand
 // ─── Phase: Init ────────────────────────────────────────────────────────────
 
 export function handleInitPhase(state: PipelineState, cwd: string): PipelineCommand {
-  switch (state.step) {
-    case 0:
-      // Need to create team first (happens on "start fresh" resume path)
-      state.step = 1;
-      return emitCommand(state, {
-        action: 'create_team',
-        team_name: state.team_name,
-      });
-
-    case 1:
-      // Team was just created, now verify task tools
-      state.step = 2;
-      return emitCommand(state, { action: 'list_tasks' });
-
-    case 2:
-      // Task tools verified, now create task chain
-      state.phase = 'task_chain_creation';
-      state.step = 0;
-      return handleTaskChainCreation(state, cwd);
-
-    default:
-      return emitCommand(state, {
-        action: 'escalate',
-        error: `Unexpected init step: ${state.step}`,
-        context: 'Init phase',
-      });
+  driverLog('phase-init', 'info', `step=${state.step}`);
+  // Init is a single-step transition to requirements or main_loop
+  if (state.pipeline === 'feature') {
+    driverLog('phase-transition', 'info', 'init → requirements');
+    state.phase = 'requirements';
+  } else {
+    driverLog('phase-transition', 'info', 'init → main_loop');
+    state.phase = 'main_loop';
   }
+  state.step = 0;
+  return emitCommand(state, {
+    action: 'noop',
+    message: 'Init complete — transitioning to next phase.',
+  });
 }
 
 // ─── Phase: Resume Detection ────────────────────────────────────────────────
@@ -107,7 +92,7 @@ export function rebuildStateFromTasks(state: PipelineState, cwd: string): void {
     state.description = tasksData.description;
   }
 
-  // Rebuild stages from tasks file
+  // Rebuild stages from tasks file (task_id ignored — no longer tracked)
   state.stages = stages.map((s, i) => ({
     index: i,
     type: String(s.type ?? '') as StageType,
@@ -115,7 +100,6 @@ export function rebuildStateFromTasks(state: PipelineState, cwd: string): void {
     model: String(s.model ?? ''),
     providerType: (String(s.providerType ?? 'subscription')) as 'subscription' | 'api' | 'cli',
     output_file: String(s.output_file ?? ''),
-    task_id: typeof s.task_id === 'string' ? s.task_id : null,
     parallel_group_id: typeof s.parallel_group_id === 'number' ? s.parallel_group_id : null,
     current_version: typeof s.current_version === 'number' ? s.current_version : 1,
     status: detectStageStatus(s, cwd) as 'pending' | 'in_progress' | 'completed' | 'needs_changes' | 'rejected' | 'failed',
@@ -123,24 +107,20 @@ export function rebuildStateFromTasks(state: PipelineState, cwd: string): void {
   }));
 
   // Find first non-completed stage to set dispatch index, mapping dispatch_step by status.
-  // Only set current_dispatch_index for stages that are mid-dispatch (in_progress/needs_changes/
-  // rejected/failed). Pending stages are left for findNextActionableStage → dispatchStage,
-  // which correctly emits update_task(in_progress) and updates pipeline-tasks.json first.
   const nextNonComplete = state.stages.findIndex(s => s.status !== 'completed');
   if (nextNonComplete >= 0) {
     const resumeStage = state.stages[nextNonComplete];
     if (resumeStage.status === 'needs_changes') {
       state.current_dispatch_index = nextNonComplete;
-      state.dispatch_step = 10; // Enter fix flow directly
+      state.dispatch_step = DISPATCH_STEP.FIX_FLOW;
     } else if (resumeStage.status === 'in_progress' && resumeStage.providerType === 'api') {
       state.current_dispatch_index = nextNonComplete;
-      state.dispatch_step = 1; // May need wait_for_task
+      state.dispatch_step = DISPATCH_STEP.AGENT; // May need wait_for_task
     } else if (resumeStage.status === 'in_progress') {
       state.current_dispatch_index = nextNonComplete;
-      state.dispatch_step = 2; // Read output file
+      state.dispatch_step = DISPATCH_STEP.READ_OUTPUT;
     } else if (resumeStage.status === 'rejected' || resumeStage.status === 'failed') {
       // Reset to pending so findNextActionableStage → dispatchStage handles them.
-      // This ensures update_task(in_progress) and pipeline-tasks.json sync happen first.
       resumeStage.status = 'pending';
     }
     // pending/rejected→pending/failed→pending: no current_dispatch_index
@@ -175,148 +155,6 @@ export function detectStageStatus(
   }
 }
 
-// ─── Phase: Task Chain Creation ─────────────────────────────────────────────
-
-export function handleTaskChainCreation(state: PipelineState, cwd: string): PipelineCommand {
-  // Post-batch: report handler set step >= stages.length → move to dependencies
-  if (state.step >= state.stages.length) {
-    state.phase = 'task_chain_dependencies';
-    state.step = 0;
-    return handleTaskChainDependencies(state, cwd, handleTaskChainDependencies);
-  }
-
-  // Idempotency: filter to stages without task_ids (handles partial replay)
-  const stagesToCreate = state.stages
-    .map((stage, idx) => ({ stage, idx }))
-    .filter(({ stage }) => !stage.task_id);
-
-  if (stagesToCreate.length === 0) {
-    // All stages already have task_ids — skip to dependencies
-    state.phase = 'task_chain_dependencies';
-    state.step = 0;
-    return handleTaskChainDependencies(state, cwd, handleTaskChainDependencies);
-  }
-
-  // Build batch of create_task sub-commands
-  const batchCmdToStage: Record<string, number> = {};
-  const commands = stagesToCreate.map(({ stage, idx }) => {
-    const cmdId = makeCommandId();
-    batchCmdToStage[cmdId] = idx;
-    const resolvedInfo = buildResolvedStageInfo(stage, state);
-    return {
-      command_id: cmdId,
-      action: 'create_task' as const,
-      subject: deriveSubject(resolvedInfo),
-      description: deriveDescription(state, stage, resolvedInfo, cwd),
-      activeForm: `Setting up ${stage.type}...`,
-    };
-  });
-
-  state.batch_cmd_to_stage = batchCmdToStage;
-  // Do NOT advance state.step — report handler does that after successful processing
-  return emitCommand(state, {
-    action: 'parallel_batch',
-    commands,
-  });
-}
-
-// ─── Phase: Task Chain Dependencies ─────────────────────────────────────────
-
-export function handleTaskChainDependencies(state: PipelineState, _cwd: string, _routeByPhase?: PhaseRouter): PipelineCommand {
-  // Post-batch: report handler set step >= stages.length → show status + transition
-  if (state.step >= state.stages.length) {
-    if (state.pipeline === 'feature') {
-      state.phase = 'requirements';
-      state.step = 0;
-    } else {
-      state.phase = 'main_loop';
-      state.step = 0;
-    }
-    return emitCommand(state, {
-      action: 'show_status',
-      message: `Pipeline initialized with ${state.stages.length} stages. Starting execution.`,
-    });
-  }
-
-  // Build batch of update_task sub-commands for all stages with predecessors
-  const batchCmdToStage: Record<string, number> = {};
-  const commands: Array<{
-    command_id: string;
-    action: 'update_task';
-    taskId: string;
-    addBlockedBy: string[];
-  }> = [];
-
-  for (let i = 0; i < state.stages.length; i++) {
-    const stage = state.stages[i];
-    if (!stage.task_id) continue;
-
-    const predecessors = computePredecessors(state, i);
-    if (predecessors.length === 0) continue;
-
-    const cmdId = makeCommandId();
-    batchCmdToStage[cmdId] = i;
-    commands.push({
-      command_id: cmdId,
-      action: 'update_task',
-      taskId: stage.task_id,
-      addBlockedBy: predecessors,
-    });
-  }
-
-  if (commands.length === 0) {
-    // No dependencies to wire — go straight to show_status
-    state.step = state.stages.length;
-    return handleTaskChainDependencies(state, _cwd);
-  }
-
-  state.batch_cmd_to_stage = batchCmdToStage;
-  // Do NOT advance state.step — report handler does that
-  return emitCommand(state, {
-    action: 'parallel_batch',
-    commands,
-  });
-}
-
-/**
- * Compute predecessor task IDs for a given stage index using fan-out/fan-in rules.
- */
-function computePredecessors(state: PipelineState, stageIndex: number): string[] {
-  if (stageIndex === 0) return [];
-
-  const stage = state.stages[stageIndex];
-  const prevStage = state.stages[stageIndex - 1];
-
-  // Same parallel group as previous stage → same predecessors (fan-out)
-  if (
-    stage.parallel_group_id !== null &&
-    prevStage.parallel_group_id === stage.parallel_group_id
-  ) {
-    // Find the first stage in this group and copy its predecessors
-    const groupStart = findGroupStart(state, stageIndex);
-    if (groupStart > 0) {
-      return computePredecessorsForGroupStart(state, groupStart);
-    }
-    return [];
-  }
-
-  // Check if previous stage was in a parallel group (fan-in)
-  if (prevStage.parallel_group_id !== null && stage.parallel_group_id !== prevStage.parallel_group_id) {
-    // Fan-in: depend on ALL members of the previous group
-    const groupMembers = state.stages
-      .filter(s => s.parallel_group_id === prevStage.parallel_group_id && s.task_id)
-      .map(s => s.task_id!);
-    return groupMembers;
-  }
-
-  // Sequential: depend on previous stage
-  if (prevStage.task_id) {
-    return [prevStage.task_id];
-  }
-
-  return [];
-}
-
 export function findGroupStart(state: PipelineState, stageIndex: number): number {
   const groupId = state.stages[stageIndex].parallel_group_id;
   for (let i = stageIndex - 1; i >= 0; i--) {
@@ -325,49 +163,46 @@ export function findGroupStart(state: PipelineState, stageIndex: number): number
   return 0;
 }
 
-function computePredecessorsForGroupStart(state: PipelineState, groupStartIndex: number): string[] {
-  if (groupStartIndex === 0) return [];
-  const prevStage = state.stages[groupStartIndex - 1];
-  if (prevStage.parallel_group_id !== null) {
-    // Previous was also a group — fan-in
-    const groupMembers = state.stages
-      .filter(s => s.parallel_group_id === prevStage.parallel_group_id && s.task_id)
-      .map(s => s.task_id!);
-    return groupMembers;
-  }
-  return prevStage.task_id ? [prevStage.task_id] : [];
-}
-
 // ─── Phase: Requirements (Feature Pipeline) ─────────────────────────────────
 
 export function handleRequirementsPhase(state: PipelineState, cwd: string, routeByPhase: PhaseRouter): PipelineCommand {
+  driverLog('phase-requirements', 'info', `step=${state.step} phase=${state.phase}`);
   switch (state.step) {
-    case 0: {
-      // Mark requirements task as in_progress
+    case REQ_STEP.CHECK_STAGE: {
+      // Check requirements stage exists
       const reqStage = state.stages.find(s => s.type === 'requirements');
-      if (reqStage?.task_id) {
-        state.step = 1;
-        return emitCommand(state, {
-          action: 'update_task',
-          taskId: reqStage.task_id,
-          status: 'in_progress',
-        });
+      if (!reqStage) {
+        // No requirements stage — skip
+        state.phase = 'main_loop';
+        return routeByPhase(state, cwd);
       }
-      // No requirements stage — skip
-      state.phase = 'main_loop';
-      return routeByPhase(state, cwd);
-    }
-
-    case 1: {
-      // VCP detection: try reading .vcp/config.json
-      state.step = 2;
+      // Advance to VCP detection
+      state.step = REQ_STEP.VCP_DETECT;
       return emitCommand(state, {
         action: 'read_file',
         path: path.join(cwd, '.vcp', 'config.json'),
       });
     }
 
-    case 2: {
+    case REQ_STEP.VCP_DETECT: {
+      // VCP detection result handled in report handler, now create team
+      state.step = REQ_STEP.CREATE_TEAM;
+      return emitCommand(state, {
+        action: 'noop',
+        message: 'VCP detection complete.',
+      });
+    }
+
+    case REQ_STEP.CREATE_TEAM: {
+      // Create team for specialist spawn
+      state.step = REQ_STEP.SPAWN_SPECS;
+      return emitCommand(state, {
+        action: 'create_team',
+        team_name: state.team_name,
+      });
+    }
+
+    case REQ_STEP.SPAWN_SPECS: {
       // Spawn specialists as parallel batch
       const specialists = buildSpecialistBatch(state, cwd);
       state.specialists = {
@@ -383,7 +218,7 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
         qa_transcript: [],
       };
       state.phase = 'requirements_team_pending';
-      state.step = 3;
+      state.step = REQ_STEP.VERIFY_SPAWN;
 
       const spawnCommands: PipelineCommand[] = specialists.map(s => ({
         command_id: makeCommandId(),
@@ -406,10 +241,10 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       });
     }
 
-    case 3: {
+    case REQ_STEP.VERIFY_SPAWN: {
       // Spawn verification — check which specialists succeeded
       state.phase = 'requirements_team_exploring';
-      state.step = 4;
+      state.step = REQ_STEP.QA_RELAY;
       if (state.specialists) {
         state.specialists.interactive_loop_active = true;
       }
@@ -418,11 +253,12 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       });
     }
 
-    case 4: {
+    case REQ_STEP.QA_RELAY: {
       const specs = state.specialists!;
 
       // (B) Active relay with answer: emit send_message to specialist
       if (specs.active_relay?.answer) {
+        driverLog('qa-relay-answer', 'info', `specialist=${specs.active_relay.specialist_name}`);
         const relay = specs.active_relay;
         const content = `Answer to your question: "${relay.question}"\n\n${relay.answer}`;
         const contentFile = writeTempFile(cwd, `qa-reply-${relay.specialist_name}`, makeCommandId(), content);
@@ -447,6 +283,7 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       // (D) Pending questions in queue: pop first → start relay
       if (specs.pending_questions.length > 0) {
         const nextQ = specs.pending_questions.shift()!;
+        driverLog('qa-relay-question', 'info', `specialist=${nextQ.specialist_name}`);
         specs.active_relay = { specialist_name: nextQ.specialist_name, question: nextQ.question };
         return emitCommand(state, {
           action: 'ask_user',
@@ -461,8 +298,9 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       );
 
       if (allDone) {
+        driverLog('specialists-complete', 'info', 'All specialists done — advancing to analysis read');
         specs.interactive_loop_active = false;
-        state.step = 5;
+        state.step = REQ_STEP.READ_ANALYSES;
         return routeByPhase(state, cwd);
       }
 
@@ -472,7 +310,7 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       });
     }
 
-    case 5: {
+    case REQ_STEP.READ_ANALYSES: {
       // Validate analysis files
       const expectedFiles = state.specialists?.approved_specialists
         .map(s => s.expected_analysis_file) || [];
@@ -484,7 +322,7 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       }));
 
       if (readCmds.length === 0) {
-        state.step = 6;
+        state.step = REQ_STEP.SHUTDOWN_SPECS;
         return routeByPhase(state, cwd);
       }
 
@@ -499,7 +337,7 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       });
     }
 
-    case 6: {
+    case REQ_STEP.SHUTDOWN_SPECS: {
       // Guard: if no specialists completed, don't attempt synthesis
       const completedCount = state.specialists?.approved_specialists
         .filter(s => s.status === 'completed').length ?? 0;
@@ -513,15 +351,12 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       }
 
       // Shut down specialists BEFORE spawning requirements-gatherer.
-      // This eliminates team context that can cause the executor to run
-      // the requirements-gatherer as a background teammate instead of a
-      // blocking foreground agent (which breaks AskUserQuestion flow).
       const activeSpecialists = state.specialists?.approved_specialists
         .filter(s => s.status === 'spawned' || s.status === 'completed') || [];
 
       if (activeSpecialists.length === 0) {
         // No specialists to shutdown — skip to delete_team
-        state.step = 8;
+        state.step = REQ_STEP.DELETE_TEAM;
         return routeByPhase(state, cwd);
       }
 
@@ -533,14 +368,14 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
         max_retries: 2,
       }));
 
-      state.step = 7; // Advance BEFORE emitting
+      state.step = REQ_STEP.MARK_SHUTDOWN; // Advance BEFORE emitting
       return emitCommand(state, {
         action: 'parallel_batch',
         commands: shutdownCommands,
       });
     }
 
-    case 7: {
+    case REQ_STEP.MARK_SHUTDOWN: {
       // Specialist shutdown batch acknowledged — mark specialists as shutdown
       if (state.specialists) {
         for (const s of state.specialists.approved_specialists) {
@@ -550,27 +385,25 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
         }
         state.specialists.interactive_loop_active = false;
       }
-      state.step = 8;
+      state.step = REQ_STEP.DELETE_TEAM;
       return routeByPhase(state, cwd);
     }
 
-    case 8: {
+    case REQ_STEP.DELETE_TEAM: {
       // Delete team to ensure clean foreground context for requirements-gatherer.
-      // Without the team, spawn_agent cannot be misinterpreted as spawn_teammate.
-      state.step = 9;
+      state.step = REQ_STEP.SYNTHESIS;
       return emitCommand(state, {
         action: 'delete_team',
         team_name: state.team_name,
       });
     }
 
-    case 9: {
+    case REQ_STEP.SYNTHESIS: {
       // Synthesize via requirements-gatherer (no team = guaranteed foreground agent).
-      // AskUserQuestion in the requirements-gatherer will surface to the user
-      // because the agent runs as a blocking foreground call, not a teammate.
+      driverLog('requirements-synthesis', 'info', 'Spawning requirements-gatherer (foreground)');
       const promptContent = buildSynthesisPrompt(state, cwd);
       const promptFile = writeTempFile(cwd, 'prompt', makeCommandId(), promptContent);
-      state.step = 10; // Advance BEFORE emitting so we don't re-dispatch synthesis
+      state.step = REQ_STEP.MANIFEST_READ; // Advance BEFORE emitting so we don't re-dispatch synthesis
       return emitCommand(state, {
         action: 'spawn_agent',
         subagent_type: 'dev-buddy:requirements-gatherer',
@@ -580,12 +413,8 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       });
     }
 
-    case 10: {
+    case REQ_STEP.MANIFEST_READ: {
       // Wait for requirements-gatherer to complete by reading output file.
-      // If the file doesn't exist, handleReportError clears pending_command
-      // without advancing step (read_file is not a dispatch action), so the
-      // next next() call re-enters step 10 and re-emits read_file — natural retry.
-      // Manifest validation in the report handler checks title + ac_count.
       state.manifest_retry_count = state.manifest_retry_count || 0;
       const reqStage = state.stages.find(s => s.type === 'requirements');
       const outputFile = reqStage?.output_file || 'user-story/manifest.json';
@@ -595,20 +424,27 @@ export function handleRequirementsPhase(state: PipelineState, cwd: string, route
       });
     }
 
-    case 11: {
+    case REQ_STEP.MANIFEST_ESCALATE: {
+      // Retry exhausted — ask user whether to retry synthesis or abort.
+      driverLog('manifest-escalate', 'info', 'Escalating manifest failure to user');
+      return emitCommand(state, {
+        action: 'escalate',
+        error: 'Requirements manifest could not be validated.',
+        context: state.manifest_failure_reason
+          || 'The requirements-gatherer completed, but the manifest is still missing or invalid.',
+        recovery_options: [
+          { label: 'Retry requirements synthesis', description: 'Run the requirements-gatherer again' },
+          { label: 'Abort pipeline', description: 'Stop the pipeline' },
+        ],
+      });
+    }
+
+    case REQ_STEP.COMPLETE: {
       // Requirements-gatherer completed — mark requirements stage complete, enter main loop.
+      driverLog('requirements-complete', 'info', 'Transitioning to main_loop');
       const reqStage = state.stages.find(s => s.type === 'requirements');
       if (reqStage) {
         reqStage.status = 'completed';
-        if (reqStage.task_id) {
-          state.phase = 'main_loop';
-          state.step = 0;
-          return emitCommand(state, {
-            action: 'update_task',
-            taskId: reqStage.task_id,
-            status: 'completed',
-          });
-        }
       }
       state.phase = 'main_loop';
       state.step = 0;
@@ -808,15 +644,6 @@ export function handleSpecialistShutdown(state: PipelineState, _cwd: string, rou
     const reqStage = state.stages.find(s => s.type === 'requirements');
     if (reqStage) {
       reqStage.status = 'completed';
-      if (reqStage.task_id) {
-        state.phase = 'main_loop';
-        state.step = 0;
-        return emitCommand(state, {
-          action: 'update_task',
-          taskId: reqStage.task_id,
-          status: 'completed',
-        });
-      }
     }
     state.phase = 'main_loop';
     state.step = 0;

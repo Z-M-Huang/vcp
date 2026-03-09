@@ -26,6 +26,7 @@ import {
   range,
 } from './driver-state-io.ts';
 import { findBackgroundTaskForStage } from './driver-main-loop.ts';
+import { driverLog } from './vcp-logger.ts';
 
 // ─── Phase: Phased Implementation ───────────────────────────────────────────
 
@@ -48,6 +49,7 @@ export function handlePhasedImplementation(state: PipelineState, cwd: string, ro
     });
   }
 
+  driverLog('phased-impl', 'info', `step=${state.step} current_step=${ps.current_step}/${ps.total_steps}`);
   switch (state.step) {
     case 0: {
       // P0: Prepare directories and read plan step count
@@ -111,6 +113,7 @@ export function handlePhasedImplementation(state: PipelineState, cwd: string, ro
       }
 
       // Batch complete — dispatch reviewers
+      driverLog('phased-batch-review', 'info', `batch ${ps.batch_start}-${ps.current_step}`);
       ps.batch_end = ps.current_step;
       ps.last_review_approved = true; // Reset before each review cycle
       state.step = 3;
@@ -165,6 +168,7 @@ export function handlePhasedImplementation(state: PipelineState, cwd: string, ro
 
     case 4: {
       // P2d: Batch approved — update progress
+      driverLog('phased-batch-approved', 'info', `batch ${ps.batch_start}-${ps.batch_end}`);
       ps.completed_steps.push(...range(ps.batch_start, ps.batch_end));
       ps.last_reviewed_step = ps.batch_end;
       ps.batch_start = ps.batch_end + 1;
@@ -190,6 +194,7 @@ export function handlePhasedImplementation(state: PipelineState, cwd: string, ro
 
     case 5: {
       // P2e: needs_changes — dispatch fix
+      driverLog('phased-needs-changes', 'info', `batch ${ps.batch_start}-${ps.batch_end} iteration=${ps.iteration_count + 1}`);
       ps.iteration_count++;
       if (ps.iteration_count >= ps.max_iterations) {
         // P2f: Escalation

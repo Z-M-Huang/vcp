@@ -6,8 +6,10 @@ import { spawn } from 'child_process';
 
 const SCRIPT_PATH = path.join(import.meta.dir, 'cli-executor.ts');
 
-// Mock CLI preset for testing
-const MOCK_PRESET_NAME = 'test-cli';
+// Mock CLI preset for testing — use realistic name with spaces and capitals
+// to match real-world presets like "Codex CLI". The script does a direct key
+// lookup (no normalization), so tests must verify exact-match behavior.
+const MOCK_PRESET_NAME = 'Test CLI Tool';
 const MOCK_PRESET = {
   type: 'cli',
   name: 'Test CLI Tool',
@@ -196,6 +198,22 @@ describe('cli-executor.ts', () => {
   test('fails when preset not found in config', async () => {
     const result = await runScript(
       ['--type', 'plan', '--preset', 'nonexistent-preset', '--model', 'test-model', '--plugin-root', mockPluginRoot],
+      tempDir,
+      mockHome
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.events.some(e =>
+      e.phase === 'preset_loading' &&
+      (e.error as string)?.includes('not found')
+    )).toBe(true);
+  });
+
+  test('fails when preset name is normalized (lowercase/hyphenated) instead of exact', async () => {
+    // Real bug: agent docs showed "codex-cli" but actual preset is "Codex CLI".
+    // The script does config.presets[presetName] — no normalization.
+    const result = await runScript(
+      ['--type', 'plan', '--preset', 'test-cli-tool', '--model', 'test-model', '--plugin-root', mockPluginRoot],
       tempDir,
       mockHome
     );

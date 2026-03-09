@@ -91,7 +91,7 @@ plan/
 
 ### Pipeline Tasks (`.vcp/task/pipeline-tasks.json`)
 
-Hook contract file. Contains `resolved_config`, `config_hash`, `team_name`, and `stages[]` array with `task_id`, `output_file`, `parallel_group_id`, `current_version`. Hooks read this file — never `pipeline-state.json`.
+Hook contract file. Contains `resolved_config`, `config_hash`, `team_name`, and `stages[]` array with `output_file`, `parallel_group_id`, `current_version`. Hooks read this file — never `pipeline-state.json`.
 
 ### Output File Naming
 
@@ -217,4 +217,4 @@ bun api-task-runner.ts --preset <name> --model <model> --task "<text>" --cwd <di
 1. **Status:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-driver.ts" status --cwd "${CLAUDE_PROJECT_DIR}"`
 2. **Reset:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd "${CLAUDE_PROJECT_DIR}"`
 3. **Check artifacts:** Read `.vcp/task/*.json` files
-4. **Check tasks:** `TaskList()` (requires active pipeline team)
+4. **Check artifacts:** Read `.vcp/task/pipeline-state.json` for internal state

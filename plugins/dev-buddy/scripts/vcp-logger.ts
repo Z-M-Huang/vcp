@@ -2,11 +2,14 @@
  * VCP-compatible file logger for dev-buddy plugin.
  *
  * Writes to <projectRoot>/.vcp/dev-buddy.log using the same line format as
- * VCP core's vcpLog(). Always logs — no debug gate. Rotates at 5 MB, keeping
- * 3 versions (.log, .log.1, .log.2). Never throws — logging failures are
- * silently ignored to prevent breaking plugin execution.
+ * VCP core's vcpLog(). Logs when debug is enabled (via ~/.vcp/config.json).
+ * Rotates at 5 MB, keeping 3 versions (.log, .log.1, .log.2). Never throws —
+ * logging failures are silently ignored to prevent breaking plugin execution.
  */
 import { appendFile, chmod, readFile, mkdir, stat, rename, unlink } from 'fs/promises';
+import {
+  statSync, renameSync, unlinkSync, mkdirSync, appendFileSync, chmodSync, readFileSync,
+} from 'fs';
 import { isAbsolute, join } from 'path';
 import { homedir } from 'os';
 
@@ -19,6 +22,8 @@ export interface LogEntry {
 
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_LOG_VERSIONS = 3; // .log, .log.1, .log.2
+
+// ─── Async API (used by api-task-runner, one-shot-runner, cli-executor) ──────
 
 /**
  * Rotate the log file when it exceeds MAX_LOG_SIZE.
@@ -82,4 +87,88 @@ export async function isDebugEnabled(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ─── Sync API (used by pipeline-driver and driver-* modules) ─────────────────
+
+/** Sync mirror of rotateIfNeeded. */
+function rotateIfNeededSync(logFile: string): void {
+  try {
+    const st = statSync(logFile);
+    if (st.size < MAX_LOG_SIZE) return;
+
+    for (let i = MAX_LOG_VERSIONS - 1; i >= 1; i--) {
+      const older = `${logFile}.${i}`;
+      if (i === MAX_LOG_VERSIONS - 1) {
+        try { unlinkSync(older); } catch { /* may not exist */ }
+      }
+      const newer = i === 1 ? logFile : `${logFile}.${i - 1}`;
+      try { renameSync(newer, older); } catch { /* may not exist */ }
+    }
+  } catch {
+    // File doesn't exist yet or can't stat — no rotation needed
+  }
+}
+
+/** Synchronous logging — mirrors vcpLog but blocks until written. */
+export function vcpLogSync(
+  projectRoot: string,
+  entry: LogEntry,
+  debug: boolean = false,
+): void {
+  if (!debug) return;
+  if (!projectRoot || !isAbsolute(projectRoot)) return;
+  try {
+    const logDir = join(projectRoot, '.vcp');
+    mkdirSync(logDir, { recursive: true });
+    const logFile = join(logDir, 'dev-buddy.log');
+    rotateIfNeededSync(logFile);
+    const ts = new Date().toISOString();
+    const det = entry.details ? ` — ${entry.details}` : '';
+    const line = `${ts} [${entry.event}] ${entry.source}: ${entry.decision}${det}\n`;
+    appendFileSync(logFile, line);
+    try {
+      chmodSync(logFile, 0o600);
+    } catch {
+      // chmod best-effort
+    }
+  } catch {
+    // Never let logging failure break execution
+  }
+}
+
+/** Sync read of debug flag from ~/.vcp/config.json. */
+export function isDebugEnabledSync(): boolean {
+  try {
+    const configPath = join(homedir(), '.vcp', 'config.json');
+    const raw = readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(raw);
+    return config?.debug === true;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Driver Log Convenience API ──────────────────────────────────────────────
+
+let _driverCwd: string | null = null;
+let _driverDebug = false;
+
+/** Initialize the driver log. Call once at CLI entry point. */
+export function initDriverLog(cwd: string, debug: boolean): void {
+  _driverCwd = cwd;
+  _driverDebug = debug;
+}
+
+/**
+ * Convenience wrapper for pipeline-driver modules.
+ * No-ops until initDriverLog is called.
+ */
+export function driverLog(
+  event: string,
+  decision: LogEntry['decision'],
+  details?: string,
+): void {
+  if (!_driverCwd) return;
+  vcpLogSync(_driverCwd, { source: 'pipeline-driver', event, decision, details }, _driverDebug);
 }

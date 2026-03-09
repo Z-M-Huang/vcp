@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Plan Review Result",
   "type": "object",
-  "required": ["status", "needs_clarification", "clarification_questions", "summary", "requirements_coverage", "findings", "reviewed_at"],
+  "required": ["id", "reviewer", "model", "plan_reviewed", "status", "needs_clarification", "clarification_questions", "summary", "scores", "requirements_coverage", "findings", "blockers", "recommendations", "approval_conditions", "reviewed_at"],
+  "additionalProperties": false,
   "properties": {
     "id": {
       "type": "string",
@@ -31,7 +32,6 @@
     },
     "needs_clarification": {
       "type": "boolean",
-      "default": false,
       "description": "If true, pauses autonomous pipeline to ask user for clarification"
     },
     "clarification_questions": {
@@ -42,6 +42,8 @@
     "scores": {
       "type": "object",
       "description": "Numerical scores (1-10) for each review dimension",
+      "additionalProperties": false,
+      "required": ["requirements_coverage", "architecture", "security", "testability", "step_quality", "feasibility", "overall"],
       "properties": {
         "requirements_coverage": { "type": "number" },
         "architecture": { "type": "number" },
@@ -56,6 +58,7 @@
       "type": "object",
       "description": "Maps each acceptance criterion to plan steps that address it",
       "required": ["mapping", "missing"],
+      "additionalProperties": false,
       "properties": {
         "mapping": {
           "type": "array",
@@ -63,6 +66,7 @@
           "items": {
             "type": "object",
             "required": ["ac_id", "steps"],
+            "additionalProperties": false,
             "properties": {
               "ac_id": {
                 "type": "string",
@@ -87,7 +91,8 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "category", "severity", "title", "description", "recommendation"],
+        "required": ["id", "category", "severity", "title", "description", "location", "recommendation", "effort"],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "string",

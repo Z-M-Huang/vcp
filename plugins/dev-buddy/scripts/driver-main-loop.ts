@@ -14,7 +14,7 @@ import {
 } from '../types/stage-definitions.ts';
 import { loadPipelineConfig } from './pipeline-config.ts';
 import type { PipelineCommand } from '../types/commands.ts';
-import { makeCommandId } from '../types/commands.ts';
+import { makeCommandId, DISPATCH_STEP } from '../types/commands.ts';
 import type {
   PipelineState,
   StageState,
@@ -32,7 +32,9 @@ import {
   buildResolvedStageInfo,
   computeStageIndex,
 } from './driver-state-io.ts';
+import { buildProgressMessage } from './driver-progress.ts';
 import { findGroupStart } from './driver-phases.ts';
+import { driverLog } from './vcp-logger.ts';
 
 // ─── Phase: Main Loop ───────────────────────────────────────────────────────
 
@@ -40,13 +42,11 @@ import { findGroupStart } from './driver-phases.ts';
  * Main loop state machine. Uses current_dispatch_index + dispatch_step to
  * track multi-step stage execution:
  *
- *   dispatch_step 0: Find next actionable stage, mark in_progress (update_task)
- *   dispatch_step 1: Dispatch agent (spawn_agent/spawn_background)
- *   dispatch_step 2: Read output file after agent completes
- *   dispatch_step 3: Process result (approved → complete, needs_changes → fix flow)
- *   dispatch_step 10: Create fix task (needs_changes)
- *   dispatch_step 11: Create re-review task
- *   dispatch_step 12: Rewire successor, complete current review task
+ *   dispatch_step 0 (AGENT):       Dispatch agent (spawn_agent/spawn_background)
+ *   dispatch_step 1 (READ_OUTPUT): Read output file after agent completes
+ *   dispatch_step 2 (PROCESS):     Process result (approved → complete, needs_changes → fix flow)
+ *   dispatch_step 10 (FIX_FLOW):   Version bump + reset to pending
+ *   dispatch_step 13 (CLARIFY):    needs_clarification re-dispatch
  */
 export function handleMainLoop(
   state: PipelineState,
@@ -68,6 +68,7 @@ export function handleMainLoop(
     // Check if all stages are complete
     const allComplete = state.stages.every(s => s.status === 'completed');
     if (allComplete) {
+      driverLog('pipeline-complete', 'info', 'All stages completed');
       state.terminal_state = 'completed';
       state.terminal_reason = 'All pipeline stages completed successfully.';
       return emitCommand(state, {
@@ -95,7 +96,9 @@ export function handleMainLoop(
         }
       }
       return emitCommand(state, {
-        action: 'list_tasks',
+        action: 'escalate',
+        error: 'Pipeline has in-progress stages but no actionable work.',
+        context: `Stages: ${state.stages.map(s => `${s.type}[${s.index}]:${s.status}`).join(', ')}`,
       });
     }
 
@@ -103,10 +106,11 @@ export function handleMainLoop(
     const needsChanges = state.stages.find(s => s.status === 'needs_changes');
     if (needsChanges) {
       state.current_dispatch_index = needsChanges.index;
-      state.dispatch_step = 10; // Jump to fix flow
+      state.dispatch_step = DISPATCH_STEP.FIX_FLOW;
       return handleMainLoopDispatch(state, cwd, routeByPhase);
     }
 
+    driverLog('pipeline-stuck', 'error', 'No actionable stages found');
     return emitCommand(state, {
       action: 'escalate',
       error: 'Pipeline is stuck — no actionable stages found.',
@@ -126,6 +130,7 @@ export function handleMainLoop(
 
   // Check for phased implementation
   if (nextStage.type === 'implementation') {
+    driverLog('next-stage', 'info', `type=implementation index=${nextStage.index}`);
     const config = loadPipelineConfig();
     const pipeline = state.pipeline === 'feature'
       ? config.feature_pipeline
@@ -161,9 +166,10 @@ export function handleMainLoop(
     }
   }
 
-  // Begin single stage dispatch: step 0 → mark in_progress
+  // Begin single stage dispatch
+  driverLog('stage-dispatch', 'info', `stage=${nextStage.type}[${nextStage.index}] provider=${nextStage.provider}`);
   state.current_dispatch_index = nextStage.index;
-  state.dispatch_step = 0;
+  state.dispatch_step = DISPATCH_STEP.AGENT;
   return dispatchStage(state, cwd, nextStage);
 }
 
@@ -184,52 +190,36 @@ export function handleMainLoopDispatch(state: PipelineState, cwd: string, routeB
   }
 
   switch (state.dispatch_step) {
-    case 0:
-      // Mark in_progress — already handled by dispatchStage
-      // (We get here if report processed for update_task)
-      state.dispatch_step = 1;
-      return dispatchStageAgent(state, cwd, stage);
-
-    case 1:
-      // Agent dispatched. For subscription/CLI, the report comes when agent finishes.
-      // For API (background), report comes with task_id. Need to wait.
-      if (stage.providerType === 'api') {
-        // Background task — need to wait.
-        // Keep dispatch_step at 1 so still_running re-enters this case for re-poll.
-        const bgTaskId = findBackgroundTaskForStage(state, stage.index);
-        if (bgTaskId) {
-          // Do NOT advance dispatch_step — wait_for_task handler advances to 2 on completion
-          return emitCommand(state, {
-            action: 'wait_for_task',
-            task_id: bgTaskId,
-            timeout_ms: 600000,
-            poll_on_still_running: true,
-            max_poll_attempts: 3,
-          });
-        }
+    case DISPATCH_STEP.AGENT: {
+      // Check for existing background task (API resume scenario)
+      const bgTaskId = findBackgroundTaskForStage(state, stageIndex);
+      if (bgTaskId) {
+        return emitCommand(state, {
+          action: 'wait_for_task',
+          task_id: bgTaskId,
+          timeout_ms: 600000,
+          poll_on_still_running: true,
+          max_poll_attempts: 3,
+        });
       }
-      // Subscription/CLI: agent result in report. Read output file.
-      state.dispatch_step = 2;
+      // Dispatch agent directly
+      return dispatchStageAgent(state, cwd, stage);
+    }
+
+    case DISPATCH_STEP.READ_OUTPUT:
+      // Read output file after agent completes
       return emitCommand(state, {
         action: 'read_file',
         path: getTaskPath(cwd, stage.output_file),
       });
 
-    case 2:
-      // Output file read or background task completed.
-      // Read the output file to check status.
-      return emitCommand(state, {
-        action: 'read_file',
-        path: getTaskPath(cwd, stage.output_file),
-      });
-
-    case 3: {
+    case DISPATCH_STEP.PROCESS: {
       // Result processed by processReport → processStageResult.
       // Check for pending user decision (needs_clarification, partial)
       if (state.pending_user_decision) {
         const decision = state.pending_user_decision;
         state.pending_user_decision = null;
-        state.dispatch_step = 14; // needs_clarification response step
+        state.dispatch_step = DISPATCH_STEP.CLARIFY;
         return emitCommand(state, {
           action: 'ask_user',
           question: decision.question,
@@ -245,21 +235,13 @@ export function handleMainLoopDispatch(state: PipelineState, cwd: string, routeB
         if (nextGroupMember !== null) {
           // More group members to process — dispatch read_file for the next one
           state.current_dispatch_index = nextGroupMember;
-          state.dispatch_step = 2; // read_file step
+          state.dispatch_step = DISPATCH_STEP.READ_OUTPUT;
         } else {
           state.current_dispatch_index = null;
           state.dispatch_step = 0;
         }
 
-        if (stage.task_id) {
-          // Enrich the next stage's task description before completing
-          enrichNextStage(state, cwd, stage);
-          return emitCommand(state, {
-            action: 'update_task',
-            taskId: stage.task_id,
-            status: 'completed',
-          });
-        }
+        enrichNextStage(state, cwd, stage);
         return routeByPhase(state, cwd);
       }
 
@@ -278,7 +260,7 @@ export function handleMainLoopDispatch(state: PipelineState, cwd: string, routeB
           });
         }
         // Enter fix flow
-        state.dispatch_step = 10;
+        state.dispatch_step = DISPATCH_STEP.FIX_FLOW;
         return handleMainLoopDispatch(state, cwd, routeByPhase);
       }
 
@@ -314,89 +296,35 @@ export function handleMainLoopDispatch(state: PipelineState, cwd: string, routeB
 
     // ── needs_changes fix flow ──
 
-    case 10: {
-      // Create fix task
+    case DISPATCH_STEP.FIX_FLOW: {
+      // Version bump, update output file, reset to pending, return to main loop
       stage.current_version++;
-      const fixSubject = `Fix ${deriveSubject(buildResolvedStageInfo(stage, state))} v${stage.current_version}`;
-      const fixDescription = [
-        `FIX TASK: Address issues from ${stage.type} review`,
-        `ISSUES TO FIX: See .vcp/task/${stage.output_file}`,
-        `AGENT: dev-buddy:implementer`,
-        `MODEL: ${stage.model}`,
-        `OUTPUT: Updated implementation addressing review feedback`,
-      ].join('\n');
+      stage.status = 'pending';
+      stage.output_file = getOutputFileName(
+        stage.type,
+        computeStageIndex(state, stage),
+        stage.provider,
+        stage.model,
+        stage.current_version,
+      );
 
-      state.dispatch_step = 11;
-      return emitCommand(state, {
-        action: 'create_task',
-        subject: fixSubject,
-        description: fixDescription,
-        activeForm: `Fixing ${stage.type} issues...`,
-      });
-    }
-
-    case 11: {
-      // Create re-review task
-      const reReviewSubject = `${deriveSubject(buildResolvedStageInfo(stage, state))} v${stage.current_version}`;
-      const reReviewDescription = [
-        `RE-REVIEW: Verify fixes for ${stage.type}`,
-        `NOTE: Re-review after fix. Check that all prior issues are resolved.`,
-        `AGENT: dev-buddy:${STAGE_DEFINITIONS[stage.type].agent_type}`,
-        `MODEL: ${stage.model}`,
-        `PROVIDER: ${stage.provider} (${stage.providerType})`,
-        `OUTPUT: .vcp/task/${getOutputFileName(stage.type, computeStageIndex(state, stage), stage.provider, stage.model, stage.current_version)}`,
-      ].join('\n');
-
-      state.dispatch_step = 12;
-      return emitCommand(state, {
-        action: 'create_task',
-        subject: reReviewSubject,
-        description: reReviewDescription,
-        activeForm: `Re-reviewing ${stage.type}...`,
-      });
-    }
-
-    case 12: {
-      // Rewire successor: the next stage after this one (or after the parallel group)
-      // must now be blocked by the re-review task instead.
-      // Mark the ORIGINAL review task as completed (it did its job — found issues).
-      // stage.task_id now points to the re-review task (set in processReport step 12).
-      const originalTaskId = state.original_review_task_id || stage.task_id;
-      if (originalTaskId) {
-        // Reset stage to pending for the re-review cycle
-        stage.status = 'pending';
-        stage.output_file = getOutputFileName(
-          stage.type,
-          computeStageIndex(state, stage),
-          stage.provider,
-          stage.model,
-          stage.current_version,
-        );
-
-        // Update pipeline-tasks.json
-        const config = loadPipelineConfig();
-        writePipelineTasks(cwd, buildPipelineTasksJson(state, config));
-
-        // Clean up temporary state
-        state.original_review_task_id = null;
-
-        state.current_dispatch_index = null;
-        state.dispatch_step = 0;
-        return emitCommand(state, {
-          action: 'update_task',
-          taskId: originalTaskId,
-          status: 'completed',
-        });
-      }
+      // Update pipeline-tasks.json
+      const config = loadPipelineConfig();
+      writePipelineTasks(cwd, buildPipelineTasksJson(state, config));
 
       state.current_dispatch_index = null;
       state.dispatch_step = 0;
-      return routeByPhase(state, cwd);
+
+      return emitCommand(state, {
+        action: 'noop',
+        message: `Fix flow: ${stage.type} v${stage.current_version} — reset to pending.`,
+        progress: buildProgressMessage(state),
+      });
     }
 
-    case 14: {
+    case DISPATCH_STEP.CLARIFY: {
       // needs_clarification resolved — re-run same stage from dispatch step 0
-      state.dispatch_step = 0;
+      state.dispatch_step = DISPATCH_STEP.AGENT;
       return dispatchStage(state, cwd, stage);
     }
 
@@ -425,7 +353,7 @@ export function findBackgroundTaskForStage(state: PipelineState, stageIndex: num
 
 /**
  * Progressive enrichment: extract context from completed stage output
- * and append it to the next stage's task description.
+ * and append it to the next stage's description file.
  */
 function enrichNextStage(state: PipelineState, cwd: string, completedStage: StageState): void {
   // Find the successor stage
@@ -433,7 +361,7 @@ function enrichNextStage(state: PipelineState, cwd: string, completedStage: Stag
   if (successorIndex === null) return;
 
   const successor = state.stages[successorIndex];
-  if (!successor?.task_id) return;
+  if (!successor) return;
 
   // Read the completed stage's output for context extraction
   const outputPath = getTaskPath(cwd, completedStage.output_file);
@@ -609,20 +537,8 @@ export function dispatchStage(state: PipelineState, cwd: string, stage: StageSta
   const config = loadPipelineConfig();
   writePipelineTasks(cwd, buildPipelineTasksJson(state, config));
 
-  if (!stage.task_id) {
-    return emitCommand(state, {
-      action: 'escalate',
-      error: `Stage ${stage.index} (${stage.type}) has no task_id.`,
-      context: 'Cannot dispatch stage without a task ID.',
-    });
-  }
-
-  // Step 0: mark the task as in_progress. Step 1 (dispatch agent) happens after report.
-  return emitCommand(state, {
-    action: 'update_task',
-    taskId: stage.task_id,
-    status: 'in_progress',
-  });
+  // Dispatch agent directly
+  return dispatchStageAgent(state, cwd, stage);
 }
 
 export function buildStagePrompt(state: PipelineState, stage: StageState, cwd: string): string {
@@ -634,6 +550,7 @@ export function dispatchStageAgent(state: PipelineState, cwd: string, stage: Sta
   const agentDef = STAGE_DEFINITIONS[stage.type];
   const promptContent = buildStagePrompt(state, stage, cwd);
   const promptFile = writeTempFile(cwd, `stage-${stage.type}`, makeCommandId(), promptContent);
+  const progress = buildProgressMessage(state);
 
   switch (stage.providerType) {
     case 'subscription': {
@@ -647,6 +564,7 @@ export function dispatchStageAgent(state: PipelineState, cwd: string, stage: Sta
         name: `${stage.type}-${stage.index}`,
         model: stage.model,
         prompt_file: promptFile,
+        progress,
       });
     }
 
@@ -659,6 +577,8 @@ export function dispatchStageAgent(state: PipelineState, cwd: string, stage: Sta
         timeout_ms: 300000, // Will be overridden by preset timeout_ms
         system_prompt_file: isReviewStage ? 'docs/review-guidelines.md' : undefined,
         stage_index: stage.index,
+        prompt_file: promptFile,
+        progress,
       });
     }
 
@@ -668,6 +588,7 @@ export function dispatchStageAgent(state: PipelineState, cwd: string, stage: Sta
         subagent_type: 'dev-buddy:cli-executor',
         name: `cli-${stage.type}-${stage.index}`,
         prompt_file: promptFile,
+        progress,
       });
     }
 
@@ -722,30 +643,16 @@ export function dispatchParallelGroup(state: PipelineState, cwd: string, groupMe
   state.active_parallel_group = {
     group_id: `group-${groupMembers[0].parallel_group_id}`,
     member_indices: groupMembers.map(m => m.index),
-    member_task_ids: groupMembers.filter(m => m.task_id).map(m => m.task_id!),
     completed_member_indices: [],
     dispatch_cmd_to_stage: dispatchCmdToStage,
     api_members_pending_wait: apiMembersPendingWait,
     results: {},
   };
 
-  // Build parallel batch: mark all as in_progress AND dispatch agents
+  // Build parallel batch: dispatch agents only (no update_task)
   const commands: PipelineCommand[] = [];
+  const progress = buildProgressMessage(state);
 
-  // First: update_task(in_progress) for each
-  for (const m of groupMembers) {
-    if (m.task_id) {
-      commands.push({
-        command_id: makeCommandId(),
-        state_version: state.state_version,
-        action: 'update_task' as const,
-        taskId: m.task_id,
-        status: 'in_progress' as const,
-      });
-    }
-  }
-
-  // Then: dispatch agents for each member (track command_id → stage_index)
   for (const m of groupMembers) {
     const promptContent = buildStagePrompt(state, m, cwd);
     const promptFile = writeTempFile(cwd, `stage-${m.type}`, makeCommandId(), promptContent);
@@ -776,6 +683,7 @@ export function dispatchParallelGroup(state: PipelineState, cwd: string, groupMe
         timeout_ms: 300000,
         system_prompt_file: isReview ? 'docs/review-guidelines.md' : undefined,
         stage_index: m.index,
+        prompt_file: promptFile,
       });
     } else if (m.providerType === 'cli') {
       const cmdId = makeCommandId();
@@ -794,5 +702,6 @@ export function dispatchParallelGroup(state: PipelineState, cwd: string, groupMe
   return emitCommand(state, {
     action: 'parallel_batch',
     commands,
+    progress,
   });
 }

@@ -73,8 +73,8 @@ bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" \
 **Required flags:**
 - `--type` — `plan` or `code`
 - `--plugin-root` — path to plugin installation
-- `--preset` — preset name from `~/.vcp/ai-presets.json` (e.g., `codex-cli`)
-- `--model` — model name (e.g., `o3`, `o4-mini`)
+- `--preset` — **EXACT** preset name from task description (e.g., `"Codex CLI"`) — preserve case, spaces, and special characters. Always quote the value.
+- `--model` — model name from task description (e.g., `gpt-5.3-codex`, `o4-mini`)
 
 **Optional flags:**
 - `--output-file` — override output file path (versioned naming: `{type}-{provider}-{model}-{index}-v{version}.json`)
@@ -85,12 +85,12 @@ bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" \
 
 Linux/macOS:
 ```bash
-bun "/home/user/.claude/plugins/dev-buddy/scripts/cli-executor.ts" --type plan --plugin-root "/home/user/.claude/plugins/dev-buddy" --preset "codex-cli" --model "o3" --output-file "/path/to/project/.vcp/task/plan-review-codex-cli-o3-1-v1.json"
+bun "/home/user/.claude/plugins/dev-buddy/scripts/cli-executor.ts" --type plan --plugin-root "/home/user/.claude/plugins/dev-buddy" --preset "Codex CLI" --model "gpt-5.3-codex" --output-file "/path/to/project/.vcp/task/plan-review-codex-cli-gpt-5.3-codex-1-v1.json"
 ```
 
 Windows:
 ```bash
-bun "C:/Users/user/.claude/plugins/dev-buddy/scripts/cli-executor.ts" --type code --plugin-root "C:/Users/user/.claude/plugins/dev-buddy" --preset "codex-cli" --model "o4-mini"
+bun "C:/Users/user/.claude/plugins/dev-buddy/scripts/cli-executor.ts" --type code --plugin-root "C:/Users/user/.claude/plugins/dev-buddy" --preset "Codex CLI" --model "gpt-5.4"
 ```
 
 ---
@@ -206,13 +206,13 @@ You are a **thin wrapper**. You exist solely to invoke `cli-executor.ts` via Bas
 
 ```bash
 # Plan review with explicit output file and model
-bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type plan --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o3" --output-file "{PROJECT_DIR}/.vcp/task/plan-review-codex-cli-o3-1-v1.json"
+bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type plan --plugin-root "{PLUGIN_ROOT}" --preset "Codex CLI" --model "gpt-5.3-codex" --output-file "{PROJECT_DIR}/.vcp/task/plan-review-codex-cli-gpt-5.3-codex-1-v1.json"
 
 # Code review
-bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o4-mini" --output-file "{PROJECT_DIR}/.vcp/task/code-review-codex-cli-o4-mini-3-v1.json"
+bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "Codex CLI" --model "gpt-5.4" --output-file "{PROJECT_DIR}/.vcp/task/code-review-codex-cli-gpt-5.4-3-v1.json"
 
 # Resume with changes summary
-bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "codex-cli" --model "o3" --resume --changes-summary "Fixed SQL injection"
+bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_ROOT}" --preset "Codex CLI" --model "gpt-5.3-codex" --resume --changes-summary "Fixed SQL injection"
 ```
 
 ### Arguments
@@ -221,7 +221,7 @@ bun "{PLUGIN_ROOT}/scripts/cli-executor.ts" --type code --plugin-root "{PLUGIN_R
 |----------|----------|-------------|
 | `--type` | Yes | `plan` or `code` |
 | `--plugin-root` | Yes | Path to plugin installation |
-| `--preset` | Yes | CLI preset name from `~/.vcp/ai-presets.json` |
+| `--preset` | Yes | **Exact** CLI preset name from task description — preserve case and spaces, always quote |
 | `--model` | Yes | Model name (validated against preset's models list) |
 | `--output-file` | No | Override output file path |
 | `--resume` | No | Force resume mode |

@@ -20,8 +20,6 @@ export interface StageState {
   model: string;
   providerType: 'subscription' | 'api' | 'cli';
   output_file: string;
-  /** Claude Task ID. Set after create_task command is acknowledged. */
-  task_id: string | null;
   parallel_group_id: number | null;
   /** Artifact version (v1, v2, ...). Incremented on re-review. */
   current_version: number;
@@ -36,8 +34,6 @@ export interface ParallelGroupState {
   group_id: string;
   /** Stage indices belonging to this group. */
   member_indices: number[];
-  /** Claude Task IDs for group members. */
-  member_task_ids: string[];
   /** Stage indices whose dispatch sub-commands have completed. */
   completed_member_indices: number[];
   /** Maps dispatch sub-command ID → stage index (for spawn_agent/spawn_background only). */
@@ -221,10 +217,8 @@ export interface PipelineState {
   // ─── Main Loop Dispatch Tracking ───
   /** Index of stage currently being dispatched/executed in main loop. */
   current_dispatch_index: number | null;
-  /** Sub-step within the current dispatch (0=mark in_progress, 1=dispatch agent, 2=read output, 3=process result). */
+  /** Sub-step within the current dispatch. See DISPATCH_STEP constants. */
   dispatch_step: number;
-  /** Original review task ID saved before re-review task_id overwrites stage.task_id. */
-  original_review_task_id?: string | null;
 
   // ─── Pause / Interruption ───
   paused: boolean;
@@ -242,6 +236,10 @@ export interface PipelineState {
   // ─── Manifest Retry Tracking ───
   /** Retry counter for requirements manifest validation (step 7). */
   manifest_retry_count?: number;
+  /** Which kind of manifest failure occurred (for escalation terminal selection). */
+  manifest_failure_kind?: 'missing' | 'invalid';
+  /** Human-readable reason for the manifest failure. */
+  manifest_failure_reason?: string;
 
   // ─── Global Iteration Counters ───
   /** Per-stage iteration counters. Key: "{stage_type}_{index}". */

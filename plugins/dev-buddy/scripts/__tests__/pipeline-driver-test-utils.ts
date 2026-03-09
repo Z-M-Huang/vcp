@@ -64,8 +64,8 @@ export function next(): any {
 }
 
 /**
- * Drive the pipeline from init through dependency wiring, returning the
- * final command (show_status after transition).
+ * Drive the pipeline from init to show_status.
+ * Init now directly emits show_status (no task chain creation).
  * If descriptionFile is provided, passes --description-file to init.
  */
 export function driveToShowStatusWithDescription(pipeline: 'feature' | 'bugfix', descriptionFile: string): any {
@@ -73,43 +73,20 @@ export function driveToShowStatusWithDescription(pipeline: 'feature' | 'bugfix',
 }
 
 export function driveToShowStatus(pipeline: 'feature' | 'bugfix' = 'feature', descriptionFile?: string): any {
-  // Init
   const descFlag = descriptionFile ? ` --description-file "${descriptionFile}"` : '';
-  let cmd = run(`init --pipeline ${pipeline} --cwd "${ctx.testDir}"${descFlag}`);
-  expect(cmd.action).toBe('create_team');
-
-  // create_team → list_tasks
-  report(cmd.command_id);
-  cmd = next();
-  expect(cmd.action).toBe('list_tasks');
-
-  // list_tasks → parallel_batch (create_task×N)
-  report(cmd.command_id, { tasks: [] });
-  cmd = next();
-  expect(cmd.action).toBe('parallel_batch');
-
-  // Build batch_results from sub-commands, assigning task IDs
-  const createBatchResults: Record<string, { ok: boolean; taskId: string }> = {};
-  let taskNum = 1;
-  for (const subCmd of cmd.commands) {
-    createBatchResults[subCmd.command_id] = { ok: true, taskId: `task-${taskNum}` };
-    taskNum++;
-  }
-  report(cmd.command_id, { batch_results: createBatchResults });
-  cmd = next();
-
-  // parallel_batch (update_task×M for deps) or show_status (if no deps)
-  if (cmd.action === 'parallel_batch') {
-    // Dependency wiring batch — report success
-    const depBatchResults: Record<string, { ok: boolean }> = {};
-    for (const subCmd of cmd.commands) {
-      depBatchResults[subCmd.command_id] = { ok: true };
-    }
-    report(cmd.command_id, { batch_results: depBatchResults });
-    cmd = next();
-  }
-
-  // Should be show_status
+  const cmd = run(`init --pipeline ${pipeline} --cwd "${ctx.testDir}"${descFlag}`);
   expect(cmd.action).toBe('show_status');
+  return cmd;
+}
+
+/**
+ * Drive from init through the init phase transition (noop).
+ * Returns the noop command. After reporting it, next() enters requirements or main_loop.
+ */
+export function driveToInitTransition(pipeline: 'feature' | 'bugfix' = 'feature', descriptionFile?: string): any {
+  const showStatus = driveToShowStatus(pipeline, descriptionFile);
+  report(showStatus.command_id);
+  const cmd = next();
+  expect(cmd.action).toBe('noop');
   return cmd;
 }

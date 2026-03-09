@@ -57,7 +57,6 @@
     },
     "needs_clarification": {
       "type": "boolean",
-      "default": false,
       "description": "If true, pauses autonomous pipeline to ask user for clarification on ambiguous requirements"
     },
     "clarification_questions": {

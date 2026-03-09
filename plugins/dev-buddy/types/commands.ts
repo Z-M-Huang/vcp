@@ -9,6 +9,35 @@
  * Zero imports from other type modules to prevent circular deps.
  */
 
+// ─── Named Step Constants ────────────────────────────────────────────────────
+
+/** Main loop dispatch sub-steps. */
+export const DISPATCH_STEP = {
+  AGENT: 0,        // Dispatch agent (spawn_agent/spawn_background)
+  READ_OUTPUT: 1,  // Read output file after agent completes
+  PROCESS: 2,      // Process stage result
+  FIX_FLOW: 10,    // Fix flow: version bump, reset to pending
+  CLARIFY: 13,     // needs_clarification re-dispatch
+} as const;
+
+/** Requirements phase steps. */
+export const REQ_STEP = {
+  CHECK_STAGE: 0,     // Check requirements stage exists
+  VCP_DETECT: 1,      // Read .vcp/config.json
+  CREATE_TEAM: 2,     // Create team for specialists
+  SPAWN_SPECS: 3,     // Spawn specialist batch
+  VERIFY_SPAWN: 4,    // Verify spawn results → receive_messages
+  QA_RELAY: 5,        // Interactive Q&A relay (loops)
+  READ_ANALYSES: 6,   // Read analysis files (parallel_batch)
+  SHUTDOWN_SPECS: 7,  // Guard + shutdown specialists (parallel_batch)
+  MARK_SHUTDOWN: 8,   // Mark specialists as shutdown
+  DELETE_TEAM: 9,     // Delete team for clean foreground context
+  SYNTHESIS: 10,           // Spawn requirements-gatherer. Pre-advances to 11
+  MANIFEST_READ: 11,       // Defense-in-depth manifest read
+  COMPLETE: 12,            // Mark complete, transition to main_loop
+  MANIFEST_ESCALATE: 13,   // Retry exhausted — escalate to user
+} as const;
+
 // ─── Base Types ──────────────────────────────────────────────────────────────
 
 /** Fields present on every command. */
@@ -19,9 +48,11 @@ export interface CommandBase {
   state_version: number;
   /** Discriminated union tag. */
   action: string;
+  /** Optional progress display text. Executor shows this before executing. */
+  progress?: string;
 }
 
-// ─── Task Management ─────────────────────────────────────────────────────────
+// ─── Team Management ────────────────────────────────────────────────────────
 
 export interface CreateTeamCmd extends CommandBase {
   action: 'create_team';
@@ -31,33 +62,6 @@ export interface CreateTeamCmd extends CommandBase {
 export interface DeleteTeamCmd extends CommandBase {
   action: 'delete_team';
   team_name: string;
-}
-
-export interface CreateTaskCmd extends CommandBase {
-  action: 'create_task';
-  subject: string;
-  description: string;
-  activeForm: string;
-}
-
-export interface UpdateTaskCmd extends CommandBase {
-  action: 'update_task';
-  taskId: string;
-  status?: 'in_progress' | 'completed';
-  /** For progressive enrichment and task description rewrites. */
-  description?: string;
-  activeForm?: string;
-  addBlockedBy?: string[];
-  removeBlockedBy?: string[];
-}
-
-export interface ListTasksCmd extends CommandBase {
-  action: 'list_tasks';
-}
-
-export interface GetTaskCmd extends CommandBase {
-  action: 'get_task';
-  taskId: string;
 }
 
 // ─── Agent Dispatch ──────────────────────────────────────────────────────────
@@ -204,10 +208,6 @@ export interface PauseCmd extends CommandBase {
 export type PipelineCommand =
   | CreateTeamCmd
   | DeleteTeamCmd
-  | CreateTaskCmd
-  | UpdateTaskCmd
-  | ListTasksCmd
-  | GetTaskCmd
   | SpawnAgentCmd
   | SpawnTeammateCmd
   | SpawnBackgroundCmd
@@ -243,6 +243,7 @@ export type TerminalState =
   | 'max_iterations_reached'
   | 'user_aborted'
   | 'requirements_manifest_invalid'
+  | 'requirements_manifest_missing'
   | 'phased_reviewer_spawn_failed';
 
 // ─── Report Protocol ─────────────────────────────────────────────────────────
@@ -257,18 +258,12 @@ export interface CommandReport {
 
   // ── Action-specific result fields ──
 
-  /** Returned by create_task. */
-  taskId?: string;
   /** Returned by spawn_background. */
   task_id?: string;
   /** Returned by ask_user. */
   answer?: string;
   /** Returned by receive_messages. */
   messages?: Array<{ from: string; summary: string }>;
-  /** Returned by list_tasks. */
-  tasks?: Array<{ id: string; subject: string; status: string; blockedBy: string[] }>;
-  /** Returned by get_task. */
-  task?: { id: string; subject: string; description: string; status: string; blockedBy: string[] };
   /** Returned by read_file. */
   content?: string;
 

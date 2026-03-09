@@ -13,44 +13,23 @@ describe('pipeline-driver e2e feature trace', () => {
   beforeEach(setup);
   afterEach(teardown);
 
-  test('golden trace: init → tasks → deps → requirements', () => {
+  test('golden trace: init → show_status → noop → requirements', () => {
     let cmd = run(`init --pipeline feature --cwd "${ctx.testDir}"`);
-    expect(cmd.action).toBe('create_team');
-    expect(cmd.team_name).toMatch(/^pipeline-/);
+    expect(cmd.action).toBe('show_status');
+    expect(cmd.message).toBeTruthy();
 
     report(cmd.command_id);
     cmd = next();
-    expect(cmd.action).toBe('list_tasks');
+    expect(cmd.action).toBe('noop'); // init phase transition
 
-    // Batch task creation
-    report(cmd.command_id, { tasks: [] });
+    report(cmd.command_id);
     cmd = next();
-    expect(cmd.action).toBe('parallel_batch');
-    const taskCount = cmd.commands.length;
-    expect(taskCount).toBeGreaterThanOrEqual(9);
-
-    const createResults: Record<string, { ok: boolean; taskId: string }> = {};
-    cmd.commands.forEach((sub: any, i: number) => {
-      createResults[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
-    });
-    report(cmd.command_id, { batch_results: createResults });
-    cmd = next();
-
-    // Batch dependency wiring
-    expect(cmd.action).toBe('parallel_batch');
-    const depResults: Record<string, { ok: boolean }> = {};
-    for (const sub of cmd.commands) {
-      depResults[sub.command_id] = { ok: true };
-    }
-    report(cmd.command_id, { batch_results: depResults });
-    cmd = next();
-
-    expect(cmd.action).toBe('show_status');
+    // Requirements step 0 (CHECK_STAGE) → read_file for VCP
+    expect(cmd.action).toBe('read_file');
 
     const state = readState();
     expect(state.phase).toBe('requirements');
-    expect(state.stages.length).toBe(taskCount);
-    expect(state.stages.every((s: any) => s.task_id)).toBe(true);
+    expect(state.stages.length).toBeGreaterThanOrEqual(9);
 
     const withGroups = state.stages.filter(
       (s: any) => s.parallel_group_id !== null,
@@ -63,37 +42,19 @@ describe('pipeline-driver e2e bugfix trace', () => {
   beforeEach(setup);
   afterEach(teardown);
 
-  test('golden trace: init → tasks → deps → main_loop', () => {
+  test('golden trace: init → show_status → noop → main_loop dispatch', () => {
     let cmd = run(`init --pipeline bugfix --cwd "${ctx.testDir}"`);
-    expect(cmd.action).toBe('create_team');
+    expect(cmd.action).toBe('show_status');
 
     report(cmd.command_id);
     cmd = next();
-    expect(cmd.action).toBe('list_tasks');
+    expect(cmd.action).toBe('noop'); // init phase transition
 
-    // Batch task creation
-    report(cmd.command_id, { tasks: [] });
+    report(cmd.command_id);
     cmd = next();
-    expect(cmd.action).toBe('parallel_batch');
-    expect(cmd.commands.length).toBe(7);
+    // Main loop dispatches first RCA stage: spawn_agent
+    expect(cmd.action).toBe('spawn_agent');
 
-    const createResults: Record<string, { ok: boolean; taskId: string }> = {};
-    cmd.commands.forEach((sub: any, i: number) => {
-      createResults[sub.command_id] = { ok: true, taskId: `task-${i + 1}` };
-    });
-    report(cmd.command_id, { batch_results: createResults });
-    cmd = next();
-
-    // Batch dependency wiring
-    expect(cmd.action).toBe('parallel_batch');
-    const depResults: Record<string, { ok: boolean }> = {};
-    for (const sub of cmd.commands) {
-      depResults[sub.command_id] = { ok: true };
-    }
-    report(cmd.command_id, { batch_results: depResults });
-    cmd = next();
-
-    expect(cmd.action).toBe('show_status');
     const state = readState();
     expect(state.phase).toBe('main_loop');
     expect(state.stages.length).toBe(7);
@@ -109,41 +70,72 @@ describe('pipeline-driver RCA consolidation', () => {
   beforeEach(setup);
   afterEach(teardown);
 
-  /** Drive bugfix to completion of all RCA stages */
+  /** Drive bugfix to completion of all RCA stages (handles parallel dispatch) */
   function driveBugfixThroughRcaStages(): { state: any } {
     const showStatus = driveToShowStatus('bugfix');
     report(showStatus.command_id);
 
+    // noop (init transition)
+    let cmd = next();
+    report(cmd.command_id);
+
     const state = readState();
     const rcaStages = state.stages.filter((s: any) => s.type === 'rca');
 
-    // Complete each RCA stage
-    for (let i = 0; i < rcaStages.length; i++) {
-      let cmd = next(); // update_task(in_progress)
-      report(cmd.command_id);
-      cmd = next(); // spawn_agent
-      report(cmd.command_id);
-      cmd = next(); // read_file
+    // RCA stages may be dispatched as parallel_batch or sequential spawn_agent
+    cmd = next();
 
-      // Write output file
-      const s = readState().stages[i];
-      const outputPath = path.join(ctx.testDir, '.vcp/task', s.output_file);
-      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-      fs.writeFileSync(outputPath, JSON.stringify({
-        status: 'complete',
-        root_cause: `Null pointer in module ${i}`,
-      }));
+    if (cmd.action === 'parallel_batch') {
+      // Parallel dispatch — report batch success
+      const batchResults: Record<string, any> = {};
+      for (const c of cmd.commands) {
+        batchResults[c.command_id] = { ok: true };
+      }
+      report(cmd.command_id, { batch_results: batchResults });
 
-      report(cmd.command_id, {
-        content: JSON.stringify({
+      // Read output files for each RCA stage
+      for (let i = 0; i < rcaStages.length; i++) {
+        cmd = next(); // read_file
+        expect(cmd.action).toBe('read_file');
+
+        const s = readState().stages[rcaStages[i].index];
+        const outputPath = path.join(ctx.testDir, '.vcp/task', s.output_file);
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        fs.writeFileSync(outputPath, JSON.stringify({
           status: 'complete',
           root_cause: `Null pointer in module ${i}`,
-        }),
-      });
+        }));
 
-      // update_task(completed) + enrichment
-      cmd = next();
-      report(cmd.command_id);
+        report(cmd.command_id, {
+          content: JSON.stringify({
+            status: 'complete',
+            root_cause: `Null pointer in module ${i}`,
+          }),
+        });
+      }
+    } else {
+      // Sequential dispatch — may be spawn_agent or spawn_background depending on provider
+      for (let i = 0; i < rcaStages.length; i++) {
+        if (i > 0) cmd = next();
+        expect(['spawn_agent', 'spawn_background']).toContain(cmd.action);
+        report(cmd.command_id);
+
+        cmd = next(); // read_file
+        const s = readState().stages[rcaStages[i].index];
+        const outputPath = path.join(ctx.testDir, '.vcp/task', s.output_file);
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        fs.writeFileSync(outputPath, JSON.stringify({
+          status: 'complete',
+          root_cause: `Null pointer in module ${i}`,
+        }));
+
+        report(cmd.command_id, {
+          content: JSON.stringify({
+            status: 'complete',
+            root_cause: `Null pointer in module ${i}`,
+          }),
+        });
+      }
     }
 
     return { state: readState() };
@@ -153,9 +145,7 @@ describe('pipeline-driver RCA consolidation', () => {
     driveBugfixThroughRcaStages();
 
     // After RCA stages, next should trigger RCA consolidation
-    // with parallel_batch to read all RCA outputs
     const cmd = next();
-    // Could be parallel_batch (read outputs) or continue to plan-review
     const state = readState();
     if (state.rca_consolidation) {
       expect(state.rca_consolidation.all_complete).toBe(true);
@@ -184,8 +174,8 @@ describe('pipeline-driver background task waiting', () => {
       pending_command: null,
       command_history: [],
       stages: [
-        { index: 0, type: 'rca', provider: 'minimax', model: 'MiniMax-M2.5', providerType: 'api', output_file: 'rca-minimax-MiniMax-M2.5-0-v1.json', task_id: 'task-1', parallel_group_id: null, current_version: 1, status: 'in_progress', iteration_count: 0 },
-        { index: 1, type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json', task_id: 'task-2', parallel_group_id: null, current_version: 1, status: 'pending', iteration_count: 0 },
+        { index: 0, type: 'rca', provider: 'minimax', model: 'MiniMax-M2.5', providerType: 'api', output_file: 'rca-minimax-MiniMax-M2.5-0-v1.json', parallel_group_id: null, current_version: 1, status: 'in_progress', iteration_count: 0 },
+        { index: 1, type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json', parallel_group_id: null, current_version: 1, status: 'pending', iteration_count: 0 },
       ],
       active_parallel_group: null,
       phased_state: null,
@@ -204,7 +194,7 @@ describe('pipeline-driver background task waiting', () => {
       vcp_detection: { detected: false, source_config_path: null, context_injected: false },
       rca_consolidation: null,
       current_dispatch_index: 0,
-      dispatch_step: 1, // Agent dispatched, waiting for report
+      dispatch_step: 0, // AGENT — will emit wait_for_task for API bg task
       paused: false,
       pause_reason: null,
       pending_user_decision: null,
@@ -221,7 +211,7 @@ describe('pipeline-driver background task waiting', () => {
       resolved_config: {},
       stages: state.stages.map(s => ({
         type: s.type, provider: s.provider, model: s.model, providerType: s.providerType,
-        output_file: s.output_file, task_id: s.task_id, parallel_group_id: s.parallel_group_id,
+        output_file: s.output_file, parallel_group_id: s.parallel_group_id,
         current_version: s.current_version,
       })),
     }));
@@ -231,23 +221,26 @@ describe('pipeline-driver background task waiting', () => {
     const showStatus = driveToShowStatus('bugfix');
     report(showStatus.command_id);
 
-    // Stage 0 dispatch
-    let cmd = next(); // update_task
+    // noop (init transition)
+    let cmd = next();
     report(cmd.command_id);
-    cmd = next(); // spawn_agent (or spawn_background for API stages)
+
+    // Stage 0 dispatch: spawn_agent
+    cmd = next();
+    expect(cmd.action).toBe('spawn_agent');
 
     // Report with a task_id (simulating spawn_background)
     report(cmd.command_id, { task_id: 'bg-abc' });
 
     const state = readState();
-    // dispatch_step should advance to 2 (read output)
-    expect(state.dispatch_step).toBe(2);
+    // dispatch_step should advance to READ_OUTPUT (1)
+    expect(state.dispatch_step).toBe(1);
   });
 
   test('wait_for_task emitted for API stage with running background task', () => {
     setupStateWithBackgroundTask();
 
-    // dispatch_step=1 with background task → should emit wait_for_task
+    // dispatch_step=0 with background task → should emit wait_for_task
     const cmd = next();
     expect(cmd.action).toBe('wait_for_task');
     expect(cmd.task_id).toBe('bg-task-123');
@@ -286,7 +279,7 @@ describe('pipeline-driver background task waiting', () => {
     expect(cmd.action).toBe('read_file');
 
     const state = readState();
-    expect(state.dispatch_step).toBe(2);
+    expect(state.dispatch_step).toBe(1); // READ_OUTPUT
   });
 });
 
@@ -300,11 +293,14 @@ describe('pipeline-driver error recovery', () => {
     const showStatus = driveToShowStatus('bugfix');
     report(showStatus.command_id);
 
-    let cmd = next(); // update_task(in_progress)
+    // noop (init transition)
+    let cmd = next();
     report(cmd.command_id);
-    cmd = next(); // spawn_agent
 
-    // Report failure
+    cmd = next(); // spawn_agent
+    expect(cmd.action).toBe('spawn_agent');
+
+    // Report failure — all args are test constants, execSync is safe
     const rpt = { command_id: cmd.command_id, ok: false, error: 'Agent spawn failed' };
     const rptFile = path.join(ctx.testDir, 'rpt.json');
     fs.writeFileSync(rptFile, JSON.stringify(rpt));
@@ -320,7 +316,7 @@ describe('pipeline-driver error recovery', () => {
   });
 
   test('max iterations reached → terminal state', () => {
-    // Inject state at dispatch_step 3 with iteration_count at max
+    // Inject state at dispatch_step PROCESS with iteration_count at max
     const taskDir = path.join(ctx.testDir, '.vcp/task');
     fs.mkdirSync(taskDir, { recursive: true });
 
@@ -334,8 +330,8 @@ describe('pipeline-driver error recovery', () => {
       pending_command: null,
       command_history: [],
       stages: [
-        { index: 0, type: 'rca', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'rca-0-v1.json', task_id: 'task-1', parallel_group_id: null, current_version: 1, status: 'needs_changes', iteration_count: 10 },
-        { index: 1, type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan-review-1-v1.json', task_id: 'task-2', parallel_group_id: null, current_version: 1, status: 'pending', iteration_count: 0 },
+        { index: 0, type: 'rca', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'rca-0-v1.json', parallel_group_id: null, current_version: 1, status: 'needs_changes', iteration_count: 10 },
+        { index: 1, type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan-review-1-v1.json', parallel_group_id: null, current_version: 1, status: 'pending', iteration_count: 0 },
       ],
       active_parallel_group: null,
       phased_state: null,
@@ -344,7 +340,7 @@ describe('pipeline-driver error recovery', () => {
       vcp_detection: { detected: false, source_config_path: null, context_injected: false },
       rca_consolidation: null,
       current_dispatch_index: 0,
-      dispatch_step: 3, // Just processed result — stage is needs_changes
+      dispatch_step: 2, // PROCESS — stage is needs_changes
       paused: false,
       pause_reason: null,
       pending_user_decision: null,
@@ -361,12 +357,12 @@ describe('pipeline-driver error recovery', () => {
       resolved_config: {},
       stages: state.stages.map(s => ({
         type: s.type, provider: s.provider, model: s.model, providerType: s.providerType,
-        output_file: s.output_file, task_id: s.task_id, parallel_group_id: s.parallel_group_id,
+        output_file: s.output_file, parallel_group_id: s.parallel_group_id,
         current_version: s.current_version,
       })),
     }));
 
-    // dispatch_step 3 with needs_changes + iteration_count=10 (>= max_iterations=10)
+    // dispatch_step PROCESS with needs_changes + iteration_count=10 (>= max_iterations=10)
     const cmd = next();
     expect(cmd.action).toBe('done');
     expect(cmd.terminal_state).toBe('max_iterations_reached');
@@ -383,14 +379,13 @@ describe('pipeline-driver bug fixes', () => {
   beforeEach(setup);
   afterEach(teardown);
 
-  test('fix 1: resume pending stage goes through dispatchStage (update_task first)', () => {
-    // Build a pipeline-tasks.json with a pending stage (simulating resume)
+  test('fix 1: resume pending stage dispatches spawn_agent directly', () => {
     const taskDir = path.join(ctx.testDir, '.vcp/task');
     fs.mkdirSync(taskDir, { recursive: true });
 
     const stages = [
       { type: 'rca', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription',
-        output_file: 'rca-anthropic-subscription-sonnet-0-v1.json', task_id: 'task-1',
+        output_file: 'rca-anthropic-subscription-sonnet-0-v1.json',
         parallel_group_id: null, current_version: 1 },
     ];
 
@@ -410,31 +405,21 @@ describe('pipeline-driver bug fixes', () => {
     report(cmd.command_id, { answer: 'Resume' });
     cmd = next();
 
-    // The resumed pending stage should go through the normal main_loop flow,
-    // which calls dispatchStage → update_task(in_progress) first
-    // NOT directly to spawn_agent (which was the bug)
     if (cmd.action === 'show_status') {
       report(cmd.command_id);
       cmd = next();
     }
-    // First dispatch action for a pending stage must be update_task(in_progress)
-    expect(cmd.action).toBe('update_task');
-    expect(cmd.status).toBe('in_progress');
+    // First dispatch action for a pending stage is spawn_agent
+    expect(cmd.action).toBe('spawn_agent');
   });
 
-  test('fix 2: pipeline-tasks.json has task IDs after task-chain creation', () => {
+  test('fix 2: pipeline-tasks.json has no task_id fields', () => {
     const showStatus = driveToShowStatus('bugfix');
     report(showStatus.command_id);
 
-    // At this point, task-chain creation is complete.
-    // Verify pipeline-tasks.json has real task IDs (not all null).
     const tasks = readPipelineTasks();
-    const taskIds = tasks.stages.map((s: any) => s.task_id);
-    expect(taskIds.some((id: any) => id !== null)).toBe(true);
-    // All stages should have non-null task IDs
-    for (const id of taskIds) {
-      expect(id).not.toBeNull();
-      expect(id).toMatch(/^task-/);
+    for (const stage of tasks.stages) {
+      expect(stage.task_id).toBeUndefined();
     }
   });
 
@@ -444,11 +429,10 @@ describe('pipeline-driver bug fixes', () => {
 
     const stages = [
       { index: 0, type: 'implementation', provider: 'minimax', model: 'MiniMax-M2.5',
-        providerType: 'api', output_file: 'impl-result.json', task_id: 'task-impl',
+        providerType: 'api', output_file: 'impl-result.json',
         parallel_group_id: null, current_version: 1, status: 'in_progress', iteration_count: 0 },
     ];
 
-    // State in phased_implementation step 1 (dispatch implementer)
     const state = {
       pipeline: 'feature',
       team_name: 'pipeline-test-api',
@@ -477,7 +461,7 @@ describe('pipeline-driver bug fixes', () => {
       specialists: null,
       vcp_detection: { detected: false, source_config_path: null, context_injected: false },
       rca_consolidation: null,
-      current_dispatch_index: null, // null in phased mode
+      current_dispatch_index: null,
       dispatch_step: 0,
       paused: false,
       pause_reason: null,
@@ -495,24 +479,21 @@ describe('pipeline-driver bug fixes', () => {
       resolved_config: {},
       stages: stages.map(s => ({
         type: s.type, provider: s.provider, model: s.model, providerType: s.providerType,
-        output_file: s.output_file, task_id: s.task_id,
+        output_file: s.output_file,
         parallel_group_id: s.parallel_group_id, current_version: s.current_version,
       })),
     }));
 
-    // next should emit spawn_background for API provider
     const cmd = next();
     expect(cmd.action).toBe('spawn_background');
     expect(cmd.stage_index).toBe(0);
 
-    // Report spawn_background with task_id
     report(cmd.command_id, { task_id: 'bg-phased-1' });
 
-    // Verify background_tasks entry has correct stage_index (not null)
     const updatedState = readState();
     const bgEntry = updatedState.background_tasks['bg-phased-1'];
     expect(bgEntry).toBeDefined();
-    expect(bgEntry.stage_index).toBe(0); // Was null before fix
+    expect(bgEntry.stage_index).toBe(0);
   });
 
   test('fix 4: partial reviewer files waits for all reviewers', () => {
@@ -520,10 +501,10 @@ describe('pipeline-driver bug fixes', () => {
     fs.mkdirSync(path.join(taskDir, 'phased-reviews'), { recursive: true });
 
     const stages = [
-      { index: 0, type: 'planning', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan/manifest.json', task_id: 'task-1', parallel_group_id: null, current_version: 1, status: 'completed', iteration_count: 0 },
-      { index: 1, type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json', task_id: 'task-2', parallel_group_id: null, current_version: 1, status: 'completed', iteration_count: 0 },
-      { index: 2, type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'impl-result.json', task_id: 'task-3', parallel_group_id: null, current_version: 1, status: 'in_progress', iteration_count: 0 },
-      { index: 3, type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'code-review-anthropic-subscription-sonnet-3-v1.json', task_id: 'task-4', parallel_group_id: null, current_version: 1, status: 'pending', iteration_count: 0 },
+      { index: 0, type: 'planning', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan/manifest.json', parallel_group_id: null, current_version: 1, status: 'completed', iteration_count: 0 },
+      { index: 1, type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'plan-review-anthropic-subscription-sonnet-1-v1.json', parallel_group_id: null, current_version: 1, status: 'completed', iteration_count: 0 },
+      { index: 2, type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'impl-result.json', parallel_group_id: null, current_version: 1, status: 'in_progress', iteration_count: 0 },
+      { index: 3, type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription', output_file: 'code-review-anthropic-subscription-sonnet-3-v1.json', parallel_group_id: null, current_version: 1, status: 'pending', iteration_count: 0 },
     ];
 
     const state = {
@@ -532,7 +513,7 @@ describe('pipeline-driver bug fixes', () => {
       config_hash: 'test',
       state_version: 20,
       phase: 'phased_implementation',
-      step: 3, // Step 3: check review verdicts
+      step: 3,
       pending_command: null,
       command_history: [],
       stages,
@@ -572,19 +553,17 @@ describe('pipeline-driver bug fixes', () => {
       resolved_config: {},
       stages: stages.map(s => ({
         type: s.type, provider: s.provider, model: s.model, providerType: s.providerType,
-        output_file: s.output_file, task_id: s.task_id,
+        output_file: s.output_file,
         parallel_group_id: s.parallel_group_id, current_version: s.current_version,
       })),
     }));
 
-    // Write only 1 of 2 expected review files (config has 2 phased reviewers)
     fs.writeFileSync(
       path.join(taskDir, 'phased-reviews/phased-review-bailian-qwen3.5-plus-step-2-v1.json'),
       JSON.stringify({ status: 'approved' }),
     );
 
     const cmd = next();
-    // Should wait (noop) because not all reviewers have submitted
     expect(cmd.action).toBe('noop');
     expect(cmd.message).toMatch(/Waiting for phased review/);
   });
@@ -593,58 +572,66 @@ describe('pipeline-driver bug fixes', () => {
     const showStatus = driveToShowStatus('bugfix');
     report(showStatus.command_id);
 
+    // noop (init transition)
+    let cmd = next();
+    report(cmd.command_id);
+
     const state = readState();
     const rcaStages = state.stages.filter((s: any) => s.type === 'rca');
 
-    // Complete each RCA stage with different OBJECT root causes
-    for (let i = 0; i < rcaStages.length; i++) {
-      let cmd = next(); // update_task(in_progress)
-      report(cmd.command_id);
-      cmd = next(); // spawn_agent
-      report(cmd.command_id);
-      cmd = next(); // read_file
+    // RCA stages may be dispatched as parallel_batch or sequential
+    cmd = next();
 
-      const rootCauseObj = {
-        summary: i === 0 ? 'Memory leak in parser' : 'Race condition in scheduler',
-        location: i === 0 ? 'parser.ts:42' : 'scheduler.ts:99',
-      };
+    // Drive through RCA stages — may be parallel_batch or sequential spawn_agent/spawn_background
+    let iterations = 0;
+    while (iterations < 30 && cmd.action !== 'done') {
+      if (cmd.action === 'parallel_batch') {
+        const batchResults: Record<string, any> = {};
+        for (const c of cmd.commands) {
+          batchResults[c.command_id] = { ok: true };
+        }
+        report(cmd.command_id, { batch_results: batchResults });
+      } else if (cmd.action === 'read_file') {
+        const st = readState();
+        if (st.current_dispatch_index !== null) {
+          const s = st.stages[st.current_dispatch_index];
+          const rcaIdx = rcaStages.findIndex((r: any) => r.index === s.index);
+          const rootCauseObj = {
+            summary: rcaIdx === 0 ? 'Memory leak in parser' : 'Race condition in scheduler',
+            location: rcaIdx === 0 ? 'parser.ts:42' : 'scheduler.ts:99',
+          };
+          const outputPath = path.join(ctx.testDir, '.vcp/task', s.output_file);
+          fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+          fs.writeFileSync(outputPath, JSON.stringify({ status: 'complete', root_cause: rootCauseObj }));
+          report(cmd.command_id, { content: JSON.stringify({ status: 'complete', root_cause: rootCauseObj }) });
+        } else {
+          report(cmd.command_id);
+        }
+      } else {
+        report(cmd.command_id);
+      }
 
-      const s = readState().stages[i];
-      const outputPath = path.join(ctx.testDir, '.vcp/task', s.output_file);
-      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-      fs.writeFileSync(outputPath, JSON.stringify({
-        status: 'complete',
-        root_cause: rootCauseObj,
-      }));
+      // Check if RCA consolidation phase started
+      const st = readState();
+      if (st.rca_consolidation) break;
 
-      report(cmd.command_id, {
-        content: JSON.stringify({
-          status: 'complete',
-          root_cause: rootCauseObj,
-        }),
-      });
-
-      // update_task(completed) + enrichment
       cmd = next();
-      report(cmd.command_id);
+      iterations++;
     }
 
     const finalState = readState();
     if (finalState.rca_consolidation) {
-      // With different object root causes, disagreement should be detected
-      // Before the fix, String({...}) = "[object Object]" made them appear identical
       expect(finalState.rca_consolidation.disagreement_detected).toBe(true);
     }
   });
 
   test('fix 7: resume rejected/failed stage resets to pending for normal dispatch', () => {
-    // Build a pipeline-tasks.json with a stage that was rejected (simulating resume)
     const taskDir = path.join(ctx.testDir, '.vcp/task');
     fs.mkdirSync(taskDir, { recursive: true });
 
     const stages = [
       { type: 'rca', provider: 'anthropic-subscription', model: 'sonnet', providerType: 'subscription',
-        output_file: 'rca-anthropic-subscription-sonnet-0-v1.json', task_id: 'task-1',
+        output_file: 'rca-anthropic-subscription-sonnet-0-v1.json',
         parallel_group_id: null, current_version: 1 },
     ];
 
@@ -656,7 +643,6 @@ describe('pipeline-driver bug fixes', () => {
       stages,
     }));
 
-    // Write a state file where the stage is 'rejected'
     fs.writeFileSync(path.join(taskDir, 'pipeline-state.json'), JSON.stringify({
       state_version: 1,
       pipeline: 'bugfix',
@@ -666,7 +652,7 @@ describe('pipeline-driver bug fixes', () => {
       stages: [{
         index: 0, type: 'rca', provider: 'anthropic-subscription', model: 'sonnet',
         providerType: 'subscription', output_file: 'rca-anthropic-subscription-sonnet-0-v1.json',
-        task_id: 'task-1', status: 'rejected', parallel_group_id: null, current_version: 1,
+        status: 'rejected', parallel_group_id: null, current_version: 1,
         iteration_count: 1,
       }],
       pending_command: null,
@@ -685,24 +671,18 @@ describe('pipeline-driver bug fixes', () => {
       vcp_detection: { detected: false, source_config_path: null, context_injected: false },
     }));
 
-    // Init should detect existing pipeline and ask user
     let cmd = run(`init --pipeline bugfix --cwd "${ctx.testDir}"`);
     expect(cmd.action).toBe('ask_user');
 
-    // User chooses resume
     report(cmd.command_id, { answer: 'Resume' });
     cmd = next();
 
-    // After resume, the rejected stage should be reset to 'pending'
-    // and go through normal dispatchStage flow (update_task first)
     if (cmd.action === 'show_status') {
       report(cmd.command_id);
       cmd = next();
     }
-    expect(cmd.action).toBe('update_task');
-    expect(cmd.status).toBe('in_progress');
+    expect(cmd.action).toBe('spawn_agent');
 
-    // Verify state: the stage should have been reset from 'rejected' to being dispatched
     const updatedState = readState();
     expect(updatedState.stages[0].status).toBe('in_progress');
   });
@@ -711,22 +691,27 @@ describe('pipeline-driver bug fixes', () => {
     const showStatus = driveToShowStatus('feature');
     report(showStatus.command_id);
 
-    let cmd = next(); // update_task
+    // noop (init transition)
+    let cmd = next();
     report(cmd.command_id);
 
-    cmd = next(); // read_file VCP
-    // Report VCP as detected
+    cmd = next(); // read_file VCP (CHECK_STAGE)
     report(cmd.command_id, {
       content: JSON.stringify({ pluginRoot: '/some/path' }),
     });
 
+    cmd = next(); // noop (VCP_DETECT)
+    report(cmd.command_id);
+
     let state = readState();
     expect(state.vcp_detection.detected).toBe(true);
+
+    cmd = next(); // create_team (CREATE_TEAM)
+    report(cmd.command_id);
 
     cmd = next(); // parallel_batch (spawn specialists)
     expect(cmd.action).toBe('parallel_batch');
 
-    // After specialists are spawned with VCP detected, context_injected should be true
     state = readState();
     expect(state.vcp_detection.context_injected).toBe(true);
   });
