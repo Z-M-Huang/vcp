@@ -749,6 +749,7 @@
                   class="stage-select"
                   x-model="participant.preset"
                   x-on:change="onParticipantProviderChange(index)"
+                  x-init="$nextTick(() => $el.value = participant.preset || '')"
                 >
                   <option value="" disabled>Select preset...</option>
                   <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
@@ -758,12 +759,11 @@
                 <select
                   class="stage-select model-select"
                   x-model="participant.model"
+                  x-init="$nextTick(() => $el.value = participant.model || '')"
                 >
                   <option value="" disabled>Select model...</option>
-                  <template x-if="stageModelOptions[participant.preset]">
-                    <template x-for="model in stageModelOptions[participant.preset]" x-bind:key="model">
-                      <option x-bind:value="model" x-text="model"></option>
-                    </template>
+                  <template x-for="m in (stageModelOptions[participant.preset] || [])" x-bind:key="m">
+                    <option x-bind:value="m" x-text="m"></option>
                   </template>
                 </select>
               </div>
