@@ -125,7 +125,7 @@ Any failure → silent fallback to generic OWASP analysis. Does not block the pi
 Legacy `.vcp.json` is auto-migrated to `.vcp/config.json` when the CLI runs.
 
 The `vcp_standards_referenced` field in analysis-security.json lists the standard
-names that were evaluated. This flows through to user-story.json for downstream traceability.
+names that were evaluated. This flows through to `user-story/manifest.json` for downstream traceability.
 
 ---
 
@@ -284,6 +284,25 @@ When `max_phased_iterations` is exhausted for a step, the orchestrator pauses th
 ### Final Code Review
 
 The final code-review stage is independent of phased reviews. It receives no phased review context — it reviews the complete codebase as assembled by all steps.
+
+---
+
+## Shared Pipeline Documentation
+
+Both `/dev-buddy-feature-implement` and `/dev-buddy-bug-fix` SKILL.md files reference shared pipeline procedures in `docs/pipeline/`:
+
+| File | Content |
+|------|---------|
+| `core-init-resume.md` | Resume detection, safety checks, config drift, team recreation, task chain rebuild |
+| `core-task-chain.md` | Fresh init (reset, validate, load config, create team), task chain creation algorithm |
+| `core-main-loop.md` | Main while loop, parallel execution, progressive enrichment, result handling |
+| `core-phased-implementation.md` | Full P0-P2f phased implementation loop, aggregation, resume extension |
+| `core-provider-dispatch.md` | Provider routing (subscription/api/cli), timeout derivation, background polling |
+| `core-same-stage-rereview.md` | Dynamic fix tasks, two-phase update, group-aware successor rewiring |
+| `feature-requirements-team.md` | Feature-only: specialist catalog, VCP detection, spawn, interactive loop, synthesis |
+| `bugfix-rca-consolidation.md` | Bug-fix-only: RCA consolidation trigger, inline orchestrator consolidation |
+
+Each SKILL.md contains a "spine" with execution invariants, pipeline variables, and task description rules that are pipeline-specific. The shared reference files handle the common algorithms.
 
 ---
 

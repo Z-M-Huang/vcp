@@ -54,65 +54,54 @@ This pipeline uses a **Task + Hook architecture** with a persistent pipeline tea
 
 ---
 
+## Detailed Pipeline Procedures
+
+Execution procedures are documented in `docs/pipeline/`:
+
+| File | Content |
+|------|---------|
+| [core-init-resume.md](pipeline/core-init-resume.md) | Resume detection, safety checks, config drift, team recreation, task chain rebuild |
+| [core-task-chain.md](pipeline/core-task-chain.md) | Fresh init (reset, validate, load config, create team), task chain creation algorithm |
+| [core-main-loop.md](pipeline/core-main-loop.md) | Main while loop, parallel execution, progressive enrichment, result handling |
+| [core-phased-implementation.md](pipeline/core-phased-implementation.md) | Full P0-P2f phased implementation loop, aggregation, resume extension |
+| [core-provider-dispatch.md](pipeline/core-provider-dispatch.md) | Provider routing (subscription/api/cli), timeout derivation, background polling |
+| [core-same-stage-rereview.md](pipeline/core-same-stage-rereview.md) | Dynamic fix tasks, two-phase update, group-aware successor rewiring |
+| [feature-requirements-team.md](pipeline/feature-requirements-team.md) | Feature-only: specialist catalog, VCP detection, spawn, interactive loop, synthesis |
+| [bugfix-rca-consolidation.md](pipeline/bugfix-rca-consolidation.md) | Bug-fix-only: RCA consolidation trigger, inline orchestrator consolidation |
+
+Each SKILL.md (feature-implement, bug-fix) references these shared files and contains pipeline-specific logic inline (task description rules, variant sections, pipeline variables).
+
+---
+
 ## State Flow (Dynamic Phases)
 
 **Feature pipeline:**
 ```
 idle
-→ requirements_gathering (or requirements_team_pending / requirements_team_exploring)
-→ plan_drafting
-→ plan_review_1 ↔ fix_plan_review_1
-→ plan_review_2 ↔ fix_plan_review_2
-→ plan_review_N ↔ fix_plan_review_N   (N = count of plan-review stages in config)
-→ implementation
-→ code_review_1 ↔ fix_code_review_1
-→ code_review_2 ↔ fix_code_review_2
-→ code_review_M ↔ fix_code_review_M   (M = count of code-review stages in config)
-→ complete
+-> requirements_gathering (or requirements_team_pending / requirements_team_exploring)
+-> plan_drafting
+-> plan_review_1 <-> fix_plan_review_1
+-> plan_review_2 <-> fix_plan_review_2
+-> plan_review_N <-> fix_plan_review_N   (N = count of plan-review stages in config)
+-> implementation
+-> code_review_1 <-> fix_code_review_1
+-> code_review_2 <-> fix_code_review_2
+-> code_review_M <-> fix_code_review_M   (M = count of code-review stages in config)
+-> complete
 ```
 
 **Bug-fix pipeline:**
 ```
 idle
-→ root_cause_analysis (pending / in progress / consolidation)
-→ plan_review_1  (Codex RCA+plan validation gate)
-→ implementation
-→ code_review_1 ↔ fix_code_review_1
-→ code_review_M ↔ fix_code_review_M
-→ complete
+-> root_cause_analysis (pending / in progress / consolidation)
+-> plan_review_1  (Codex RCA+plan validation gate)
+-> implementation
+-> code_review_1 <-> fix_code_review_1
+-> code_review_M <-> fix_code_review_M
+-> complete
 ```
 
 Phase tokens are **dynamic** — the index suffix matches the stage position in the pipeline config array (1-based, counting within the stage type). Max `max_iterations` re-reviews per reviewer before escalating to user.
-
----
-
-## Task Chain (Dynamic)
-
-After loading the config, tasks are created by iterating the resolved pipeline array:
-
-```
-// Feature pipeline with default 9 stages:
-T1 = TaskCreate(subject: "Requirements 1")
-T2 = TaskCreate(subject: "Planning 1")         → addBlockedBy: [T1]
-T3 = TaskCreate(subject: "Plan Review 1")      → addBlockedBy: [T2]
-T4 = TaskCreate(subject: "Plan Review 2")      → addBlockedBy: [T3]
-T5 = TaskCreate(subject: "Plan Review 3")      → addBlockedBy: [T4]  <- last plan-review gate
-T6 = TaskCreate(subject: "Implementation 1")   → addBlockedBy: [T5]
-T7 = TaskCreate(subject: "Code Review 1")      → addBlockedBy: [T6]
-T8 = TaskCreate(subject: "Code Review 2")      → addBlockedBy: [T7]
-T9 = TaskCreate(subject: "Code Review 3")      → addBlockedBy: [T8]  <- final gate
-```
-
-Store returned IDs + `resolved_config` snapshot in `.vcp/task/pipeline-tasks.json`. See SKILL.md for full details.
-
-### Dynamic Fix Tasks
-
-When a review returns `needs_changes`:
-
-1. `fix = TaskCreate(subject: "Fix Plan Review 2 v1", ...)` then `TaskUpdate(fix.id, addBlockedBy: [review_id])`
-2. `rerev = TaskCreate(subject: "Plan Review 2 v2", ...)` then `TaskUpdate(rerev.id, addBlockedBy: [fix.id])`
-3. `if next_stage_task_id is not null: TaskUpdate(next_stage_task_id, addBlockedBy: [rerev.id])`
-   - Re-review returns to **same stage index** — not next stage
 
 ---
 

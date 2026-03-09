@@ -4,8 +4,8 @@
 
 **打破 AI 回音壁。交付安全代码。**
 
-![Skills-5](https://img.shields.io/badge/Skills-5-blue?style=flat-square)
-![Agents-7](https://img.shields.io/badge/Agents-7-green?style=flat-square)
+![Skills-6](https://img.shields.io/badge/Skills-6-blue?style=flat-square)
+![Agents-8](https://img.shields.io/badge/Agents-8-green?style=flat-square)
 ![Hooks-2](https://img.shields.io/badge/Hooks-2-orange?style=flat-square)
 
 <img src="../../assets/hero.png" alt="Dev Buddy — 多 AI Pipeline 编排" width="700">
@@ -214,7 +214,7 @@ Pipeline 在 `~/.vcp/dev-buddy.json` 中定义为有序的阶段数组。每个�
 - **[功能开发 Pipeline](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Feature-Pipeline.zh)** —— 团队需求、计划评审、代码评审
 - **[Bug 修复 Pipeline](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Bug-Fix-Pipeline.zh)** —— RCA、汇总、最小化修复
 - **[AI Provider Presets](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-AI-Provider-Presets.zh)** —— Subscription、API 和 CLI preset
-- **[Agent 参考](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Agents-Reference.zh)** —— 全部 7 种 agent 类型
+- **[Agent 参考](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Agents-Reference.zh)** —— 全部 8 种 agent 类型
 - **[Dev Buddy Hooks](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Hooks-Reference.zh)** —— Guidance hook 和 review validator
 
 ---

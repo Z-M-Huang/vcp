@@ -4,8 +4,8 @@
 
 **Break the AI echo chamber. Ship secure code.**
 
-![Skills-5](https://img.shields.io/badge/Skills-5-blue?style=flat-square)
-![Agents-7](https://img.shields.io/badge/Agents-7-green?style=flat-square)
+![Skills-6](https://img.shields.io/badge/Skills-6-blue?style=flat-square)
+![Agents-8](https://img.shields.io/badge/Agents-8-green?style=flat-square)
 ![Hooks-2](https://img.shields.io/badge/Hooks-2-orange?style=flat-square)
 
 <img src="../../assets/hero.png" alt="Dev Buddy — Multi-AI Pipeline Orchestration" width="700">
@@ -214,7 +214,7 @@ Full documentation is on the **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)
 - **[Feature Pipeline](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Feature-Pipeline)** — Team-based requirements, plan reviews, code reviews
 - **[Bug Fix Pipeline](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Bug-Fix-Pipeline)** — RCA, consolidation, minimal fix
 - **[AI Provider Presets](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-AI-Provider-Presets)** — Subscription, API, and CLI presets
-- **[Agents Reference](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Agents-Reference)** — All 7 agent types
+- **[Agents Reference](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Agents-Reference)** — All 8 agent types
 - **[Dev Buddy Hooks](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Hooks-Reference)** — Guidance hook and review validator
 
 ---

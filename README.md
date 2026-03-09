@@ -21,8 +21,8 @@
 ![41 Standards](https://img.shields.io/badge/Standards-41-blue?style=flat-square)
 ![12 Scopes](https://img.shields.io/badge/Scopes-12-green?style=flat-square)
 ![OWASP Top 10](https://img.shields.io/badge/OWASP_Top_10-Covered-critical?style=flat-square)
-![14 Skills](https://img.shields.io/badge/Skills-14-blue?style=flat-square)
-![8 Agents](https://img.shields.io/badge/Agents-8-green?style=flat-square)
+![16 Skills](https://img.shields.io/badge/Skills-16-blue?style=flat-square)
+![9 Agents](https://img.shields.io/badge/Agents-9-green?style=flat-square)
 ![6 Hooks](https://img.shields.io/badge/Hooks-6-orange?style=flat-square)
 
 </div>

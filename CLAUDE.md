@@ -16,7 +16,7 @@ VCP enforces standards through three layers:
 ### Plugin Structure
 
 - `plugins/vcp/` — VCP plugin with 10 skills, 1 agent, and 4 hooks
-- `plugins/dev-buddy/` — Dev Buddy plugin with 5 skills, 7 agents, and 2 hooks
+- `plugins/dev-buddy/` — Dev Buddy plugin with 5 skills, 7 agents, and 2 hooks. Pipeline skills use a "spine + shared references" pattern: each SKILL.md contains pipeline-specific logic inline, and references shared procedures in `docs/pipeline/` (8 files covering init, task chain, main loop, phased implementation, provider dispatch, re-review, and variant-specific logic)
 - Skills fetch standards from `standards/manifest.json` at runtime via WebFetch (always latest from main)
 - `.vcp/config.json` in project root configures scopes, compliance frameworks, severity threshold, and CWE ignore list
 - `security-gate.ts` exits 2 (block) on pattern match, 0 (allow) otherwise
