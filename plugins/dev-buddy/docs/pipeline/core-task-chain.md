@@ -114,16 +114,16 @@ result = TaskList()
 
 **Task chain creation algorithm:**
 
-For each stage in the resolved pipeline array (in order), create one task. Non-review stages are always sequential (each blocked by the previous). Review stages with `parallel: true` form fan-out/fan-in groups.
+For each stage in the resolved pipeline array (in order), create one task. Non-review stages are always sequential (each blocked by the previous). Stages with `parallel: true` form fan-out/fan-in groups (applies to `plan-review`, `code-review`, and `rca` types).
 
 ```
 // --- Parallel Group Detection ---
-// Identify groups of consecutive same-type review stages with parallel: true
+// Identify groups of consecutive same-type stages with parallel: true
 parallelGroups = []
 i = 0
 while i < resolved.length:
   stage = resolved[i]
-  if stage.type not in ['plan-review', 'code-review'] OR !stage.parallel:
+  if stage.type not in ['plan-review', 'code-review', 'rca'] OR !stage.parallel:
     i++
     continue
   j = i + 1

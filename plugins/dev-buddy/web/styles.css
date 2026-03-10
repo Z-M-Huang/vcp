@@ -524,6 +524,52 @@ form input:focus, form select:focus {
   white-space: nowrap;
 }
 
+.review-gate-label {
+  color: #b45309;
+}
+
+.review-gate-checkbox input[type="checkbox"]:checked + .review-gate-label {
+  color: #92400e;
+  font-weight: 600;
+}
+
+/* ---- RCA Group ---- */
+
+.rca-group {
+  border: 1px solid #d4a574;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  background: #fefbf6;
+}
+
+.rca-group-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #e8d5c0;
+  background: #faf3eb;
+  border-radius: 8px 8px 0 0;
+}
+
+.rca-group-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #92400e;
+}
+
+.rca-group-body {
+  padding: 8px 10px 0;
+}
+
+.rca-group-body .stage-card {
+  background: #fff;
+}
+
+.rca-group-add {
+  padding: 4px 14px 10px;
+}
+
 /* ---- Phased Reviews ---- */
 
 .phased-reviews-section {

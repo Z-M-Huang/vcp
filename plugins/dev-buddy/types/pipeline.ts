@@ -34,8 +34,10 @@ export interface StageEntry {
   provider: string;
   /** Model name. Required. Validated against /^[a-zA-Z0-9._-]+$/. */
   model: string;
-  /** When true, this review stage runs in parallel with adjacent same-type parallel stages. Only applies to plan-review and code-review. */
+  /** When true, this stage runs in parallel with adjacent same-type parallel stages. Only applies to plan-review, code-review, and rca. */
   parallel?: boolean;
+  /** When true, the orchestrator pauses after this stage completes, presents the output to the user, and waits for approval before proceeding. Only allowed on requirements and planning stages. For RCA stages, use the pipeline-level `rca_review_gate` instead. */
+  review_gate?: boolean;
   /**
    * Phased review entries for per-step implementation reviews.
    * Only valid on implementation stages.
@@ -65,6 +67,8 @@ export interface PipelineConfig {
    * Resolved at config load time — consumers must not apply their own fallback.
    */
   review_interval?: number;
+  /** When true, the orchestrator pauses after all RCA stages complete and consolidation runs, presents the consolidated output to the user, and waits for approval before proceeding. */
+  rca_review_gate?: boolean;
   /** Team name pattern with {BASENAME} and {HASH} placeholders. */
   team_name_pattern: string;
 }

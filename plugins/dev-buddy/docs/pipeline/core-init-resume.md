@@ -142,8 +142,8 @@ for i in 0..stages.length-1:
 for i in 0..stages.length-1:
   gid = stages[i].parallel_group_id
   if gid is null: continue
-  // Must be a review stage
-  if stages[i].type !== 'plan-review' AND stages[i].type !== 'code-review':
+  // Must be a parallel-capable stage (plan-review, code-review, or rca)
+  if stages[i].type !== 'plan-review' AND stages[i].type !== 'code-review' AND stages[i].type !== 'rca':
     log warning: "Stage {i} has parallel_group_id={gid} but type={stages[i].type}; resetting to null"
     stages[i].parallel_group_id = null
     continue
@@ -152,6 +152,18 @@ for i in 0..stages.length-1:
     log warning: "Stage {i} has parallel_group_id={gid} but type differs from adjacent stage; resetting to null"
     stages[i].parallel_group_id = null
 ```
+
+**Pre-check — Gate rejection terminal states:** Before creating tasks, check for gate rejection flags that indicate a terminal pipeline state:
+
+1. **Per-stage gate rejection:** If any `stages[i].gate_rejected === true`:
+   - AskUserQuestion: "Stage {type} {index} was rejected at its review gate. Options: 1. Restart from this stage (clear the gate_rejected flag and re-run). 2. Abort pipeline."
+   - If restart: set `stages[i].gate_rejected = false`. **Delete the stage's output file** (`rm .vcp/task/{stages[i].output_file}`) so that `file_status` becomes `no_output_file` → pending in Pass 1. Update `pipeline-tasks.json`, then continue to Pass 1.
+   - If abort: report to user, EXIT.
+
+2. **RCA group gate rejection:** If `pipeline-tasks.json` top-level has `rca_gate_rejected === true`:
+   - AskUserQuestion: "Pipeline was rejected at the RCA group review gate. Options: 1. Restart from the first non-RCA stage (clear the flag and re-run from plan-review/implementation). 2. Abort pipeline."
+   - If restart: remove `rca_gate_rejected` from `pipeline-tasks.json`. **Delete consolidation output** (`rm -rf .vcp/task/user-story/ .vcp/task/plan/`) so that consolidation re-runs on resume if RCA stages are re-examined. Find first non-RCA stage index. For all stages at or after that index, their `file_status` will already be `no_output_file` (they haven't run). Update `pipeline-tasks.json`, then continue to Pass 1.
+   - If abort: report to user, EXIT.
 
 **Pass 1 — Create all tasks (pending):** For each stage in `stages` (index 0..N), create a task as **pending** regardless of actual status. Store `taskIdMap[i] = task.id`. Determine target status using the `file_status` (now on each stage entry) from Step 0's detection script (which already handles stage-type-aware completion for requirements/planning/RCA):
 

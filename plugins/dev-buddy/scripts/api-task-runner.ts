@@ -399,7 +399,7 @@ export function buildSessionEnv(preset: ApiPreset, modelOverride?: string): Reco
   env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model;
   env.ANTHROPIC_DEFAULT_SONNET_MODEL = model;
   env.ANTHROPIC_DEFAULT_OPUS_MODEL = model;
-  env.CLAUDE_CODE_SUBAGENT_MODEL = model;
+  env.CLAUDE_CODE_SUBAGENT_MODEL = 'sonnet'; // Alias — resolved via ANTHROPIC_DEFAULT_SONNET_MODEL
 
   return env;
 }
@@ -488,7 +488,7 @@ export class AnthropicRunner implements AgentRunner {
       }, options.debugEnabled);
 
       session = unstable_v2_createSession({
-        model: options.model,
+        model: 'sonnet', // Alias — resolved to provider model via ANTHROPIC_DEFAULT_SONNET_MODEL env var
         env,
         permissionMode: 'default',
         allowedTools: [...ANTHROPIC_TOOL_NAMES],

@@ -685,7 +685,18 @@ function devBuddyApp() {
       // Find first available provider (default to first preset key)
       const firstPreset = Object.keys(this.presets)[0] || 'anthropic-subscription';
 
-      pipeline.push({ type: stageType, provider: firstPreset, model: undefined });
+      // RCA stages must stay as a consecutive block at the beginning of the bugfix pipeline.
+      // Insert after the last existing RCA stage instead of appending to the end.
+      if (stageType === 'rca' && pipelineType === 'bugfix') {
+        let lastRcaIdx = -1;
+        for (let i = 0; i < pipeline.length; i++) {
+          if (pipeline[i].type === 'rca') lastRcaIdx = i;
+          else if (lastRcaIdx >= 0) break; // past the consecutive RCA block
+        }
+        pipeline.splice(lastRcaIdx + 1, 0, { type: stageType, provider: firstPreset, model: undefined });
+      } else {
+        pipeline.push({ type: stageType, provider: firstPreset, model: undefined });
+      }
       this._assignStageIds(pipeline);
 
       // Reset the "add stage" select
@@ -753,6 +764,8 @@ function devBuddyApp() {
         } else {
           this.pipelineConfig.bugfix_pipeline = defaultConfig.bugfix_pipeline;
           this._assignStageIds(this.pipelineConfig.bugfix_pipeline);
+          // Reset rca_review_gate when resetting bugfix pipeline to defaults
+          this.pipelineConfig.rca_review_gate = false;
         }
 
         // Re-initialise sortable for the affected list after the DOM updates
@@ -896,13 +909,16 @@ function devBuddyApp() {
     async savePipelineConfig() {
       this.saving.pipeline = true;
       try {
-        // Strip empty phased_reviews arrays from both pipelines before saving
+        // Strip empty phased_reviews arrays and false boolean flags from both pipelines before saving
         const cleanPipeline = (pipeline) => pipeline.map(stage => {
-          if (stage.phased_reviews && stage.phased_reviews.length === 0) {
-            const { phased_reviews, ...rest } = stage;
-            return rest;
+          const cleaned = { ...stage };
+          if (cleaned.phased_reviews && cleaned.phased_reviews.length === 0) {
+            delete cleaned.phased_reviews;
           }
-          return stage;
+          if (cleaned.review_gate === false) {
+            delete cleaned.review_gate;
+          }
+          return cleaned;
         });
 
         const payload = {
@@ -919,6 +935,13 @@ function devBuddyApp() {
         // Include review_interval only if explicitly set
         if (this.pipelineConfig.review_interval != null) {
           payload.review_interval = this.pipelineConfig.review_interval;
+        }
+        // Include rca_review_gate only if true AND bugfix pipeline has RCA stages
+        const hasRcaStages = this.pipelineConfig.bugfix_pipeline.some(s => s.type === 'rca');
+        if (this.pipelineConfig.rca_review_gate === true && hasRcaStages) {
+          payload.rca_review_gate = true;
+        } else {
+          this.pipelineConfig.rca_review_gate = false;
         }
 
         const resp = await fetch('/api/pipeline-config', {

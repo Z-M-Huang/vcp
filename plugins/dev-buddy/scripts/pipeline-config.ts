@@ -150,9 +150,9 @@ export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' 
         );
       }
       if (entry.parallel === true) {
-        if (entry.type !== 'plan-review' && entry.type !== 'code-review') {
+        if (entry.type !== 'plan-review' && entry.type !== 'code-review' && entry.type !== 'rca') {
           throw new Error(
-            `${name}[${i}]: 'parallel' is only allowed on plan-review and code-review stages, not '${entry.type}'`
+            `${name}[${i}]: 'parallel' is only allowed on plan-review, code-review, and rca stages, not '${entry.type}'`
           );
         }
       }
@@ -170,6 +170,20 @@ export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' 
         throw new Error(
           `${name}[${i}]: invalid model name '${entry.model}'. Must match /^[a-zA-Z0-9._-]+$/`
         );
+      }
+
+      // Validate review_gate flag type and applicability
+      if ('review_gate' in entry && typeof entry.review_gate !== 'boolean') {
+        throw new Error(
+          `${name}[${i}]: 'review_gate' must be a boolean, got ${typeof entry.review_gate}`
+        );
+      }
+      if (entry.review_gate === true) {
+        if (entry.type !== 'requirements' && entry.type !== 'planning') {
+          throw new Error(
+            `${name}[${i}]: 'review_gate' is only allowed on requirements and planning stages, not '${entry.type}'. For RCA stages, use the pipeline-level 'rca_review_gate' setting.`
+          );
+        }
       }
 
       // Validate phased_reviews if present
@@ -219,6 +233,23 @@ export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' 
         `${name}: every pipeline must have at least one implementation stage`
       );
     }
+
+    // Bugfix pipeline: RCA stages must form a contiguous block at the beginning
+    if (type === 'bugfix') {
+      let seenNonRca = false;
+      for (let i = 0; i < stages.length; i++) {
+        if (stages[i].type === 'rca') {
+          if (seenNonRca) {
+            throw new Error(
+              `${name}[${i}]: RCA stages must be consecutive at the beginning of the bugfix pipeline. ` +
+              `Found 'rca' after non-RCA stage at index ${i}.`
+            );
+          }
+        } else {
+          seenNonRca = true;
+        }
+      }
+    }
   }
 
   // Validate max_phased_iterations if present
@@ -239,6 +270,13 @@ export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' 
         `review_interval must be a positive integer, got ${ri}`
       );
     }
+  }
+
+  // Validate rca_review_gate if present
+  if ('rca_review_gate' in config && typeof config.rca_review_gate !== 'boolean') {
+    throw new Error(
+      `rca_review_gate must be a boolean, got ${typeof config.rca_review_gate}`
+    );
   }
 }
 

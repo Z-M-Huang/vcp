@@ -1,13 +1,13 @@
 ---
 name: dev-buddy-bug-fix
-description: Dev Buddy bug-fix pipeline. Data-driven sequential RCA -> Consolidation -> Validation -> Implementation -> Code Reviews. Configurable pipeline.
+description: Dev Buddy bug-fix pipeline. Data-driven RCA (sequential or parallel) -> Consolidation -> Validation -> Implementation -> Code Reviews. Configurable pipeline.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, TeamCreate, TeamDelete
 ---
 
 # Bug-Fix Pipeline Orchestrator
 
-You coordinate worker agents using Task tools to diagnose and fix a bug. The pipeline is data-driven from the bugfix_pipeline config: sequential RCA stages, followed by implicit orchestrator consolidation, then plan-review/implementation/code-review stages.
+You coordinate worker agents using Task tools to diagnose and fix a bug. The pipeline is data-driven from the bugfix_pipeline config: RCA stages (sequential by default, or parallel with `parallel: true`), followed by implicit orchestrator consolidation, then plan-review/implementation/code-review stages.
 
 **Task directory:** `${CLAUDE_PROJECT_DIR}/.vcp/task/`
 **Agents location:** `${CLAUDE_PLUGIN_ROOT}/agents/`
@@ -214,7 +214,7 @@ For custom pipelines, derive agent reference dynamically from `stages` in pipeli
 
 ### User Provides Additional Info
 
-1. **During RCA:** Note additional context — each RCA is sequential, so you can relay context to the running analyst
+1. **During RCA:** Note additional context — relay context to the running analyst (for sequential RCA) or note for the next round (for parallel RCA)
 2. **During consolidation:** Incorporate into diagnosis
 3. **After implementation started:** Ask user if they want to continue or restart from RCA
 
@@ -241,7 +241,7 @@ See CLAUDE.md § "Hook Enforcement" for hook details. Key points for this pipeli
 ## Important Rules
 
 1. **Pipeline team first, then task chain** — Create team (Step 1.3), verify tools (Step 1.4), then create task chain.
-2. **Non-review stages sequential** — RCA, implementation always execute sequentially. Review stages (plan-review, code-review) with `parallel: true` form parallel groups via fan-out/fan-in. Every non-parallel task has `blockedBy` pointing to the previous task.
+2. **Non-review stages** — Implementation always executes sequentially. RCA stages are sequential by default but support `parallel: true` for parallel execution. Review stages (plan-review, code-review) with `parallel: true` form parallel groups via fan-out/fan-in. Every non-parallel task has `blockedBy` pointing to the previous task.
 3. **Data-driven task chain** — Iterate over `bugfix_pipeline` array, create one task per entry.
 4. **RCA consolidation is inline** — NOT a task, NOT an agent call. The orchestrator reads all rca-*.json files and writes `user-story/` + `plan/` multi-file artifacts directly. Singleton stage names: `user-story/manifest.json`, `plan/manifest.json`, `impl-result.json`.
 5. **Consolidation trigger** — After completing an rca stage, check if next stage is non-rca (or no next stage). If yes, run consolidation immediately before dispatching next task.

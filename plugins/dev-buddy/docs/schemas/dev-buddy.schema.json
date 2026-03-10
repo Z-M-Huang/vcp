@@ -40,6 +40,11 @@
       "minimum": 1,
       "default": 1,
       "description": "Review after every N implementation steps during phased reviews. Default: 1 (review every step)."
+    },
+    "rca_review_gate": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, the orchestrator pauses after all RCA stages complete and consolidation runs, presents the consolidated output to the user, and waits for approval before proceeding. Only applies to the bugfix pipeline."
     }
   },
   "additionalProperties": false,
@@ -90,7 +95,12 @@
         "parallel": {
           "type": "boolean",
           "default": false,
-          "description": "When true, this stage runs in parallel with adjacent same-type stages that also have parallel: true. Only applies to plan-review and code-review types."
+          "description": "When true, this stage runs in parallel with adjacent same-type stages that also have parallel: true. Only applies to plan-review, code-review, and rca types."
+        },
+        "review_gate": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, the orchestrator pauses after this stage completes, presents the output to the user, and waits for approval before proceeding. Only allowed on requirements and planning stages. For RCA stages, use the pipeline-level rca_review_gate instead."
         },
         "phased_reviews": {
           "type": "array",
@@ -111,7 +121,22 @@
           "then": {
             "properties": {
               "type": {
-                "enum": ["plan-review", "code-review"]
+                "enum": ["plan-review", "code-review", "rca"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "review_gate": { "const": true }
+            },
+            "required": ["review_gate"]
+          },
+          "then": {
+            "properties": {
+              "type": {
+                "enum": ["requirements", "planning"]
               }
             }
           }

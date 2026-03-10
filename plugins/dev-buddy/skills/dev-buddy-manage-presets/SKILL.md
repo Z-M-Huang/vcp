@@ -45,7 +45,7 @@ const newPreset = {
   description: 'OpenRouter API gateway',
   base_url: 'https://openrouter.ai/api/v1',
   api_key: process.env.OPENROUTER_KEY || 'YOUR_PROVIDER_KEY',
-  models: ['anthropic/claude-sonnet-4-5', 'anthropic/claude-opus-4']
+  models: ['claude-sonnet-4-5-20250514', 'claude-opus-4-20250514']
 };
 validatePreset(newPreset);
 config.presets['openrouter'] = newPreset;

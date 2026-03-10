@@ -342,7 +342,7 @@ The bug-fix pipeline uses a different early-phase approach optimized for diagnos
 - Orchestrator consolidates RCA findings inline (not via a separate task) before the next non-RCA stage, writing `user-story/` and `plan/` multi-file directories
 - Output files: `rca-{provider}-{model}-{N}-v{V}.json`, `plan-review-{provider}-{model}-{N}-v{V}.json`, `code-review-{provider}-{model}-{N}-v{V}.json` (versioned naming)
 - Fix plan emphasizes smallest possible change, not architectural design
-- Non-review stages (RCA, implementation) execute **sequentially**. Review stages (plan-review, code-review) can be configured for parallel execution via `parallel: true` on each StageEntry.
+- Implementation executes **sequentially**. RCA stages are sequential by default but support `parallel: true` for parallel execution. Review stages (plan-review, code-review) can also be configured for parallel execution via `parallel: true` on each StageEntry.
 
 ### One-Shot Task (`/dev-buddy-once`)
 
@@ -621,8 +621,8 @@ The pipeline is driven by `~/.vcp/dev-buddy.json`. Two ordered arrays of stages 
 ```json
 {
   "feature_pipeline": [
-    { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
+    { "type": "requirements", "provider": "anthropic-subscription", "model": "opus", "review_gate": true },
+    { "type": "planning", "provider": "anthropic-subscription", "model": "opus", "review_gate": true },
     { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet", "parallel": true },
     { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus", "parallel": true },
     { "type": "plan-review", "provider": "my-codex-preset", "model": "o3" },
@@ -646,11 +646,12 @@ The pipeline is driven by `~/.vcp/dev-buddy.json`. Two ordered arrays of stages 
   "max_iterations": 10,
   "max_phased_iterations": 3,
   "review_interval": 3,
+  "rca_review_gate": true,
   "team_name_pattern": "pipeline-{BASENAME}-{HASH}"
 }
 ```
 
-In the example above, plan-review stages 1+2 run in parallel, then stage 3 runs sequentially. Code-review stages 1+2 run in parallel, then stage 3 runs sequentially. The `parallel` field is optional (defaults to false) and only applies to `plan-review` and `code-review` types.
+In the example above, plan-review stages 1+2 run in parallel, then stage 3 runs sequentially. Code-review stages 1+2 run in parallel, then stage 3 runs sequentially. The `parallel` field is optional (defaults to false) and applies to `plan-review`, `code-review`, and `rca` types. The `rca_review_gate` pauses the pipeline after all RCA stages complete and consolidation runs.
 
 See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 
@@ -658,10 +659,12 @@ See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 
 - Singleton stages (`requirements`, `planning`, `implementation`) may appear **at most once** per pipeline
 - `requirements` and `planning` are **feature-only** — not allowed in bugfix pipeline
-- `rca` is **bugfix-only** — not allowed in feature pipeline
+- `rca` is **bugfix-only** — not allowed in feature pipeline. RCA stages must form a **contiguous block at the beginning** of the bugfix pipeline.
 - Each pipeline must have **at least one** `implementation` stage
 - `model` is **required** on every stage entry — values must match `/^[a-zA-Z0-9._-]+$/` (prevents shell metacharacter injection)
-- `parallel` is **optional** (boolean, default false) — only meaningful on `plan-review` and `code-review` stages. Setting `parallel: true` on non-review stages fails validation. `parallel: false` (or omitted) is accepted on any stage type.
+- `parallel` is **optional** (boolean, default false) — only meaningful on `plan-review`, `code-review`, and `rca` stages. Setting `parallel: true` on other stage types fails validation. `parallel: false` (or omitted) is accepted on any stage type.
+- `review_gate` is **optional** (boolean, default false) — only allowed on `requirements` and `planning` stages. Setting `review_gate: true` on other stage types fails validation. When true, the orchestrator pauses after the stage completes, presents the output to the user via `AskUserQuestion`, and waits for approval before proceeding. If the user rejects, the pipeline stops. For RCA stages, use the pipeline-level `rca_review_gate` instead.
+- `rca_review_gate` is **optional** (boolean, default false) — pipeline-level setting. When true, the orchestrator pauses after all RCA stages complete and consolidation runs, presents the consolidated user-story and plan to the user, and waits for approval before proceeding. Only applies to the bugfix pipeline.
 - `phased_reviews` is **optional** (array, max 10 entries) — only valid on `implementation` stages. Each entry has `provider` (string), `model` (string matching `/^[a-zA-Z0-9._-]+$/`), and optional `parallel` (boolean). Setting `phased_reviews` on non-implementation stages fails validation.
 - `max_phased_iterations` is **optional** (positive integer, default 3) — maximum fix/re-review cycles per step during phased implementation. Resolved at config load time; downstream consumers must not apply their own fallback.
 - `review_interval` is **optional** (positive integer, default 1) — review after every N implementation steps during phased reviews. Value of 1 = review every step (current behavior). Value of 3 = implement 3 steps, then review them as a batch. Resolved at config load time; downstream consumers must not apply their own fallback.
@@ -673,7 +676,10 @@ See `docs/schemas/dev-buddy.schema.json` for the full JSON Schema.
 - Singleton constraints are enforced (e.g., at most 1 `requirements` stage)
 - Stage types are validated against the 6 allowed types
 - Pipeline-specific stage restrictions (e.g., `rca` only in bugfix)
+- Bugfix pipeline: RCA stages must be contiguous at the beginning
 - `parallel: true` rejected on non-review stages
+- `review_gate: true` rejected on non-requirements/planning stages
+- `rca_review_gate` validated as boolean if present
 - `phased_reviews` on non-implementation stages rejected with clear error
 - `phased_reviews` entries validated: non-empty provider, model matching regex, boolean parallel
 - `phased_reviews` array max length 10

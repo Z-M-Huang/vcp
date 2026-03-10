@@ -120,7 +120,7 @@
             </label>
             <label>
               Models (comma-separated)
-              <input type="text" x-model="newPreset.models_str" placeholder="anthropic/claude-sonnet-4-5,anthropic/claude-opus-4">
+              <input type="text" x-model="newPreset.models_str" placeholder="claude-sonnet-4-5-20250514,claude-opus-4-20250514">
             </label>
             <label>
               Task Timeout (minutes, optional)
@@ -495,6 +495,14 @@
                     <input type="checkbox" x-model="stage.parallel">
                     <span class="parallel-label">Parallel</span>
                   </label>
+                  <label
+                    class="parallel-checkbox review-gate-checkbox"
+                    x-show="stage.type === 'requirements' || stage.type === 'planning'"
+                    title="Pause pipeline after this stage for user approval"
+                  >
+                    <input type="checkbox" x-model="stage.review_gate">
+                    <span class="parallel-label review-gate-label">Review Gate</span>
+                  </label>
                   <select x-model="stage.model" x-init="$nextTick(() => $el.value = stage.model || '')" class="stage-select model-select" required>
                     <option value="" disabled>Select model</option>
                     <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
@@ -577,11 +585,64 @@
               <button class="btn-secondary btn-sm" x-on:click="resetToDefault('bugfix')">Reset to Default</button>
             </div>
           </div>
-          <p class="hint">Drag to reorder stages. RCA stages run sequentially; orchestrator consolidates automatically after the last RCA.</p>
+          <p class="hint">Drag to reorder non-RCA stages. RCA stages are grouped; orchestrator consolidates after all RCA stages complete.</p>
 
+          <!-- RCA Group Wrapper -->
+          <div class="rca-group" x-show="pipelineConfig.bugfix_pipeline.some(s => s.type === 'rca')">
+            <div class="rca-group-header">
+              <span class="rca-group-title">RCA Stages</span>
+              <label
+                class="parallel-checkbox review-gate-checkbox"
+                title="Pause pipeline after all RCA stages complete and consolidation runs, for user approval"
+              >
+                <input type="checkbox" x-model="pipelineConfig.rca_review_gate">
+                <span class="parallel-label review-gate-label">Review Gate</span>
+              </label>
+            </div>
+            <div class="rca-group-body">
+              <template x-for="(stage, idx) in pipelineConfig.bugfix_pipeline" x-bind:key="'rca-' + stage._id">
+                <div class="stage-card" x-show="stage.type === 'rca'">
+                  <div class="stage-info">
+                    <span class="stage-type-badge stage-type-rca">rca</span>
+                  </div>
+                  <div class="stage-controls">
+                    <select
+                      x-model="stage.provider"
+                      x-init="$nextTick(() => $el.value = stage.provider || '')"
+                      class="stage-select"
+                      x-on:change="onProviderChange(stage)"
+                    >
+                      <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
+                        <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
+                      </template>
+                    </select>
+                    <label
+                      class="parallel-checkbox"
+                      title="Run in parallel with adjacent RCA stages"
+                    >
+                      <input type="checkbox" x-model="stage.parallel">
+                      <span class="parallel-label">Parallel</span>
+                    </label>
+                    <select x-model="stage.model" x-init="$nextTick(() => $el.value = stage.model || '')" class="stage-select model-select" required>
+                      <option value="" disabled>Select model</option>
+                      <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
+                        <option x-bind:value="m" x-text="m"></option>
+                      </template>
+                    </select>
+                  </div>
+                  <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('bugfix', idx)">x</button>
+                </div>
+              </template>
+            </div>
+            <div class="rca-group-add">
+              <button class="btn-secondary btn-sm" x-on:click="addStage('bugfix', 'rca')">+ Add RCA</button>
+            </div>
+          </div>
+
+          <!-- Non-RCA Pipeline Stages -->
           <div id="bugfix-pipeline-list" class="pipeline-list">
             <template x-for="(stage, idx) in pipelineConfig.bugfix_pipeline" x-bind:key="stage._id">
-              <div class="stage-card" x-bind:data-index="idx">
+              <div class="stage-card" x-show="stage.type !== 'rca'" x-bind:data-index="idx">
                 <div class="drag-handle" title="Drag to reorder">
                   <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor">
                     <circle cx="4" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/>
@@ -669,11 +730,11 @@
             </template>
           </div>
 
-          <!-- Add Stage -->
+          <!-- Add Stage (non-RCA) -->
           <div class="add-stage-row">
             <select x-model="newStageType.bugfix" class="stage-select">
               <option value="">Select stage type to add...</option>
-              <template x-for="st in getAvailableStageTypes('bugfix')" x-bind:key="st">
+              <template x-for="st in getAvailableStageTypes('bugfix').filter(t => t !== 'rca')" x-bind:key="st">
                 <option x-bind:value="st" x-text="st"></option>
               </template>
             </select>

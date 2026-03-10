@@ -37,12 +37,47 @@ while pipeline not complete:
        - Parse AGENT, MODEL, INPUT, OUTPUT from task description for the prompt content
        - **NEVER use team_name when spawning agents** (except requirements gathering specialists in the feature pipeline)
     6. Check output file (from description's OUTPUT field) for result
+    6.5. **REVIEW GATE CHECK (per-stage):**
+         Look up the current task's `task_id` in `pipeline-tasks.json.stages` to get its stage index.
+         Find the matching entry in `resolved_config` pipeline array using that stage index.
+         (**Note:** Per-stage `review_gate` is only allowed on `requirements` and `planning` stages — these are singletons in the original `stages[]` array. For RCA stages, use the pipeline-level `rca_review_gate` instead — see step 7.5.)
+         If that entry has `review_gate: true`:
+           a. Read the output file from step 6
+           b. Extract key content from the output (entire file if <= 2000 chars, otherwise a structured summary)
+           c. Present to the user via AskUserQuestion:
+              - Show the stage type, provider, and model
+              - Show the output content/summary
+              - Ask "Pipeline paused at [stage type] review gate. Review the output above. Approve to continue, or reject to stop the pipeline."
+           d. If user approves -> continue to step 7
+           e. If user rejects:
+              1. Write a `gate_rejected` field to the stage entry in `pipeline-tasks.json` (set `stages[stageIndex].gate_rejected = true`)
+              2. Mark task completed
+              3. Report to user that pipeline is stopped at their request
+              4. EXIT the main loop (do not proceed to next task)
+         **Resume behavior:** On pipeline resume, if a stage entry in `pipeline-tasks.json` has `gate_rejected: true`, treat it as a terminal state — do not re-run the stage. Ask the user whether to restart from this stage or abort.
     7. **RCA CONSOLIDATION CHECK** (bug-fix pipeline only, inline, before handling result):
        After completing a task, look up `completedStageIndex` in pipeline-tasks.json stages (match by task_id):
          (a) `completedStage = stages[completedStageIndex]` — check if `.type === 'rca'`
          (b) `nextStage = stages[completedStageIndex + 1]` — check if null or `.type !== 'rca'`
        If BOTH conditions are true: execute [bugfix-rca-consolidation.md](bugfix-rca-consolidation.md)
        BEFORE dispatching next task.
+    7.5. **RCA REVIEW GATE CHECK (group-level):**
+         This step runs AFTER step 7 (RCA consolidation), only in bug-fix pipelines.
+         Check if `resolved_config.rca_review_gate === true`.
+         If true, AND step 7 just ran consolidation (i.e., this was the last RCA stage):
+           a. Read the consolidated output files: `user-story/manifest.json` and `plan/manifest.json`
+           b. Extract key content (entire files if <= 2000 chars total, otherwise structured summaries)
+           c. Present to the user via AskUserQuestion:
+              - Show "RCA consolidation complete — {N} RCA stages analyzed"
+              - Show the consolidated user story and plan summaries
+              - Ask "Pipeline paused at RCA group review gate. Review the consolidated analysis above. Approve to continue, or reject to stop the pipeline."
+           d. If user approves -> continue to step 8
+           e. If user rejects:
+              1. Write `rca_gate_rejected: true` to the top level of `pipeline-tasks.json`
+              2. Mark current task completed
+              3. Report to user that pipeline is stopped at their request
+              4. EXIT the main loop
+         **Resume behavior:** On pipeline resume, if `pipeline-tasks.json` has `rca_gate_rejected: true`, treat as terminal. Ask the user whether to restart from the first non-RCA stage or abort.
     8. Handle result (see Result Handling below)
     9. Enrich next task (BEFORE marking completed — sequential tasks only, NOT parallel group members):
        - Skip this step if the task was executed as part of a parallel group (see Parallel Execution step 5 for aggregated enrichment)
@@ -73,15 +108,25 @@ When multiple tasks share the same non-null `parallel_group_id` and are all unbl
 
 1. For EACH task simultaneously: TaskGet, TaskUpdate(in_progress), dispatch agent
 2. Wait for ALL to return
-3. Handle each result independently:
-   - **approved** -> mark completed
-   - **needs_changes** -> mark review completed, create fix task (`parallel_group_id: null`, `blockedBy: [review_task.id]`), create re-review task (`parallel_group_id: null`, `blockedBy: [fix_task.id]`). **Group-aware successor lookup:** look up the task's `parallel_group_id` in `pipeline-tasks.json.stages`, find the last index with that same group ID (= groupEnd), then successor = groupEnd + 1. If successor exists in stages, call `TaskUpdate(stages[successor].task_id, addBlockedBy: [re_review_task.id])`. If no successor (last stage), skip rewiring.
-   - **rejected** -> handle per Result Handling rules
+3. **Route by stage type:**
+
+   **If group type is `rca` (RCA parallel group):**
+   - Mark all completed (RCA outputs don't have a status field — completion is determined by output file presence)
+   - **RCA CONSOLIDATION (inline):** After all parallel RCA tasks complete, check if there are any remaining sequential RCA stages after this group. If not (this group contains the last RCA stages), execute [bugfix-rca-consolidation.md](bugfix-rca-consolidation.md) inline, exactly as step 7 does for sequential RCA.
+   - **RCA REVIEW GATE:** After consolidation, if `resolved_config.rca_review_gate === true`, execute the step 7.5 gate check (present consolidated output to user via AskUserQuestion). If user rejects, write `rca_gate_rejected: true` and EXIT.
+   - Proceed to aggregated enrichment (step 5 below)
+
+   **If group type is `plan-review` or `code-review` (review parallel group):**
+   - Handle each result independently:
+     - **approved** -> mark completed
+     - **needs_changes** -> mark review completed, create fix task (`parallel_group_id: null`, `blockedBy: [review_task.id]`), create re-review task (`parallel_group_id: null`, `blockedBy: [fix_task.id]`). **Group-aware successor lookup:** look up the task's `parallel_group_id` in `pipeline-tasks.json.stages`, find the last index with that same group ID (= groupEnd), then successor = groupEnd + 1. If successor exists in stages, call `TaskUpdate(stages[successor].task_id, addBlockedBy: [re_review_task.id])`. If no successor (last stage), skip rewiring.
+     - **rejected** -> handle per Result Handling rules
+
 4. Dynamic fix/re-review tasks always have `parallel_group_id: null` -> they always execute sequentially
 5. **Aggregated enrichment (replaces per-task enrichment for parallel members):** Do NOT enrich the successor task individually per parallel member — this causes last-write-wins races. Instead, after ALL parallel results are collected, build a single combined context block:
    ```
    context = ""
-   for each completed parallel task (approved or needs_changes):
+   for each completed parallel task:
      read output file, extract key context (<= 250 chars per member)
      context += "FROM {stage.type} {stage.model}: {summary}\n"
    // Find successor: compute group-aware successor index (groupEnd + 1)
@@ -90,6 +135,8 @@ When multiple tasks share the same non-null `parallel_group_id` and are all unbl
      TaskUpdate(successor_task_id, description: append "CONTEXT FROM PRIOR PARALLEL GROUP:\n{context}")
    ```
    If enrichment fails, log and continue (best-effort).
+
+**Note:** Per-stage `review_gate` is only allowed on `requirements` and `planning` stages, which are singletons and always sequential — they never participate in parallel groups. RCA stages support `parallel: true` but their review gate is group-level (`rca_review_gate`), not per-stage. No parallel group gate check is needed for per-stage gates.
 
 **IMPORTANT:** Only tasks from the original `pipeline-tasks.json.stages` with matching `parallel_group_id` may run in parallel. Dynamic tasks (fix, re-review) NEVER run in parallel.
 
@@ -130,6 +177,8 @@ When multiple tasks share the same non-null `parallel_group_id` and are all unbl
 | `plan_rejected` | CLI reviewer rejected plan (feature only) | User decision needed |
 | `code_rejected` | CLI reviewer rejected code | User decision needed |
 | `implementation_failed` | Implementation blocked | User decision needed |
+| `gate_rejected` | User rejected at per-stage review gate | User decision needed (restart stage or abort) |
+| `rca_gate_rejected` | User rejected at RCA group review gate | User decision needed (restart from first non-RCA or abort) |
 
 ---
 

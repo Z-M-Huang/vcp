@@ -843,11 +843,11 @@ function handleGetPipelineConfigDefaults(corsHeaders: Record<string, string>): R
 
 // Allowed top-level pipeline config fields (CWE-915)
 const ALLOWED_TOP_LEVEL_FIELDS = new Set([
-  'feature_pipeline', 'bugfix_pipeline', 'max_iterations', 'max_phased_iterations', 'review_interval', 'team_name_pattern',
+  'feature_pipeline', 'bugfix_pipeline', 'max_iterations', 'max_phased_iterations', 'review_interval', 'rca_review_gate', 'team_name_pattern',
 ]);
 
 // Allowed stage entry fields (CWE-915)
-const ALLOWED_STAGE_ENTRY_FIELDS = new Set(['type', 'provider', 'model', 'parallel', 'phased_reviews']);
+const ALLOWED_STAGE_ENTRY_FIELDS = new Set(['type', 'provider', 'model', 'parallel', 'review_gate', 'phased_reviews']);
 
 // Allowed phased review entry fields (CWE-915)
 const ALLOWED_PHASED_REVIEW_FIELDS = new Set(['provider', 'model', 'parallel']);
@@ -876,6 +876,14 @@ function validateStageEntry(entry: unknown, label: string): string | null {
   }
   if ('parallel' in obj && typeof obj.parallel !== 'boolean') {
     return `${label}: parallel must be a boolean`;
+  }
+  if ('review_gate' in obj && typeof obj.review_gate !== 'boolean') {
+    return `${label}: review_gate must be a boolean`;
+  }
+  if (obj.review_gate === true) {
+    if (obj.type !== 'requirements' && obj.type !== 'planning') {
+      return `${label}: review_gate is only allowed on requirements and planning stages, not '${obj.type}'. For RCA stages, use the pipeline-level 'rca_review_gate' setting.`;
+    }
   }
   return null;
 }
@@ -976,6 +984,23 @@ async function handlePutPipelineConfig(req: Request, corsHeaders: Record<string,
             return jsonResponse({ error: { code: 'INVALID_CONFIG', message: prErr } }, 400, corsHeaders);
           }
         }
+      }
+    }
+
+    // Bugfix pipeline: RCA stages must form a contiguous block at the beginning
+    let seenNonRca = false;
+    for (let i = 0; i < bugfixPipeline.length; i++) {
+      const stageObj = bugfixPipeline[i] as Record<string, unknown>;
+      if (stageObj?.type === 'rca') {
+        if (seenNonRca) {
+          return jsonResponse(
+            { error: { code: 'INVALID_CONFIG', message: `bugfix_pipeline[${i}]: RCA stages must be consecutive at the beginning of the bugfix pipeline` } },
+            400,
+            corsHeaders
+          );
+        }
+      } else {
+        seenNonRca = true;
       }
     }
 
