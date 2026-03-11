@@ -67,8 +67,6 @@ Per-task timeout defaults to 5 minutes, configurable via `ApiPreset.timeout_ms` 
 
 The runner also supports `--system-prompt <path>` to append a file (must be under plugin's `docs/` dir) to the session's system prompt — used for review stages to inject centralized review guidelines.
 
-See `plugins/dev-buddy/CLAUDE.md` § "API Task Runner Architecture" for full details.
-
 ### Writing Standards
 
 - State the PRINCIPLE and WHY first

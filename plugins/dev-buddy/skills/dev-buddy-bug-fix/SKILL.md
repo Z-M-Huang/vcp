@@ -232,7 +232,7 @@ AskUserQuestion:
 
 ## Hook Behavior
 
-See CLAUDE.md § "Hook Enforcement" for hook details. Key points for this pipeline:
+Key points for this pipeline:
 - `guidance-hook.ts` reads `pipeline-tasks.json.resolved_config` for dynamic phase detection; detects RCA progress by checking rca-*.json output files
 - `review-validator.ts` validates reviewer outputs and can block invalid reviews
 

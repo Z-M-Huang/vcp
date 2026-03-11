@@ -267,7 +267,7 @@ AskUserQuestion:
 
 ## Hook Behavior
 
-See CLAUDE.md § "Hook Enforcement" for hook details. Key points for this pipeline:
+Key points for this pipeline:
 - `guidance-hook.ts` reads `pipeline-tasks.json.resolved_config` for dynamic phase detection
 - `review-validator.ts` validates reviewer outputs and can block invalid reviews
 
