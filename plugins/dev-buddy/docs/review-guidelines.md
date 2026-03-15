@@ -192,9 +192,9 @@ Every review must check against the full OWASP Top 10:
 
 ## Decision Rules
 
-- Any finding with severity `error` or `critical` → status: **`needs_changes`**
-- 2 or more findings with severity `warning` or `high` → status: **`needs_changes`**
-- Only `suggestion`, `low`, or `info` findings → status: **`approved`**
+- Any `must_fix` finding (regardless of severity) → status: **`needs_changes`**
+- Advisory-only findings (regardless of severity) → status: **`approved`**
+- **IMPORTANT:** `needs_changes` requires at least one `must_fix` finding with `contract_reference` and `evidence`
 - Fundamental design flaws requiring complete rework → status: **`rejected`**
 - Cannot evaluate due to missing information → status: **`needs_clarification`**
 
@@ -209,7 +209,7 @@ Every review must check against the full OWASP Top 10:
 5. **Run OWASP checklist**: Full A01–A10 scan
 6. **Compile findings**: Assign severity to each finding
 7. **Determine status**: Apply decision rules above
-8. **Write structured output**: JSON with status, findings, AC verification, and recommendations
+8. **Write structured output**: JSON with status, findings with suggestions, and AC verification
 
 ---
 
@@ -230,96 +230,96 @@ Every review must check against the full OWASP Top 10:
 
 ## Detailed Review Categories
 
-### Error Handling (severity: error/warning)
+### Error Handling (severity: critical/high/medium)
 
-- **error**: Unhandled exceptions that could crash the application
-- **error**: Sensitive data exposed in error messages
-- **warning**: Missing error handling for failure paths
-- **warning**: Generic error messages that don't help debugging
-- **suggestion**: Error recovery mechanisms
+- **critical**: Unhandled exceptions that could crash the application
+- **critical**: Sensitive data exposed in error messages
+- **high**: Missing error handling for failure paths
+- **medium**: Generic error messages that don't help debugging
+- **low**: Error recovery mechanisms
 
-### Resource Management (severity: error/warning)
+### Resource Management (severity: critical/high/medium)
 
-- **error**: Memory leaks (unclosed streams, listeners not removed)
-- **error**: Connection leaks (database, HTTP, sockets)
-- **warning**: Missing timeouts on external calls
-- **warning**: File handles not properly closed
-- **suggestion**: Connection pooling for repeated operations
+- **critical**: Memory leaks (unclosed streams, listeners not removed)
+- **critical**: Connection leaks (database, HTTP, sockets)
+- **high**: Missing timeouts on external calls
+- **medium**: File handles not properly closed
+- **low**: Connection pooling for repeated operations
 
-### Configuration (severity: error/warning)
+### Configuration (severity: critical/high/medium)
 
-- **error**: Hardcoded secrets or credentials
-- **error**: Sensitive config not environment-based
-- **warning**: Hardcoded values that should be configurable
-- **warning**: Missing validation for config values
-- **suggestion**: Document required environment variables
+- **critical**: Hardcoded secrets or credentials
+- **critical**: Sensitive config not environment-based
+- **medium**: Hardcoded values that should be configurable
+- **medium**: Missing validation for config values
+- **low**: Document required environment variables
 
-### Code Quality (severity: warning/suggestion)
+### Code Quality (severity: medium/low)
 
 #### Readability
-- **warning**: Unclear or misleading variable/function names
-- **warning**: Functions doing too many things (> 50 lines)
-- **warning**: Deep nesting (> 3 levels)
-- **suggestion**: Complex logic without explanatory comments
-- **suggestion**: Inconsistent formatting
+- **medium**: Unclear or misleading variable/function names
+- **medium**: Functions doing too many things (> 50 lines)
+- **medium**: Deep nesting (> 3 levels)
+- **low**: Complex logic without explanatory comments
+- **low**: Inconsistent formatting
 
 #### Simplification (KISS)
-- **warning**: Over-complicated solutions for simple problems
-- **warning**: Unnecessary abstraction layers
-- **warning**: Premature optimization
-- **suggestion**: Could be simplified without losing functionality
+- **medium**: Over-complicated solutions for simple problems
+- **medium**: Unnecessary abstraction layers
+- **medium**: Premature optimization
+- **low**: Could be simplified without losing functionality
 
 #### Comments & Documentation
-- **warning**: Public APIs without documentation
-- **warning**: Complex algorithms without explanation
-- **suggestion**: Self-documenting code preferred over comments
-- **suggestion**: Outdated comments that don't match code
+- **medium**: Public APIs without documentation
+- **medium**: Complex algorithms without explanation
+- **low**: Self-documenting code preferred over comments
+- **low**: Outdated comments that don't match code
 
 #### Reusability & DRY
-- **warning**: Significant code duplication (> 10 lines repeated)
-- **warning**: Copy-paste with minor modifications
-- **suggestion**: Opportunity for shared utility/helper
-- **suggestion**: Consistent patterns across similar code
+- **medium**: Significant code duplication (> 10 lines repeated)
+- **medium**: Copy-paste with minor modifications
+- **low**: Opportunity for shared utility/helper
+- **low**: Consistent patterns across similar code
 
-### Concurrency (severity: error/warning)
+### Concurrency (severity: critical/high/medium)
 
-- **error**: Race conditions (TOCTOU - time of check to time of use)
-- **error**: Deadlock potential
-- **warning**: Shared mutable state without synchronization
-- **warning**: Missing thread safety documentation
-- **suggestion**: Consider async/await over callbacks
+- **critical**: Race conditions (TOCTOU - time of check to time of use)
+- **critical**: Deadlock potential
+- **high**: Shared mutable state without synchronization
+- **medium**: Missing thread safety documentation
+- **low**: Consider async/await over callbacks
 
-### Logging & Observability (severity: error/warning/suggestion)
+### Logging & Observability (severity: critical/high/low)
 
-- **error**: Secrets or PII in log output
-- **warning**: Missing logging for critical operations
-- **warning**: Inappropriate log levels (errors logged as info)
-- **suggestion**: Correlation IDs for request tracing
-- **suggestion**: Structured logging format
+- **critical**: Secrets or PII in log output
+- **high**: Missing logging for critical operations
+- **medium**: Inappropriate log levels (errors logged as info)
+- **low**: Correlation IDs for request tracing
+- **low**: Structured logging format
 
-### Dependency Management (severity: warning/suggestion)
+### Dependency Management (severity: high/medium/low)
 
-- **warning**: Known vulnerabilities in dependencies (CVEs)
-- **warning**: Unnecessary dependencies (bloat)
-- **warning**: Unpinned versions that could break
-- **suggestion**: Prefer well-maintained, popular packages
+- **high**: Known vulnerabilities in dependencies (CVEs)
+- **medium**: Unnecessary dependencies (bloat)
+- **medium**: Unpinned versions that could break
+- **low**: Prefer well-maintained, popular packages
 
-### API Design (severity: warning/suggestion)
+### API Design (severity: high/medium/low)
 
-- **warning**: Missing input validation
-- **warning**: Inconsistent response formats
-- **warning**: Missing error responses for edge cases
-- **suggestion**: Proper HTTP status codes
-- **suggestion**: Consistent naming conventions
+- **high**: Missing input validation
+- **medium**: Inconsistent response formats
+- **medium**: Missing error responses for edge cases
+- **low**: Proper HTTP status codes
+- **low**: Consistent naming conventions
 
-### Backward Compatibility (severity: warning/suggestion)
+### Backward Compatibility (severity: high/medium/low)
 
-- **warning**: Breaking changes to public APIs without versioning
-- **warning**: Database schema changes without migration
-- **suggestion**: Deprecation warnings before removal
-- **suggestion**: Document breaking changes
+- **high**: Breaking changes to public APIs without versioning
+- **high**: Database schema changes without migration
+- **low**: Deprecation warnings before removal
+- **low**: Document breaking changes
 
-### Over-Engineering Detection (severity: warning)
+### Over-Engineering Detection (severity: medium)
 
 - Abstractions without multiple use cases
 - Premature optimization
@@ -327,12 +327,12 @@ Every review must check against the full OWASP Top 10:
 - Complex patterns for simple problems
 - Excessive layers of indirection
 
-### Testing (severity: warning/suggestion)
+### Testing (severity: high/medium/low)
 
-- **warning**: No tests for new functionality
-- **warning**: Tests don't cover failure paths
-- **suggestion**: Edge cases not tested
-- **suggestion**: Test names don't describe behavior
+- **high**: No tests for new functionality
+- **medium**: Tests don't cover failure paths
+- **low**: Edge cases not tested
+- **low**: Test names don't describe behavior
 
 ---
 

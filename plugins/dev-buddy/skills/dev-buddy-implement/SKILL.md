@@ -25,6 +25,18 @@ Read `plan/manifest.json` to get `step_count`. Read `plan/test-plan.json` to get
 
 If `test-plan.json` is missing or has no `test_cases`, warn the user: "No test cases found. TDD loop will be disabled — implementation will run without automated verification."
 
+## Step 1a: Check for Review Repair Context
+
+If `.vcp/task/review-findings-to-fix.json` exists, this is a re-implementation after code review failure. Read the file and inject its `must_fix` findings into the implementer prompt as additional context:
+
+```
+REVIEW FINDINGS TO FIX:
+The following must_fix findings were raised by code reviewers. Fix each one during implementation:
+{findings from review-findings-to-fix.json}
+```
+
+This file is written by `/dev-buddy-review --code` when the review loop triggers a re-implement.
+
 ---
 
 ## Step 2: Load Config and Resolve Executor

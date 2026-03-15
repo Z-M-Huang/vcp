@@ -417,6 +417,7 @@ export interface ExpandedStageEntry {
   providerType: 'subscription' | 'api' | 'cli';
   output_file: string;
   parallel_group_id: string | null;
+  /** Version counter. For reviews, always 1 (revision tracked in output JSON via revision_number). For rca, incremented on retry. */
   current_version: number;
 }
 

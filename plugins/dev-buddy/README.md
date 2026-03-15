@@ -170,13 +170,13 @@ Use the web portal (`/dev-buddy-config`) or edit JSON directly.
 
 | Skill | Command | Description |
 |-------|---------|-------------|
-| Feature Implement | `/dev-buddy-feature-implement` | Full feature development pipeline — requirements, planning, reviews, implementation, code reviews |
-| Bug Fix | `/dev-buddy-bug-fix` | Bug fix pipeline — root cause analysis, validation, implementation, code reviews |
-| **Plan** | `/dev-buddy-plan` | **Create implementation plan from user story. TDD test generation + step-to-AC mapping** |
-| **Review** | `/dev-buddy-review` | **Review plan (--plan) or code (--code). Multi-executor, evidence-bound findings** |
-| **Implement** | `/dev-buddy-implement` | **Implement a plan with TDD loop. Runs tests after each step, escalates on failure** |
-| **Requirements** | `/dev-buddy-requirements` | **Gather requirements with provenance tracking. Minimal artifact set** |
-| **RCA** | `/dev-buddy-rca` | **Root cause analysis. Outputs diagnosis only — chain to plan/implement next** |
+| Feature Implement | `/dev-buddy-feature-implement` | Full feature pipeline — chains stage skills per `feature_pipeline` config |
+| Bug Fix | `/dev-buddy-bug-fix` | Bug fix pipeline — chains stage skills per `bugfix_pipeline` config |
+| Plan | `/dev-buddy-plan` | Create implementation plan from user story. TDD test generation + step-to-AC mapping |
+| Review | `/dev-buddy-review` | Review plan (`--plan`) or code (`--code`). Owns review→repair→re-review loop |
+| Implement | `/dev-buddy-implement` | Implement a plan with TDD loop. Runs tests after each step, escalates on failure |
+| Requirements | `/dev-buddy-requirements` | Gather requirements with provenance tracking. Minimal artifact set |
+| RCA | `/dev-buddy-rca` | Root cause analysis. Outputs diagnosis only — chain to plan/implement next |
 | Once | `/dev-buddy-once` | Run a single task using a specific AI provider and model |
 | Config | `/dev-buddy-config` | Web portal for managing executors, stages, pipelines, system prompts, and settings |
 | Manage Presets | `/dev-buddy-manage-presets` | List, add, update, or remove AI provider presets |
@@ -199,7 +199,7 @@ Use the web portal (`/dev-buddy-config`) or edit JSON directly.
 | Hook | Trigger | Description |
 |------|---------|-------------|
 | guidance-hook | UserPromptSubmit | Injects pipeline guidance into user prompts |
-| review-validator | SubagentStop | Validates review outputs meet quality standards |
+| *(Review validation is handled by `cli-executor.ts` and `dev-buddy-review` SKILL.md)* | | |
 
 ---
 

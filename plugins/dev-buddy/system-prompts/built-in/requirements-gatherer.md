@@ -126,9 +126,18 @@ Before completing, verify:
 ## Collaboration Protocol
 
 When you need clarification:
-1. Use AskUserQuestion tool to ask specific questions with context
-2. Wait for user to provide answers
-3. Resume with preserved context
+- If AskUserQuestion tool is available: use it to ask specific questions with context, wait for answers, resume
+- If AskUserQuestion is NOT available (e.g., API executor mode): write a status file instead:
+  Write `.vcp/task/user-story/status.json`:
+  ```json
+  {"status": "needs_clarification", "clarification_questions": ["Q1?", "Q2?"]}
+  ```
+  Do NOT write `manifest.json`. Stop and let the orchestrator ask the user on your behalf.
+
+When synthesizing multi-executor results:
+- If prior analyses conflict on scope or acceptance criteria, ask the user (via either method above)
+- If the original request is ambiguous on a key point, ask the user
+- Do NOT assume — the orchestrator will re-run you with answers
 
 ## Anti-Patterns to Avoid
 

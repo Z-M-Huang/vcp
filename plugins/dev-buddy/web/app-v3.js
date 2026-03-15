@@ -104,9 +104,14 @@ function v3Mixin() {
     },
 
     removeExecutorFromStage(stageType, index) {
+      const execs = this.v3Stages[stageType].executors.filter((_, i) => i !== index);
+      // Safety: ensure last executor is non-parallel when multi-executor
+      if (execs.length > 1 && execs[execs.length - 1].parallel === true) {
+        execs[execs.length - 1].parallel = false;
+      }
       this.v3Stages[stageType] = {
         ...this.v3Stages[stageType],
-        executors: this.v3Stages[stageType].executors.filter((_, i) => i !== index),
+        executors: execs,
       };
     },
 

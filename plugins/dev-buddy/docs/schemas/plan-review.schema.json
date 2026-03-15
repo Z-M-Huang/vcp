@@ -2,8 +2,25 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Plan Review Result",
   "type": "object",
-  "required": ["status", "needs_clarification", "clarification_questions", "summary", "findings", "requirements_coverage", "reviewed_by", "reviewed_at"],
+  "required": ["id", "reviewer", "model", "revision_number", "status", "needs_clarification", "clarification_questions", "summary", "findings", "requirements_coverage", "reviewed_at"],
   "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique review identifier (e.g., 'review-20260315-143022')"
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "System prompt name of the reviewer agent, used for re-dispatch routing on re-review"
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier used for this review (e.g., 'sonnet', 'qwen3.5-plus')"
+    },
+    "revision_number": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Revision counter — starts at 1, incremented on each re-review after fixes"
+    },
     "status": {
       "type": "string",
       "enum": ["approved", "needs_changes", "needs_clarification", "rejected"],
@@ -60,16 +77,16 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["severity", "area", "message", "suggestion", "fix_type"],
+        "required": ["severity", "area", "message", "suggestion", "fix_type", "contract_reference", "evidence"],
         "properties": {
           "severity": {
             "type": "string",
-            "enum": ["error", "warning", "suggestion"],
+            "enum": ["critical", "high", "medium", "low", "info"],
             "description": "How serious the finding is"
           },
           "area": {
             "type": "string",
-            "enum": ["requirements", "approach", "complexity", "risks", "feasibility", "security"],
+            "enum": ["requirements", "approach", "architecture", "complexity", "risks", "feasibility", "security", "quality"],
             "description": "Which aspect of the plan the finding relates to"
           },
           "message": {
@@ -97,11 +114,6 @@
         "additionalProperties": false
       },
       "description": "List of findings from the review. needs_changes requires at least one must_fix finding with evidence."
-    },
-    "reviewed_by": {
-      "type": "string",
-      "enum": ["plan-reviewer", "cli-executor"],
-      "description": "Agent that performed the review"
     },
     "reviewed_at": {
       "type": "string",

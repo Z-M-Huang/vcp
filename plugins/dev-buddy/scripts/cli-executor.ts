@@ -529,6 +529,20 @@ function validateOutput(reviewType: string, outputFileOverride: string | null = 
     return { valid: false, error: 'Output missing "summary" field or summary is not a string' };
   }
 
+  // Validate routing fields required for re-review dispatch
+  if (!output.id || typeof output.id !== 'string') {
+    return { valid: false, error: 'Output missing "id" field' };
+  }
+  if (!output.reviewer || typeof output.reviewer !== 'string') {
+    return { valid: false, error: 'Output missing "reviewer" field' };
+  }
+  if (!output.model || typeof output.model !== 'string') {
+    return { valid: false, error: 'Output missing "model" field' };
+  }
+  if (typeof output.revision_number !== 'number' || output.revision_number < 1) {
+    return { valid: false, error: 'Output missing or invalid "revision_number" field (must be integer >= 1)' };
+  }
+
   // Detect placeholder reviews where CLI tool output structured JSON without reading files
   if (output.needs_clarification === true) {
     const questions = output.clarification_questions as string[] | undefined;
@@ -736,16 +750,17 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Success — stamp output with verification token proving script execution
+  // Success — write verification token to sidecar file (not in review JSON,
+  // which has additionalProperties: false in both schemas)
   const resolvedOutputFile = getOutputFile(args.type!, args.outputFile);
   const verificationToken = crypto.randomUUID();
-  validation.output!._codex_verification = {
+  const verificationData = {
     token: verificationToken,
     executed_by: 'cli-executor.ts',
     timestamp: new Date().toISOString(),
     pid: process.pid
   };
-  writeJson(resolvedOutputFile, validation.output!);
+  writeJson(`${resolvedOutputFile}.verification.json`, verificationData);
 
   // Create session marker for future resume
   if (preset.supports_resume) {

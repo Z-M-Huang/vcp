@@ -28,6 +28,27 @@ Read `user-story/manifest.json` and verify `ac_count > 0`. Read `user-story/acce
 
 ---
 
+## Step 1a: Stale-State Cleanup
+
+Remove leftover clarification state from prior runs to avoid false positives:
+```bash
+rm -f .vcp/task/plan/status.json
+```
+
+## Step 1b: Check for Review Repair Context
+
+If `.vcp/task/review-findings-to-fix.json` exists, this is a re-plan after review failure. Read the file and inject its `must_fix` findings into every executor prompt as additional context:
+
+```
+REVIEW FINDINGS TO ADDRESS:
+The following must_fix findings were raised by plan reviewers. Address each one in the revised plan:
+{findings from review-findings-to-fix.json}
+```
+
+This file is written by `/dev-buddy-review --plan` when the review loop triggers a re-plan.
+
+---
+
 ## Step 2: Load Config and Resolve Executors
 
 ```bash
@@ -94,8 +115,11 @@ Route each executor by provider type:
 
 **Multiple executors (multi-planner with synthesizer):**
 Non-synthesizer planners (all except last) each write to a separate variant directory:
-- Variant dir: `.vcp/task/plan-{index}-{system_prompt}-{preset}-{model}/` (all dynamic parts sanitized via `sanitizeForFilename()`)
-- Modify assembled prompt: "Write output to .vcp/task/plan-{index}-{sanitized_name}/ using the multi-file format."
+- **Compute dirname** via the name-helper (deterministic, no ad-hoc formatting):
+  ```bash
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/name-helper.ts" --type plan-variant --index {0-based-index} --system-prompt {system_prompt_name} --provider {preset_name} --model {model_name}
+  ```
+- Modify assembled prompt: "Write output to .vcp/task/{computed_dirname}/ using the multi-file format."
 
 Dispatch per parallel/sequential config (group adjacent `parallel: true` → simultaneous).
 
@@ -112,11 +136,20 @@ In addition to creating your own plan, you MUST:
 2. Merge the best elements from each
 3. Write the FINAL synthesized plan to .vcp/task/plan/ (standard multi-file format)
 4. Note which variant contributed key decisions in meta.json
+
+IMPORTANT: If you are unsure about any architectural decision, step ordering, or scope boundary,
+do NOT assume. Instead:
+1. Write .vcp/task/plan/status.json:
+   {"status": "needs_clarification", "clarification_questions": ["Q1?", "Q2?"]}
+2. Do NOT write manifest.json (that signals completion)
+3. Stop and let the orchestrator handle asking the user
+
+If you have no questions, proceed to write all artifacts including manifest.json.
 ```
 
 **Post-synthesis cleanup:** Only after verifying `.vcp/task/plan/manifest.json` exists:
 ```bash
-rm -rf .vcp/task/plan-[0-9]-*/
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/name-helper.ts" --type plan-variants --list --task-dir .vcp/task | xargs -I{} rm -rf ".vcp/task/{}"
 ```
 On synthesis failure, preserve variant directories for manual recovery.
 
@@ -127,7 +160,27 @@ On synthesis failure, preserve variant directories for manual recovery.
 
 ---
 
-## Step 5: Verify Output
+## Step 5: Check for Clarification
+
+After the synthesizer completes, check for `.vcp/task/plan/status.json`:
+
+1. If it exists and `status == "needs_clarification"`:
+   a. Read the `clarification_questions[]` array
+   b. Present questions to user via AskUserQuestion
+   c. Collect answers
+   d. Delete `status.json` (prevent stale state)
+   e. Re-dispatch ONLY the synthesizer (last executor) with the SAME synthesis augmentation plus:
+      ```
+      CLARIFICATION ANSWERS:
+      - Q1? → A1
+      - Q2? → A2
+      ```
+   f. Return to this step (max 3 rounds — escalate to user if exceeded)
+2. If `status.json` does not exist, proceed to Step 6
+
+---
+
+## Step 6: Verify Output
 
 After the executor completes, verify:
 
@@ -139,7 +192,7 @@ If verification fails, report what's missing to the user.
 
 ---
 
-## Step 6: Report Results
+## Step 7: Report Results
 
 Present a summary to the user:
 - Plan title and summary

@@ -38,7 +38,7 @@ Stage Skill = individually-invocable command that runs a stage's executors
 
 **Bug fix:**
 ```
-/dev-buddy-rca  →  /dev-buddy-requirements  →  /dev-buddy-plan  →  /dev-buddy-implement  →  /dev-buddy-review --code
+/dev-buddy-rca  →  /dev-buddy-requirements  →  /dev-buddy-plan  →  /dev-buddy-review --plan  →  /dev-buddy-implement  →  /dev-buddy-review --code
 ```
 
 Each stage reads input artifacts from `.vcp/task/` and writes output artifacts. No team mode, no persistent state between stages.
@@ -58,8 +58,10 @@ File: `~/.vcp/dev-buddy.json` with `"version": "3.0"`
 ```json
 {
   "version": "3.0",
-  "executors": { "name": { "system_prompt": "...", "preset": "...", "model": "..." } },
-  "stages": { "planning": { "executors": [{ "name": "...", "parallel": false }] } },
+  "stages": {
+    "planning": { "executors": [{ "system_prompt": "planner", "preset": "anthropic-subscription", "model": "opus" }] },
+    "plan-review": { "executors": [{ "system_prompt": "plan-reviewer", "preset": "anthropic-subscription", "model": "sonnet" }] }
+  },
   "feature_pipeline": ["requirements", "planning", "plan-review", "implementation", "code-review"],
   "bugfix_pipeline": ["rca", "requirements", "planning", "plan-review", "implementation", "code-review"],
   "max_iterations": 10,
@@ -74,7 +76,9 @@ File: `~/.vcp/dev-buddy.json` with `"version": "3.0"`
 | `.vcp/task/user-story/manifest.json` | requirements |
 | `.vcp/task/plan/manifest.json` | planning |
 | `.vcp/task/plan/test-plan.json` | planning (TDD test cases) |
-| `.vcp/task/{stage}-{executor}-{provider}-{model}-{index}-v{version}.json` | plan-review, code-review, rca |
+| `.vcp/task/{stage}-{system_prompt}-{provider}-{model}-{index}.json` | plan-review, code-review |
+| `.vcp/task/rca-{system_prompt}-{provider}-{model}-{index}-v{version}.json` | rca |
+| `.vcp/task/pipeline-tasks.json` | pipeline state (created by orchestrators) |
 | `.vcp/task/impl-result.json` | implementation |
 | `.vcp/task/rca-diagnosis.json` | rca (consolidated) |
 

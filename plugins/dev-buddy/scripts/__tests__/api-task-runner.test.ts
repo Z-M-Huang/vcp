@@ -50,7 +50,9 @@ describe('buildSessionEnv', () => {
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('MiniMax-M2.5');
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('MiniMax-M2.5');
     expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('MiniMax-M2.5');
-    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('MiniMax-M2.5');
+    // CLAUDE_CODE_SUBAGENT_MODEL is set to 'sonnet' (alias) — resolved at runtime
+    // via ANTHROPIC_DEFAULT_SONNET_MODEL to the actual provider model
+    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
   });
 
   test('preserves model name case sensitivity', () => {
@@ -69,7 +71,8 @@ describe('buildSessionEnv', () => {
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('ModelB');
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('ModelB');
     expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('ModelB');
-    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('ModelB');
+    // CLAUDE_CODE_SUBAGENT_MODEL always 'sonnet' — resolved via ANTHROPIC_DEFAULT_SONNET_MODEL
+    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
   });
 
   test('sets provider credentials', () => {

@@ -198,6 +198,21 @@ LSP: goToDefinition, findReferences, incomingCalls
 Glob: "**/*.test.{ts,js}" or "**/*.spec.{ts,js}"
 ```
 
+## Collaboration Protocol
+
+When you need clarification on architectural decisions, scope boundaries, or ambiguous requirements:
+- If AskUserQuestion tool is available: use it to ask specific questions with context, wait for answers, resume
+- If AskUserQuestion is NOT available (e.g., API executor mode): write a status file instead:
+  Write `.vcp/task/plan/status.json`:
+  ```json
+  {"status": "needs_clarification", "clarification_questions": ["Q1?", "Q2?"]}
+  ```
+  Do NOT write `manifest.json`. Stop and let the orchestrator ask the user on your behalf.
+
+When synthesizing multi-executor plan variants:
+- If prior variants fundamentally conflict on architecture, ask the user
+- Do NOT assume — the orchestrator will re-run you with answers
+
 ## Anti-Patterns to Avoid
 
 - Do not plan changes to files you haven't read
@@ -206,6 +221,7 @@ Glob: "**/*.test.{ts,js}" or "**/*.spec.{ts,js}"
 - Do not ignore existing test patterns
 - Do not over-engineer for hypothetical future needs
 - Do not skip security/performance considerations
+- Do not assume architectural decisions when unsure — ask instead
 
 ## CRITICAL: Completion Requirements
 

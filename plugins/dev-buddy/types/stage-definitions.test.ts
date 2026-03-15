@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { sanitizeForFilename, getOutputFileName, isValidStageEntry, VALID_STAGE_TYPES } from './stage-definitions.ts';
+import { sanitizeForFilename, getOutputFileName, getV3OutputFileName, isValidStageEntry, VALID_STAGE_TYPES, SAFE_PATH_RE } from './stage-definitions.ts';
 
 // ─── sanitizeForFilename ─────────────────────────────────────────────────────
 
@@ -74,14 +74,14 @@ describe('getOutputFileName', () => {
     expect(getOutputFileName('implementation', 1, 'anthropic', 'sonnet', 1)).toBe('impl-result.json');
   });
 
-  test('returns versioned name for plan-review', () => {
+  test('returns unversioned name for plan-review', () => {
     expect(getOutputFileName('plan-review', 1, 'anthropic-subscription', 'sonnet', 1))
-      .toBe('plan-review-anthropic-subscription-sonnet-1-v1.json');
+      .toBe('plan-review-anthropic-subscription-sonnet-1.json');
   });
 
-  test('returns versioned name for code-review', () => {
+  test('returns unversioned name for code-review', () => {
     expect(getOutputFileName('code-review', 2, 'anthropic-subscription', 'opus', 1))
-      .toBe('code-review-anthropic-subscription-opus-2-v1.json');
+      .toBe('code-review-anthropic-subscription-opus-2.json');
   });
 
   test('returns versioned name for rca', () => {
@@ -89,21 +89,26 @@ describe('getOutputFileName', () => {
       .toBe('rca-anthropic-subscription-sonnet-1-v1.json');
   });
 
-  test('increments version for re-reviews', () => {
-    expect(getOutputFileName('code-review', 1, 'anthropic-subscription', 'sonnet', 2))
-      .toBe('code-review-anthropic-subscription-sonnet-1-v2.json');
-    expect(getOutputFileName('code-review', 1, 'anthropic-subscription', 'sonnet', 3))
-      .toBe('code-review-anthropic-subscription-sonnet-1-v3.json');
+  test('increments version for rca re-analysis', () => {
+    expect(getOutputFileName('rca', 1, 'anthropic-subscription', 'sonnet', 2))
+      .toBe('rca-anthropic-subscription-sonnet-1-v2.json');
+    expect(getOutputFileName('rca', 1, 'anthropic-subscription', 'sonnet', 3))
+      .toBe('rca-anthropic-subscription-sonnet-1-v3.json');
+  });
+
+  test('review version param is no-op (pattern has no {version})', () => {
+    expect(getOutputFileName('plan-review', 1, 'anthropic-subscription', 'sonnet', 1))
+      .toBe(getOutputFileName('plan-review', 1, 'anthropic-subscription', 'sonnet', 5));
   });
 
   test('sanitizes provider name with spaces', () => {
     expect(getOutputFileName('plan-review', 1, 'Codex CLI', 'o3', 1))
-      .toBe('plan-review-codex-cli-o3-1-v1.json');
+      .toBe('plan-review-codex-cli-o3-1.json');
   });
 
   test('sanitizes model name with dots', () => {
     expect(getOutputFileName('code-review', 1, 'codex-cli', 'gpt-5.3-codex', 1))
-      .toBe('code-review-codex-cli-gpt-5.3-codex-1-v1.json');
+      .toBe('code-review-codex-cli-gpt-5.3-codex-1.json');
   });
 
   test('different indices produce different filenames for same provider+model', () => {
@@ -117,6 +122,75 @@ describe('getOutputFileName', () => {
     const b = getOutputFileName('requirements', 1, 'baz', 'qux', 1);
     expect(a).toBe(b);
     expect(a).toBe('user-story/manifest.json');
+  });
+});
+
+// ─── getV3OutputFileName ────────────────────────────────────────────────────
+
+describe('getV3OutputFileName', () => {
+  test('includes system prompt name for plan-review', () => {
+    expect(getV3OutputFileName('plan-review', 'plan-reviewer', 1, 'anthropic-subscription', 'sonnet', 1))
+      .toBe('plan-review-plan-reviewer-anthropic-subscription-sonnet-1.json');
+  });
+
+  test('includes system prompt name for code-review', () => {
+    expect(getV3OutputFileName('code-review', 'code-reviewer', 1, 'anthropic-subscription', 'opus', 1))
+      .toBe('code-review-code-reviewer-anthropic-subscription-opus-1.json');
+  });
+
+  test('omits version for review stages', () => {
+    const name = getV3OutputFileName('plan-review', 'plan-reviewer', 1, 'sub', 'sonnet', 1);
+    expect(name).not.toContain('-v1');
+    expect(name).toBe('plan-review-plan-reviewer-sub-sonnet-1.json');
+  });
+
+  test('keeps version for rca', () => {
+    expect(getV3OutputFileName('rca', 'root-cause-analyst', 1, 'anthropic-subscription', 'sonnet', 1))
+      .toBe('rca-root-cause-analyst-anthropic-subscription-sonnet-1-v1.json');
+  });
+
+  test('rca version increments', () => {
+    expect(getV3OutputFileName('rca', 'root-cause-analyst', 1, 'sub', 'sonnet', 2))
+      .toBe('rca-root-cause-analyst-sub-sonnet-1-v2.json');
+  });
+
+  test('falls back to v2 pattern for singletons', () => {
+    expect(getV3OutputFileName('requirements', 'requirements-gatherer', 1, 'sub', 'opus', 1))
+      .toBe('user-story/manifest.json');
+  });
+
+  test('sanitizes system prompt name', () => {
+    expect(getV3OutputFileName('plan-review', 'Custom Reviewer', 1, 'sub', 'sonnet', 1))
+      .toBe('plan-review-custom-reviewer-sub-sonnet-1.json');
+  });
+});
+
+// ─── SAFE_PATH_RE compatibility ─────────────────────────────────────────────
+
+describe('SAFE_PATH_RE', () => {
+  test('validates new unversioned review filenames', () => {
+    expect(SAFE_PATH_RE.test('plan-review-plan-reviewer-sub-sonnet-1.json')).toBe(true);
+    expect(SAFE_PATH_RE.test('code-review-code-reviewer-sub-opus-2.json')).toBe(true);
+  });
+
+  test('validates old versioned review filenames (backward compat)', () => {
+    expect(SAFE_PATH_RE.test('plan-review-sub-sonnet-1-v1.json')).toBe(true);
+    expect(SAFE_PATH_RE.test('code-review-sub-opus-2-v1.json')).toBe(true);
+  });
+
+  test('validates rca versioned filenames', () => {
+    expect(SAFE_PATH_RE.test('rca-root-cause-analyst-sub-sonnet-1-v1.json')).toBe(true);
+  });
+
+  test('validates singleton paths', () => {
+    expect(SAFE_PATH_RE.test('user-story/manifest.json')).toBe(true);
+    expect(SAFE_PATH_RE.test('plan/manifest.json')).toBe(true);
+    expect(SAFE_PATH_RE.test('impl-result.json')).toBe(true);
+  });
+
+  test('rejects path traversal', () => {
+    expect(SAFE_PATH_RE.test('../evil.json')).toBe(false);
+    expect(SAFE_PATH_RE.test('../../etc/passwd')).toBe(false);
   });
 });
 
@@ -134,12 +208,16 @@ describe('VALID_STAGE_TYPES', () => {
 // ─── isValidStageEntry ───────────────────────────────────────────────────────
 
 describe('isValidStageEntry', () => {
-  test('accepts valid plan-review entry', () => {
+  test('accepts valid plan-review entry (new format)', () => {
+    expect(isValidStageEntry({ type: 'plan-review', output_file: 'plan-review-plan-reviewer-sub-sonnet-1.json' })).toBe(true);
+  });
+
+  test('accepts valid plan-review entry (old versioned format)', () => {
     expect(isValidStageEntry({ type: 'plan-review', output_file: 'plan-review-sub-sonnet-1-v1.json' })).toBe(true);
   });
 
   test('accepts valid code-review entry', () => {
-    expect(isValidStageEntry({ type: 'code-review', output_file: 'code-review-sub-opus-2-v1.json' })).toBe(true);
+    expect(isValidStageEntry({ type: 'code-review', output_file: 'code-review-code-reviewer-sub-opus-2.json' })).toBe(true);
   });
 
   test('accepts valid singleton entries', () => {
@@ -155,7 +233,7 @@ describe('isValidStageEntry', () => {
   test('accepts extra properties (forward-compatible)', () => {
     expect(isValidStageEntry({
       type: 'code-review',
-      output_file: 'code-review-sub-sonnet-1-v1.json',
+      output_file: 'code-review-code-reviewer-sub-sonnet-1.json',
       current_version: 1,
       provider: 'anthropic-subscription',
     })).toBe(true);
@@ -175,7 +253,7 @@ describe('isValidStageEntry', () => {
   });
 
   test('rejects missing type', () => {
-    expect(isValidStageEntry({ output_file: 'plan-review-sub-sonnet-1-v1.json' })).toBe(false);
+    expect(isValidStageEntry({ output_file: 'plan-review-sub-sonnet-1.json' })).toBe(false);
   });
 
   test('rejects missing output_file', () => {

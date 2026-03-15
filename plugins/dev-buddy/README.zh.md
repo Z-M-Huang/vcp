@@ -171,8 +171,13 @@ Pipeline 在 `~/.vcp/dev-buddy.json` 中定义为有序的阶段数组。每个�
 
 | Skill | 命令 | 描述 |
 |-------|------|------|
-| 功能实现 | `/dev-buddy-feature-implement` | 完整功能开发 pipeline —— 需求、规划、评审、实现、代码评审 |
-| Bug 修复 | `/dev-buddy-bug-fix` | Bug 修复 pipeline —— 根因分析、验证、实现、代码评审 |
+| 功能实现 | `/dev-buddy-feature-implement` | 完整功能 pipeline —— 按 `feature_pipeline` 配置链接各阶段 skill |
+| Bug 修复 | `/dev-buddy-bug-fix` | Bug 修复 pipeline —— 按 `bugfix_pipeline` 配置链接各阶段 skill |
+| 规划 | `/dev-buddy-plan` | 从用户故事创建实现计划，TDD 测试生成 + 步骤到 AC 映射 |
+| 评审 | `/dev-buddy-review` | 评审计划（`--plan`）或代码（`--code`），包含评审→修复→重新评审循环 |
+| 实现 | `/dev-buddy-implement` | 使用 TDD 循环实现计划，每步后运行测试 |
+| 需求 | `/dev-buddy-requirements` | 收集需求，带来源追踪 |
+| 根因分析 | `/dev-buddy-rca` | 根因分析，仅输出诊断结果 |
 | 单次执行 | `/dev-buddy-once` | 使用指定 AI provider 和模型运行单个任务 |
 | 配置 | `/dev-buddy-config` | 管理 pipeline 阶段、provider 和模型的 Web 门户 |
 | 管理 Preset | `/dev-buddy-manage-presets` | 列出、添加、更新或删除 AI provider preset |
@@ -194,7 +199,7 @@ Pipeline 在 `~/.vcp/dev-buddy.json` 中定义为有序的阶段数组。每个�
 | Hook | 触发条件 | 描述 |
 |------|----------|------|
 | guidance-hook | UserPromptSubmit | 向用户提示注入 pipeline 引导信息 |
-| review-validator | SubagentStop | 验证评审输出是否满足质量标准 |
+| *（评审验证由 `cli-executor.ts` 和 `dev-buddy-review` SKILL.md 处理）* | | |
 
 ---
 

@@ -7,6 +7,7 @@ import path from 'path';
 import type { PipelineConfig, StageEntry } from '../types/pipeline.ts';
 import { isValidStageEntry } from '../types/stage-definitions.ts';
 import type { StageType } from '../types/stage-definitions.ts';
+import { extractJsonFromResult } from './json-extract.ts';
 
 // ─── Phase Token Contract ───────────────────────────────────────────
 
@@ -31,6 +32,9 @@ export interface AnalysisFile {
   name: string;
   file: string;
   data: unknown;
+  /** Structured data extracted from data.result (or data.parsed_result).
+   *  null when the result contained no valid JSON. */
+  parsedData: unknown | null;
 }
 
 /** Stage output entry: null = not yet produced, non-null = has data (check status field) */
@@ -47,6 +51,10 @@ export interface PipelineProgress {
    *  or derived from resolved_config with legacy naming (fallback).
    *  Empty object when neither source is present (fallback to idle). */
   stageOutputs: Record<string, StageOutputEntry>;
+  /** Clarification state for requirements synthesizer. Non-null when status.json exists with needs_clarification. */
+  requirementsClarification: { questions: string[] } | null;
+  /** Clarification state for planning synthesizer. Non-null when status.json exists with needs_clarification. */
+  planClarification: { questions: string[] } | null;
 }
 
 // ─── Path Helpers ───────────────────────────────────────────────────
@@ -102,7 +110,8 @@ export function getJsonStatus(filePath: string): string | null {
   return data.status;
 }
 
-/** Discover all specialist analysis files dynamically */
+/** Discover all specialist analysis files dynamically.
+ *  Extracts structured JSON from the result field when possible. */
 export function discoverAnalysisFiles(taskDir: string): AnalysisFile[] {
   try {
     if (!fs.existsSync(taskDir)) return [];
@@ -110,7 +119,18 @@ export function discoverAnalysisFiles(taskDir: string): AnalysisFile[] {
       .filter((f: string) => f.startsWith('analysis-') && f.endsWith('.json'))
       .map((f: string) => {
         const name = f.replace('analysis-', '').replace('.json', '');
-        return { name, file: f, data: readJson(path.join(taskDir, f)) };
+        const data = readJson(path.join(taskDir, f));
+        // Extract parsed data: prefer pre-parsed parsed_result, fall back to extracting from result
+        let parsedData: unknown | null = null;
+        if (data && typeof data === 'object') {
+          const d = data as Record<string, unknown>;
+          if (d.parsed_result !== undefined && d.parsed_result !== null) {
+            parsedData = d.parsed_result;
+          } else if (d.result !== undefined) {
+            parsedData = extractJsonFromResult(d.result);
+          }
+        }
+        return { name, file: f, data, parsedData };
       })
       .filter((entry: AnalysisFile) => entry.data !== null);
   } catch {
@@ -143,6 +163,18 @@ export function readUserStoryACs(taskDir: string): Array<{ id: string }> | null 
     return legacyStory.acceptance_criteria as Array<{ id: string }>;
   }
   return null;
+}
+
+/** Read clarification status from a status.json file.
+ *  Returns { questions } if status is needs_clarification, null otherwise. */
+function readClarificationStatus(filePath: string): { questions: string[] } | null {
+  const data = readJson(filePath) as Record<string, unknown> | null;
+  if (!data) return null;
+  if (data.status !== 'needs_clarification') return null;
+  const questions = Array.isArray(data.clarification_questions)
+    ? data.clarification_questions as string[]
+    : [];
+  return { questions };
 }
 
 /** Get progress from artifact files */
@@ -218,6 +250,10 @@ export function getProgress(taskDir: string): PipelineProgress {
   const planManifest = readJson(path.join(taskDir, 'plan', 'manifest.json'));
   const plan = planManifest ?? readJson(path.join(taskDir, 'plan-refined.json'));
 
+  // Clarification state: check for status.json in user-story/ and plan/
+  const reqClarification = readClarificationStatus(path.join(taskDir, 'user-story', 'status.json'));
+  const planClarification = readClarificationStatus(path.join(taskDir, 'plan', 'status.json'));
+
   return {
     userStory,
     plan,
@@ -225,6 +261,8 @@ export function getProgress(taskDir: string): PipelineProgress {
     implResult: readJson(path.join(taskDir, 'impl-result.json')) as { status: string } | null,
     stageOutputs,
     analysisFiles: discoverAnalysisFiles(taskDir),
+    requirementsClarification: reqClarification,
+    planClarification: planClarification,
   };
 }
 
@@ -301,6 +339,22 @@ export function determinePhase(progress: PipelineProgress): PhaseResult {
     return {
       phase: 'root_cause_analysis',
       message: '**Phase: Root Cause Analysis**\nRCA pending. Spawn root-cause-analyst stages per resolved bugfix_pipeline config.'
+    };
+  }
+
+  // Clarification sub-phases: synthesizer wrote status.json and is waiting for user answers
+  if (progress.requirementsClarification && !progress.userStory) {
+    const qs = progress.requirementsClarification.questions;
+    return {
+      phase: 'requirements_clarification',
+      message: `**Phase: Requirements Clarification**\nSynthesizer needs answers before completing:\n${qs.map(q => `- ${q}`).join('\n')}\nAnswer via AskUserQuestion, delete status.json, and re-run synthesizer.`
+    };
+  }
+  if (progress.planClarification && !progress.plan) {
+    const qs = progress.planClarification.questions;
+    return {
+      phase: 'plan_clarification',
+      message: `**Phase: Plan Clarification**\nSynthesizer needs answers before completing:\n${qs.map(q => `- ${q}`).join('\n')}\nAnswer via AskUserQuestion, delete status.json, and re-run synthesizer.`
     };
   }
 

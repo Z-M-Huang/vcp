@@ -36,6 +36,15 @@ If `.vcp/task/rca-diagnosis.json` exists, this is a bug-fix requirements stage. 
 
 ---
 
+## Step 2a: Stale-State Cleanup
+
+Remove leftover clarification state from prior runs to avoid false positives:
+```bash
+rm -f .vcp/task/user-story/status.json
+```
+
+---
+
 ## Step 3: Prompt Assembly (Anti-Drift)
 
 **Single executor (typical):**
@@ -66,8 +75,15 @@ Do NOT write requirements.json or test-criteria.json (moved to planner).
 
 **Multi-executor (analysts with synthesizer):**
 If multiple executors are configured for requirements:
-1. Non-synthesizer executors (all except the last): Each writes `.vcp/task/analysis-{index}-{system_prompt}-{preset}-{model}.json`
-   - All dynamic parts sanitized via `sanitizeForFilename()` from `stage-definitions.ts`
+1. Non-synthesizer executors (all except the last): Each writes an analysis file.
+   - **Compute filename** via the name-helper (deterministic, no ad-hoc formatting):
+     ```bash
+     bun "${CLAUDE_PLUGIN_ROOT}/scripts/name-helper.ts" --type analysis --index {0-based-index} --system-prompt {system_prompt_name} --provider {preset_name} --model {model_name}
+     ```
+   - **Analysis file format:** Valid JSON (NOT markdown). Must be parseable by `JSON.parse()`:
+     ```json
+     {"acceptance_criteria": [...], "scope": {...}, "risks": [...], "questions": [...]}
+     ```
    - Dispatch per parallel/sequential config (group adjacent `parallel: true` → simultaneous)
 2. Last executor (synthesizer) runs last with augmented prompt:
    - It performs its OWN requirements analysis
@@ -87,6 +103,14 @@ If multiple executors are configured for requirements:
    2. Synthesize the best acceptance criteria from each
    3. Write the FINAL consolidated user-story artifacts to .vcp/task/user-story/
 
+   IMPORTANT: If you are unsure about any requirement, scope decision, or acceptance criterion,
+   do NOT assume. Instead:
+   1. Write .vcp/task/user-story/status.json:
+      {"status": "needs_clarification", "clarification_questions": ["Q1?", "Q2?"]}
+   2. Do NOT write manifest.json (that signals completion)
+   3. Stop and let the orchestrator handle asking the user
+
+   If you have no questions, proceed to write all artifacts including manifest.json.
    Your output is the authoritative result.
    ```
 
@@ -107,7 +131,27 @@ If multiple executors are configured for requirements:
 
 ---
 
-## Step 5: Verify Output
+## Step 5: Check for Clarification
+
+After the synthesizer completes, check for `.vcp/task/user-story/status.json`:
+
+1. If it exists and `status == "needs_clarification"`:
+   a. Read the `clarification_questions[]` array
+   b. Present questions to user via AskUserQuestion
+   c. Collect answers
+   d. Delete `status.json` (prevent stale state)
+   e. Re-dispatch ONLY the synthesizer (last executor) with the SAME synthesis augmentation plus:
+      ```
+      CLARIFICATION ANSWERS:
+      - Q1? → A1
+      - Q2? → A2
+      ```
+   f. Return to this step (max 3 rounds — escalate to user if exceeded)
+2. If `status.json` does not exist, proceed to Step 6
+
+---
+
+## Step 6: Verify Output
 
 After completion, verify:
 1. `.vcp/task/user-story/manifest.json` exists with `ac_count > 0`
@@ -117,7 +161,7 @@ After completion, verify:
 
 ---
 
-## Step 6: Report Results
+## Step 7: Report Results
 
 Present to the user:
 - Number of acceptance criteria

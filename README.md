@@ -151,8 +151,8 @@ One AI writing and reviewing its own code is like grading your own homework. Dev
 
 | Pipeline | Command | Phases |
 |----------|---------|--------|
-| **Feature Development** | `/dev-buddy-feature-implement` | Requirements → Planning → Plan Reviews → Implementation → Code Reviews |
-| **Bug Fix** | `/dev-buddy-bug-fix` | Root Cause Analysis → Plan Validation → Implementation → Code Reviews |
+| **Feature Development** | `/dev-buddy-feature-implement` | Requirements → Planning → Plan Review → Implementation → Code Review |
+| **Bug Fix** | `/dev-buddy-bug-fix` | Root Cause Analysis → Requirements → Planning → Plan Review → Implementation → Code Review |
 
 ### Cross-AI Review Gates
 

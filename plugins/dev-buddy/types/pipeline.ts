@@ -45,7 +45,7 @@ export interface DevBuddyConfig {
   feature_pipeline: StageType[];
   /** User-configurable ordered list of stages for the bugfix pipeline. */
   bugfix_pipeline: StageType[];
-  /** Maximum fix/re-review iterations per pipeline execution. Default: 10. */
+  /** Maximum fix/re-review iterations per review stage (plan-review, code-review). Each stage gets its own budget. Default: 10. */
   max_iterations: number;
   /** Maximum TDD loop iterations per implementation step. Default: 5. */
   max_tdd_iterations: number;

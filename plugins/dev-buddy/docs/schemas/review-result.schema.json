@@ -1,7 +1,26 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Code Review Result",
   "type": "object",
+  "required": ["id", "reviewer", "model", "revision_number", "status", "needs_clarification", "clarification_questions", "summary", "findings", "checklist", "acceptance_criteria_verification", "reviewed_at"],
   "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique review identifier (e.g., 'code-review-20260315-143022'). Distinct from per-finding id."
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "System prompt name of the reviewer agent, used for re-dispatch routing on re-review"
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier used for this review (e.g., 'sonnet', 'qwen3.5-plus')"
+    },
+    "revision_number": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Revision counter — starts at 1, incremented on each re-review after fixes"
+    },
     "status": {
       "type": "string",
       "enum": ["approved", "needs_changes", "needs_clarification", "rejected"]
@@ -80,7 +99,7 @@
           },
           "severity": {
             "type": "string",
-            "enum": ["error", "warning", "suggestion"]
+            "enum": ["critical", "high", "medium", "low", "info"]
           },
           "category": {
             "type": "string",
@@ -113,7 +132,7 @@
             "description": "Whether this finding blocks approval (must_fix) or is informational (advisory)"
           }
         },
-        "required": ["id", "severity", "category", "file", "line", "message", "suggestion", "fix_type"],
+        "required": ["id", "severity", "category", "file", "line", "message", "suggestion", "fix_type", "contract_reference", "evidence"],
         "additionalProperties": false
       }
     },
@@ -196,8 +215,12 @@
         "over_engineering"
       ],
       "additionalProperties": false
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO8601 timestamp of when review was completed"
     }
   },
-  "required": ["status", "needs_clarification", "clarification_questions", "summary", "findings", "checklist", "acceptance_criteria_verification"],
   "additionalProperties": false
 }

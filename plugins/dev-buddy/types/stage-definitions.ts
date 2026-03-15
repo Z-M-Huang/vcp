@@ -29,14 +29,16 @@ export interface StageDefinition {
   /**
    * Output file name pattern (v2 format).
    * Singletons: exact file name (e.g. 'user-story.json').
-   * Multi-instance: pattern with {provider}, {model}, {index}, and {version} placeholders
-   * (e.g. 'plan-review-{provider}-{model}-{index}-v{version}.json').
+   * Multi-instance: pattern with {provider}, {model}, {index} placeholders.
+   * Reviews omit {version} (overwrite in place, track revision_number in JSON).
+   * RCA includes {version} for versioned files.
    */
   output_file_pattern: string;
   /**
    * v3 output file name pattern including {system_prompt} for traceability.
    * Only present on multi-instance stages.
-   * Format: '{stage}-{system_prompt}-{provider}-{model}-{index}-v{version}.json'
+   * Reviews: '{stage}-{system_prompt}-{provider}-{model}-{index}.json'
+   * RCA: '{stage}-{system_prompt}-{provider}-{model}-{index}-v{version}.json'
    */
   v3_output_file_pattern?: string;
   /** Maximum number of executors allowed for this stage. undefined = unlimited. */
@@ -66,9 +68,9 @@ export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
     singleton: false,
     allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'plan-reviewer',
-    output_file_pattern: 'plan-review-{provider}-{model}-{index}-v{version}.json',
+    output_file_pattern: 'plan-review-{provider}-{model}-{index}.json',
     /** v3 output pattern includes system prompt name for traceability. */
-    v3_output_file_pattern: 'plan-review-{system_prompt}-{provider}-{model}-{index}-v{version}.json',
+    v3_output_file_pattern: 'plan-review-{system_prompt}-{provider}-{model}-{index}.json',
   },
   implementation: {
     singleton: true,
@@ -81,8 +83,8 @@ export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
     singleton: false,
     allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'code-reviewer',
-    output_file_pattern: 'code-review-{provider}-{model}-{index}-v{version}.json',
-    v3_output_file_pattern: 'code-review-{system_prompt}-{provider}-{model}-{index}-v{version}.json',
+    output_file_pattern: 'code-review-{provider}-{model}-{index}.json',
+    v3_output_file_pattern: 'code-review-{system_prompt}-{provider}-{model}-{index}.json',
   },
   rca: {
     singleton: false,
@@ -265,4 +267,46 @@ export function getPhasedBatchReviewFileName(
   if (endStep < startStep) throw new Error(`endStep (${endStep}) must be >= startStep (${startStep})`);
   if (!Number.isInteger(version) || version < 1) throw new Error(`version must be a positive integer, got ${version}`);
   return `phased-review-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}-steps-${startStep}-${endStep}-v${version}.json`;
+}
+
+// ─── Analysis & Plan Variant Naming (0-based index) ─────────────────────────
+
+/**
+ * Compute the filename for a non-synthesizer analysis output (requirements stage).
+ * Uses 0-based indexing to match the SKILL.md convention.
+ *
+ * @param index - The 0-based executor index.
+ * @param systemPromptName - The system prompt name (sanitized for filename).
+ * @param provider - The provider/preset name (sanitized for filename).
+ * @param model - The model name (sanitized for filename).
+ * @returns e.g. 'analysis-0-requirements-gatherer-bailian-qwen3.5-plus.json'
+ */
+export function getAnalysisFileName(
+  index: number,
+  systemPromptName: string,
+  provider: string,
+  model: string,
+): string {
+  if (!Number.isInteger(index) || index < 0) throw new Error(`index must be a non-negative integer, got ${index}`);
+  return `analysis-${index}-${sanitizeForFilename(systemPromptName)}-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}.json`;
+}
+
+/**
+ * Compute the directory name for a non-synthesizer plan variant (planning stage).
+ * Uses 0-based indexing to match the SKILL.md convention.
+ *
+ * @param index - The 0-based executor index.
+ * @param systemPromptName - The system prompt name (sanitized for filename).
+ * @param provider - The provider/preset name (sanitized for filename).
+ * @param model - The model name (sanitized for filename).
+ * @returns e.g. 'plan-0-planner-bailian-qwen3.5-plus'
+ */
+export function getPlanVariantDirName(
+  index: number,
+  systemPromptName: string,
+  provider: string,
+  model: string,
+): string {
+  if (!Number.isInteger(index) || index < 0) throw new Error(`index must be a non-negative integer, got ${index}`);
+  return `plan-${index}-${sanitizeForFilename(systemPromptName)}-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}`;
 }
