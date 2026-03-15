@@ -1,131 +1,105 @@
-# Pipeline Workflow (Task + Hook Architecture, Configurable)
+# Dev Buddy Workflow
 
-## Architecture Overview
-
-This pipeline uses a **Task + Hook architecture** with a persistent pipeline team and a **configurable stage array**:
-
-- **Config** - Ordered arrays of `{type, provider, model}` stage entries (replaces fixed 9-stage map)
-- **Team (Lifecycle)** - Persistent pipeline team provides TaskCreate/TaskUpdate/TaskList access
-- **Tasks (Primary)** - Structural enforcement via `blockedBy` dependencies
-- **Hook (Guidance)** - Validates output, transitions state, injects reminders
-- **Main Thread** - Orchestrator that handles user input and creates dynamic tasks
-- **Stage Registry** - 6 fixed stage types with constraints (singleton, allowed_pipelines, output file patterns)
-
-### Custom Agents
-
-| Agent | Default Model | Purpose | Stage Type |
-|-------|-------|---------|-------|
-| `requirements-gatherer` | opus | Business Analyst + PM hybrid | requirements |
-| `planner` | opus | Architect + Fullstack hybrid | planning |
-| `plan-reviewer` | sonnet/opus | Architecture + Security + QA | plan-review |
-| `implementer` | sonnet | Fullstack + TDD + Quality | implementation |
-| `code-reviewer` | sonnet/opus | Security + Performance + QA | code-review |
-| `root-cause-analyst` | sonnet/opus | Autonomous bug diagnosis | rca |
-| `cli-executor` | external | CLI tool wrapper (invokes any configured CLI tool) | (any CLI preset stage) |
+Dev Buddy has two architectures: **v3 Stage Skills** (granular, executor-based) and **v2 Pipeline Skills** (monolithic, team-based).
 
 ---
 
-## Quick Start
+## v3 Architecture: Modular Stage Skills
+
+### Core Concepts
 
 ```
-/dev-buddy-feature-implement Add user authentication with JWT tokens
-/dev-buddy-bug-fix Login fails with 500 after password reset
+System Prompt (.md file) + Preset + Model = Executor
+Stage = collection of Executors (parallel/sequential)
+Stage Skill = individually-invocable command that runs a stage's executors
 ```
 
-### Feature Development
+- **System Prompts** — Reusable agent definitions. Built-in (`agents/*.md`, read-only) + custom (`~/.vcp/system-prompts/*.md`)
+- **Executors** — Named combinations of system_prompt + preset + model. Defined in `~/.vcp/dev-buddy.json`
+- **Stages** — 6 fixed types, each with an array of executor refs. Executors can run in parallel or sequential
+- **Pipelines** — User-configurable ordered lists of stages
 
-1. **Load config** - Read `~/.vcp/dev-buddy.json`, resolve `feature_pipeline` stages
-2. **Requirements** - requirements-gatherer agent (team-based exploration)
-3. **Planning** - planner agent
-4. **Plan reviews** - Sequential, one per `plan-review` stage in config
-5. **Implementation** - implementer agent
-6. **Code reviews** - Sequential, one per `code-review` stage in config
-7. **Completion** - Report results
+### Stage Skills
 
-### Bug Fix
+| Skill | Command | Purpose |
+|-------|---------|---------|
+| Plan | `/dev-buddy-plan` | Create implementation plan with test cases and step-to-AC mapping |
+| Review | `/dev-buddy-review` | Review plan (`--plan`) or code (`--code`). Multi-executor, evidence-bound findings |
+| Implement | `/dev-buddy-implement` | Implement with TDD loop — tests after each step, escalate on failure |
+| Requirements | `/dev-buddy-requirements` | Gather requirements with provenance tracking. Minimal 4-file output |
+| RCA | `/dev-buddy-rca` | Root cause analysis. Outputs diagnosis only |
 
-1. **Load config** - Read `~/.vcp/dev-buddy.json`, resolve `bugfix_pipeline` stages
-2. **RCA stages** - Sequential root-cause-analyst agents (one per `rca` stage)
-3. **Inline consolidation** - Orchestrator consolidates RCA findings, writes `user-story/` + `plan/` multi-file directories
-4. **Plan validation** - Optional `plan-review` stages (e.g., Codex RCA+plan gate)
-5. **Implementation** - implementer agent
-6. **Code reviews** - Sequential, one per `code-review` stage
-7. **Completion** - Report results
+### Typical Workflows
+
+**Feature development:**
+```
+/dev-buddy-requirements  →  /dev-buddy-plan  →  /dev-buddy-review --plan  →  /dev-buddy-implement  →  /dev-buddy-review --code
+```
+
+**Bug fix:**
+```
+/dev-buddy-rca  →  /dev-buddy-requirements  →  /dev-buddy-plan  →  /dev-buddy-implement  →  /dev-buddy-review --code
+```
+
+Each stage reads input artifacts from `.vcp/task/` and writes output artifacts. No team mode, no persistent state between stages.
+
+### Anti-Drift Mechanisms
+
+1. **Original request injection** — every executor prompt gets the verbatim original request
+2. **TDD loop** — implementation runs tests after each step, loops on failure (max 5 retries)
+3. **Step-to-AC mapping** — every plan step must reference acceptance criteria
+4. **Evidence-bound reviews** — blocking findings require `contract_reference` + `evidence`
+5. **Requirements provenance** — ACs track their source (original_request, user_answer, specialist_suggestion)
+
+### Config Format (v3)
+
+File: `~/.vcp/dev-buddy.json` with `"version": "3.0"`
+
+```json
+{
+  "version": "3.0",
+  "executors": { "name": { "system_prompt": "...", "preset": "...", "model": "..." } },
+  "stages": { "planning": { "executors": [{ "name": "...", "parallel": false }] } },
+  "feature_pipeline": ["requirements", "planning", "plan-review", "implementation", "code-review"],
+  "bugfix_pipeline": ["rca", "requirements", "planning", "plan-review", "implementation", "code-review"],
+  "max_iterations": 10,
+  "max_tdd_iterations": 5
+}
+```
+
+### Output Files
+
+| File Pattern | Stage Type |
+|------|-------------|
+| `.vcp/task/user-story/manifest.json` | requirements |
+| `.vcp/task/plan/manifest.json` | planning |
+| `.vcp/task/plan/test-plan.json` | planning (TDD test cases) |
+| `.vcp/task/{stage}-{executor}-{provider}-{model}-{index}-v{version}.json` | plan-review, code-review, rca |
+| `.vcp/task/impl-result.json` | implementation |
+| `.vcp/task/rca-diagnosis.json` | rca (consolidated) |
+
+### Provider Dispatch
+
+All stage skills resolve the executor's system prompt, embed it in the task prompt, and dispatch via `general-purpose` subagent:
+- **subscription** → `Task(subagent_type: "general-purpose", model, prompt: "<system_prompt>\n---\n<task>")`
+- **api** → `Bash(run_in_background: true)` → `api-task-runner.ts` → `TaskOutput`
+- **cli** → `Task(subagent_type: "general-purpose", prompt: "Run: bun cli-executor.ts ...")`
 
 ---
 
-## Detailed Pipeline Procedures
+## System Prompts (built-in)
 
-Execution procedures are documented in `docs/pipeline/`:
+| Prompt | Purpose |
+|--------|---------|
+| `requirements-gatherer` | Business Analyst + PM hybrid |
+| `planner` | Architect + Fullstack planning |
+| `plan-reviewer` | Architecture + Security + QA validation |
+| `implementer` | Fullstack + TDD implementation |
+| `code-reviewer` | Security + Performance + QA review |
+| `root-cause-analyst` | Autonomous bug diagnosis |
+| `cli-executor` | CLI tool wrapper |
 
-| File | Content |
-|------|---------|
-| [core-init-resume.md](pipeline/core-init-resume.md) | Resume detection, safety checks, config drift, team recreation, task chain rebuild |
-| [core-task-chain.md](pipeline/core-task-chain.md) | Fresh init (reset, validate, load config, create team), task chain creation algorithm |
-| [core-main-loop.md](pipeline/core-main-loop.md) | Main while loop, parallel execution, progressive enrichment, result handling |
-| [core-phased-implementation.md](pipeline/core-phased-implementation.md) | Full P0-P2f phased implementation loop, aggregation, resume extension |
-| [core-provider-dispatch.md](pipeline/core-provider-dispatch.md) | Provider routing (subscription/api/cli), timeout derivation, background polling |
-| [core-same-stage-rereview.md](pipeline/core-same-stage-rereview.md) | Dynamic fix tasks, two-phase update, group-aware successor rewiring |
-| [feature-requirements-team.md](pipeline/feature-requirements-team.md) | Feature-only: specialist catalog, VCP detection, spawn, interactive loop, synthesis |
-| [bugfix-rca-consolidation.md](pipeline/bugfix-rca-consolidation.md) | Bug-fix-only: RCA consolidation trigger, inline orchestrator consolidation |
-
-Each SKILL.md (feature-implement, bug-fix) references these shared files and contains pipeline-specific logic inline (task description rules, variant sections, pipeline variables).
-
----
-
-## State Flow (Dynamic Phases)
-
-**Feature pipeline:**
-```
-idle
--> requirements_gathering (or requirements_team_pending / requirements_team_exploring)
--> plan_drafting
--> plan_review_1 <-> fix_plan_review_1
--> plan_review_2 <-> fix_plan_review_2
--> plan_review_N <-> fix_plan_review_N   (N = count of plan-review stages in config)
--> implementation
--> code_review_1 <-> fix_code_review_1
--> code_review_2 <-> fix_code_review_2
--> code_review_M <-> fix_code_review_M   (M = count of code-review stages in config)
--> complete
-```
-
-**Bug-fix pipeline:**
-```
-idle
--> root_cause_analysis (pending / in progress / consolidation)
--> plan_review_1  (Codex RCA+plan validation gate)
--> implementation
--> code_review_1 <-> fix_code_review_1
--> code_review_M <-> fix_code_review_M
--> complete
-```
-
-Phase tokens are **dynamic** — the index suffix matches the stage position in the pipeline config array (1-based, counting within the stage type). Max `max_iterations` re-reviews per reviewer before escalating to user.
-
----
-
-## Output Files (Versioned Naming)
-
-| File Pattern | Stage Type | Description |
-|------|-------------|-------------|
-| `.vcp/task/user-story/manifest.json` | requirements | Approved requirements (multi-file directory) |
-| `.vcp/task/plan/manifest.json` | planning | Implementation plan (multi-file directory) |
-| `.vcp/task/plan-review-{provider}-{model}-{N}-v{V}.json` | plan-review | Plan review (e.g., `plan-review-anthropic-subscription-sonnet-1-v1.json`) |
-| `.vcp/task/impl-result.json` | implementation | Implementation result (singleton) |
-| `.vcp/task/code-review-{provider}-{model}-{N}-v{V}.json` | code-review | Code review (e.g., `code-review-anthropic-subscription-opus-2-v1.json`) |
-| `.vcp/task/rca-{provider}-{model}-{N}-v{V}.json` | rca | Root cause analysis (e.g., `rca-anthropic-subscription-sonnet-1-v1.json`) |
-| `.vcp/task/pipeline-tasks.json` | (meta) | Team name + Task IDs + `resolved_config` + `stages[]` with `current_version` |
-
----
-
-## Review Statuses
-
-**All review types:**
-- `approved` - Proceed to next stage
-- `needs_changes` - Fix and re-review (same stage index)
-- `needs_clarification` - Ask user, then re-run same reviewer
-- `rejected` - Major issue (terminal for some stages — escalate to user)
+Located in `system-prompts/built-in/`. Users create custom prompts in `~/.vcp/system-prompts/`.
 
 ---
 
@@ -133,34 +107,16 @@ Phase tokens are **dynamic** — the index suffix matches the stage position in 
 
 | Command | Purpose |
 |---------|---------|
-| `bun orchestrator.ts` | Show current state and next action |
-| `bun orchestrator.ts status` | Show current state details |
-| `bun orchestrator.ts reset --cwd <dir>` | Reset pipeline to idle |
-| `bun orchestrator.ts dry-run` | Validate setup |
-| `bun orchestrator.ts phase` | Output current phase token |
+| `bun pipeline-config.ts validate-v3` | Validate v3 config |
+| `bun pipeline-config.ts migrate` | Migrate v2 → v3 config (auto on first load) |
+| `bun system-prompts.ts list` | List all system prompts (built-in + custom) |
+| `bun system-prompts.ts discover` | Show full discovery details |
 
 ---
 
-## Emergency Controls
+## Review Statuses
 
-If stuck:
-
-1. **Check task state:** `TaskList()` to see blocked tasks (requires pipeline team to be active)
-2. **Check artifacts:** Read `.vcp/task/*.json` files to understand progress
-3. **Reset pipeline:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" reset --cwd "${CLAUDE_PROJECT_DIR}"`
-4. **Check phase:** `bun "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrator.ts" phase`
-
----
-
-## Default Settings
-
-| Setting | Default Value |
-|---------|-------|
-| Feature pipeline stages | 9 (requirements, planning, 3x plan-review, implementation, 3x code-review) |
-| Bug-fix pipeline stages | 7 (2x rca, 1x plan-review, implementation, 3x code-review) |
-| Default provider | anthropic-subscription |
-| max_iterations | 10 |
-| team_name_pattern | pipeline-{BASENAME}-{HASH} |
-
-Configure via web portal (`/dev-buddy-config`) or edit `~/.vcp/dev-buddy.json` directly.
-Model is required on every stage entry.
+- `approved` — Proceed to next stage
+- `needs_changes` — Fix and re-review (requires `must_fix` finding with evidence)
+- `needs_clarification` — Ask user, then re-run
+- `rejected` — Major issue, escalate to user

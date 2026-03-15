@@ -1,0 +1,21 @@
+{
+  "name": "mcp-doc",
+  "version": "0.3.1",
+  "description": "Documentation manifest generator for git-doc-mcp — indexes project docs as MCP resources with search, path-lookup, and tree-view tools for AI assistants",
+  "author": {
+    "name": "Z-M-Huang"
+  },
+  "repository": "https://github.com/Z-M-Huang/vcp",
+  "license": "MIT",
+  "keywords": [
+    "documentation",
+    "mcp",
+    "git-doc-mcp",
+    "resources",
+    "readme",
+    "manifest",
+    "search",
+    "index"
+  ],
+  "skills": "./skills/"
+}

@@ -69,14 +69,14 @@
       "type": "string",
       "description": "Brief overall assessment"
     },
-    "issues": {
+    "findings": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
-            "description": "Unique issue ID for references (e.g., issue-1)"
+            "description": "Unique finding ID for references (e.g., finding-1)"
           },
           "severity": {
             "type": "string",
@@ -85,7 +85,7 @@
           "category": {
             "type": "string",
             "enum": ["security", "error_handling", "resource", "config", "quality", "concurrency", "logging", "deps", "api", "compat", "test", "over_engineering"],
-            "description": "Review category this issue belongs to"
+            "description": "Review category this finding belongs to"
           },
           "file": {
             "type": "string"
@@ -98,9 +98,22 @@
           },
           "suggestion": {
             "type": "string"
+          },
+          "contract_reference": {
+            "type": "string",
+            "description": "Reference to the contract item (e.g., 'AC3', 'plan-step-2', 'security-rule')"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Specific code reference proving the finding"
+          },
+          "fix_type": {
+            "type": "string",
+            "enum": ["must_fix", "advisory"],
+            "description": "Whether this finding blocks approval (must_fix) or is informational (advisory)"
           }
         },
-        "required": ["id", "severity", "category", "file", "line", "message", "suggestion"],
+        "required": ["id", "severity", "category", "file", "line", "message", "suggestion", "fix_type"],
         "additionalProperties": false
       }
     },
@@ -185,6 +198,6 @@
       "additionalProperties": false
     }
   },
-  "required": ["status", "needs_clarification", "clarification_questions", "summary", "issues", "checklist", "acceptance_criteria_verification"],
+  "required": ["status", "needs_clarification", "clarification_questions", "summary", "findings", "checklist", "acceptance_criteria_verification"],
   "additionalProperties": false
 }

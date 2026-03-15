@@ -15,14 +15,20 @@
     integrity="sha384-9Ax3MmS9AClxJyd5/zafcXXjxmwFhZCdsT6HJoJjarvCaAkJlk5QDzjLJm+Wdx5F"
     crossorigin="anonymous"
   ></script>
+  <script src="app-presets.js"></script>
+  <script src="app-chatroom.js"></script>
+  <script src="app-v3.js"></script>
   <script src="app.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body x-data="devBuddyApp()" x-init="init()">
 
-  <header>
-    <h1>Dev Buddy</h1>
-    <p class="subtitle">AI Pipeline Configuration</p>
+  <header style="display: flex; align-items: center; justify-content: space-between;">
+    <div>
+      <h1>Dev Buddy</h1>
+      <p class="subtitle">AI Pipeline Configuration</p>
+    </div>
+    <button class="theme-toggle" x-on:click="toggleTheme()" x-text="darkMode ? 'Light Mode' : 'Dark Mode'"></button>
   </header>
 
   <nav>
@@ -31,13 +37,26 @@
       x-on:click="tab = 'presets'; loadPresets()"
     >AI Presets</button>
     <button
-      x-bind:class="{ active: tab === 'pipeline' }"
-      x-on:click="tab = 'pipeline'; loadPipelineConfig()"
-    >Pipeline Config</button>
-    <button
       x-bind:class="{ active: tab === 'chatroom' }"
       x-on:click="tab = 'chatroom'; loadChatroomConfig()"
     >Chatroom</button>
+    <span class="nav-separator">|</span>
+    <button
+      x-bind:class="{ active: tab === 'system-prompts' }"
+      x-on:click="tab = 'system-prompts'; loadSystemPrompts()"
+    >System Prompts</button>
+    <button
+      x-bind:class="{ active: tab === 'stages' }"
+      x-on:click="tab = 'stages'; loadStages()"
+    >Stages</button>
+    <button
+      x-bind:class="{ active: tab === 'v3pipelines' }"
+      x-on:click="tab = 'v3pipelines'; loadPipelines()"
+    >Pipelines</button>
+    <button
+      x-bind:class="{ active: tab === 'settings' }"
+      x-on:click="tab = 'settings'; loadSettings()"
+    >Settings</button>
   </nav>
 
   <!-- Error banner -->
@@ -428,349 +447,6 @@
     </template>
   </section>
 
-  <!-- ============ Pipeline Config Tab ============ -->
-  <section x-show="tab === 'pipeline'" class="tab-content">
-    <div class="section-header">
-      <h2>Pipeline Configuration</h2>
-      <button class="btn-primary" x-on:click="savePipelineConfig()" x-bind:disabled="saving.pipeline">
-        <span x-text="saving.pipeline ? 'Saving...' : 'Save Config'"></span>
-      </button>
-    </div>
-
-    <div x-show="loading.pipeline" class="loading">Loading pipeline config...</div>
-
-    <template x-if="!loading.pipeline && pipelineConfig">
-      <div>
-        <!-- Pipeline sub-tabs -->
-        <div class="pipeline-sub-tabs">
-          <button
-            x-bind:class="{ active: pipelineSubTab === 'feature' }"
-            x-on:click="pipelineSubTab = 'feature'; $nextTick(() => { initSortable('feature-pipeline-list'); pipelineConfig.feature_pipeline.forEach((s, i) => { if (s.type === 'implementation' && Array.isArray(s.phased_reviews) && s.phased_reviews.length > 0) initPhasedReviewSortable('feature-phased-' + i, 'feature', i); }); })"
-          >Feature Pipeline</button>
-          <button
-            x-bind:class="{ active: pipelineSubTab === 'bugfix' }"
-            x-on:click="pipelineSubTab = 'bugfix'; $nextTick(() => { initSortable('bugfix-pipeline-list'); pipelineConfig.bugfix_pipeline.forEach((s, i) => { if (s.type === 'implementation' && Array.isArray(s.phased_reviews) && s.phased_reviews.length > 0) initPhasedReviewSortable('bugfix-phased-' + i, 'bugfix', i); }); })"
-          >Bug-Fix Pipeline</button>
-        </div>
-
-        <!-- Feature Pipeline -->
-        <div x-show="pipelineSubTab === 'feature'" class="card">
-          <div class="pipeline-builder-header">
-            <h3>Feature Pipeline</h3>
-            <div class="pipeline-builder-actions">
-              <button class="btn-secondary btn-sm" x-on:click="resetToDefault('feature')">Reset to Default</button>
-            </div>
-          </div>
-          <p class="hint">Drag to reorder stages. Each stage uses a provider preset and optional model override.</p>
-
-          <div id="feature-pipeline-list" class="pipeline-list">
-            <template x-for="(stage, idx) in pipelineConfig.feature_pipeline" x-bind:key="stage._id">
-              <div class="stage-card" x-bind:data-index="idx">
-                <div class="drag-handle" title="Drag to reorder">
-                  <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor">
-                    <circle cx="4" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/>
-                    <circle cx="4" cy="9" r="1.5"/><circle cx="8" cy="9" r="1.5"/>
-                    <circle cx="4" cy="15" r="1.5"/><circle cx="8" cy="15" r="1.5"/>
-                  </svg>
-                </div>
-                <div class="stage-info">
-                  <span class="stage-type-badge" x-bind:class="'stage-type-' + stage.type.replace('-', '_')" x-text="stage.type"></span>
-                </div>
-                <div class="stage-controls">
-                  <select
-                    x-model="stage.provider"
-                    x-init="$nextTick(() => $el.value = stage.provider || '')"
-                    class="stage-select"
-                    x-on:change="onProviderChange(stage)"
-                  >
-                    <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
-                      <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
-                    </template>
-                  </select>
-                  <label
-                    class="parallel-checkbox"
-                    x-show="stage.type === 'plan-review' || stage.type === 'code-review'"
-                    title="Run in parallel with adjacent same-type stages"
-                  >
-                    <input type="checkbox" x-model="stage.parallel">
-                    <span class="parallel-label">Parallel</span>
-                  </label>
-                  <label
-                    class="parallel-checkbox review-gate-checkbox"
-                    x-show="stage.type === 'requirements' || stage.type === 'planning'"
-                    title="Pause pipeline after this stage for user approval"
-                  >
-                    <input type="checkbox" x-model="stage.review_gate">
-                    <span class="parallel-label review-gate-label">Review Gate</span>
-                  </label>
-                  <select x-model="stage.model" x-init="$nextTick(() => $el.value = stage.model || '')" class="stage-select model-select" required>
-                    <option value="" disabled>Select model</option>
-                    <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
-                      <option x-bind:value="m" x-text="m"></option>
-                    </template>
-                  </select>
-                </div>
-                <!-- Phased Reviews section (implementation stages only) -->
-                <div class="phased-reviews-section" x-show="stage.type === 'implementation'">
-                  <div class="phased-reviews-toggle" x-on:click="stage._phasedExpanded = !stage._phasedExpanded">
-                    <span>Phased Reviews</span>
-                    <span class="phased-reviews-badge"
-                      x-bind:class="{'phased-reviews-badge-muted': !(stage.phased_reviews && stage.phased_reviews.length)}"
-                      x-text="'(' + (stage.phased_reviews ? stage.phased_reviews.length : 0) + ')'"></span>
-                    <span style="margin-left: auto; font-style: italic; opacity: 0.55; font-size: 0.72rem;">adjust frequency in Pipeline Settings ↓</span>
-                  </div>
-                  <div x-show="stage._phasedExpanded" x-transition>
-                    <div x-bind:id="'feature-phased-' + idx" class="phased-reviews-list">
-                      <template x-for="(pr, prIdx) in (stage.phased_reviews || [])" x-bind:key="pr._id">
-                        <div class="phased-review-entry">
-                          <div class="phased-drag-handle" title="Drag to reorder">
-                            <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor">
-                              <circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/>
-                              <circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/>
-                              <circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/>
-                            </svg>
-                          </div>
-                          <select x-model="pr.provider" class="stage-select"
-                            x-init="$nextTick(() => $el.value = pr.provider || '')"
-                            x-on:change="onPhasedProviderChange('feature', idx, prIdx)">
-                            <template x-for="[pName, pPreset] in Object.entries(presets)" x-bind:key="pName">
-                              <option x-bind:value="pName" x-text="pName + ' (' + pPreset.type + ')'"></option>
-                            </template>
-                          </select>
-                          <label class="parallel-checkbox" title="Run in parallel with adjacent phased reviewers">
-                            <input type="checkbox" x-model="pr.parallel">
-                            <span class="parallel-label">Parallel</span>
-                          </label>
-                          <select x-model="pr.model" x-init="$nextTick(() => $el.value = pr.model || '')" class="stage-select model-select" required>
-                            <option value="" disabled>Select model</option>
-                            <template x-for="m in (stageModelOptions[pr.provider] || [])" x-bind:key="m">
-                              <option x-bind:value="m" x-text="m"></option>
-                            </template>
-                          </select>
-                          <button class="stage-delete btn-danger btn-sm"
-                            x-on:click="removePhasedReview('feature', idx, prIdx)">x</button>
-                        </div>
-                      </template>
-                    </div>
-                    <button class="btn-secondary btn-sm phased-reviews-add"
-                      x-on:click="addPhasedReview('feature', idx)">+ Add Reviewer</button>
-                  </div>
-                </div>
-                <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('feature', idx)" x-show="stage.type !== 'implementation'">x</button>
-              </div>
-            </template>
-          </div>
-
-          <!-- Add Stage -->
-          <div class="add-stage-row">
-            <select x-model="newStageType.feature" class="stage-select">
-              <option value="">Select stage type to add...</option>
-              <template x-for="st in getAvailableStageTypes('feature')" x-bind:key="st">
-                <option x-bind:value="st" x-text="st"></option>
-              </template>
-            </select>
-            <button
-              class="btn-secondary btn-sm"
-              x-on:click="addStage('feature', newStageType.feature)"
-              x-bind:disabled="!newStageType.feature"
-            >+ Add Stage</button>
-          </div>
-        </div>
-
-        <!-- Bug-Fix Pipeline -->
-        <div x-show="pipelineSubTab === 'bugfix'" class="card">
-          <div class="pipeline-builder-header">
-            <h3>Bug-Fix Pipeline</h3>
-            <div class="pipeline-builder-actions">
-              <button class="btn-secondary btn-sm" x-on:click="resetToDefault('bugfix')">Reset to Default</button>
-            </div>
-          </div>
-          <p class="hint">Drag to reorder non-RCA stages. RCA stages are grouped; orchestrator consolidates after all RCA stages complete.</p>
-
-          <!-- RCA Group Wrapper -->
-          <div class="rca-group" x-show="pipelineConfig.bugfix_pipeline.some(s => s.type === 'rca')">
-            <div class="rca-group-header">
-              <span class="rca-group-title">RCA Stages</span>
-              <label
-                class="parallel-checkbox review-gate-checkbox"
-                title="Pause pipeline after all RCA stages complete and consolidation runs, for user approval"
-              >
-                <input type="checkbox" x-model="pipelineConfig.rca_review_gate">
-                <span class="parallel-label review-gate-label">Review Gate</span>
-              </label>
-            </div>
-            <div class="rca-group-body">
-              <template x-for="(stage, idx) in pipelineConfig.bugfix_pipeline" x-bind:key="'rca-' + stage._id">
-                <div class="stage-card" x-show="stage.type === 'rca'">
-                  <div class="stage-info">
-                    <span class="stage-type-badge stage-type-rca">rca</span>
-                  </div>
-                  <div class="stage-controls">
-                    <select
-                      x-model="stage.provider"
-                      x-init="$nextTick(() => $el.value = stage.provider || '')"
-                      class="stage-select"
-                      x-on:change="onProviderChange(stage)"
-                    >
-                      <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
-                        <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
-                      </template>
-                    </select>
-                    <label
-                      class="parallel-checkbox"
-                      title="Run in parallel with adjacent RCA stages"
-                    >
-                      <input type="checkbox" x-model="stage.parallel">
-                      <span class="parallel-label">Parallel</span>
-                    </label>
-                    <select x-model="stage.model" x-init="$nextTick(() => $el.value = stage.model || '')" class="stage-select model-select" required>
-                      <option value="" disabled>Select model</option>
-                      <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
-                        <option x-bind:value="m" x-text="m"></option>
-                      </template>
-                    </select>
-                  </div>
-                  <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('bugfix', idx)">x</button>
-                </div>
-              </template>
-            </div>
-            <div class="rca-group-add">
-              <button class="btn-secondary btn-sm" x-on:click="addStage('bugfix', 'rca')">+ Add RCA</button>
-            </div>
-          </div>
-
-          <!-- Non-RCA Pipeline Stages -->
-          <div id="bugfix-pipeline-list" class="pipeline-list">
-            <template x-for="(stage, idx) in pipelineConfig.bugfix_pipeline" x-bind:key="stage._id">
-              <div class="stage-card" x-show="stage.type !== 'rca'" x-bind:data-index="idx">
-                <div class="drag-handle" title="Drag to reorder">
-                  <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor">
-                    <circle cx="4" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/>
-                    <circle cx="4" cy="9" r="1.5"/><circle cx="8" cy="9" r="1.5"/>
-                    <circle cx="4" cy="15" r="1.5"/><circle cx="8" cy="15" r="1.5"/>
-                  </svg>
-                </div>
-                <div class="stage-info">
-                  <span class="stage-type-badge" x-bind:class="'stage-type-' + stage.type.replace('-', '_')" x-text="stage.type"></span>
-                </div>
-                <div class="stage-controls">
-                  <select
-                    x-model="stage.provider"
-                    x-init="$nextTick(() => $el.value = stage.provider || '')"
-                    class="stage-select"
-                    x-on:change="onProviderChange(stage)"
-                  >
-                    <template x-for="[presetName, preset] in Object.entries(presets)" x-bind:key="presetName">
-                      <option x-bind:value="presetName" x-text="presetName + ' (' + preset.type + ')'"></option>
-                    </template>
-                  </select>
-                  <label
-                    class="parallel-checkbox"
-                    x-show="stage.type === 'plan-review' || stage.type === 'code-review'"
-                    title="Run in parallel with adjacent same-type stages"
-                  >
-                    <input type="checkbox" x-model="stage.parallel">
-                    <span class="parallel-label">Parallel</span>
-                  </label>
-                  <select x-model="stage.model" x-init="$nextTick(() => $el.value = stage.model || '')" class="stage-select model-select" required>
-                    <option value="" disabled>Select model</option>
-                    <template x-for="m in (stageModelOptions[stage.provider] || [])" x-bind:key="m">
-                      <option x-bind:value="m" x-text="m"></option>
-                    </template>
-                  </select>
-                </div>
-                <!-- Phased Reviews section (implementation stages only) -->
-                <div class="phased-reviews-section" x-show="stage.type === 'implementation'">
-                  <div class="phased-reviews-toggle" x-on:click="stage._phasedExpanded = !stage._phasedExpanded">
-                    <span>Phased Reviews</span>
-                    <span class="phased-reviews-badge"
-                      x-bind:class="{'phased-reviews-badge-muted': !(stage.phased_reviews && stage.phased_reviews.length)}"
-                      x-text="'(' + (stage.phased_reviews ? stage.phased_reviews.length : 0) + ')'"></span>
-                    <span style="margin-left: auto; font-style: italic; opacity: 0.55; font-size: 0.72rem;">adjust frequency in Pipeline Settings ↓</span>
-                  </div>
-                  <div x-show="stage._phasedExpanded" x-transition>
-                    <div x-bind:id="'bugfix-phased-' + idx" class="phased-reviews-list">
-                      <template x-for="(pr, prIdx) in (stage.phased_reviews || [])" x-bind:key="pr._id">
-                        <div class="phased-review-entry">
-                          <div class="phased-drag-handle" title="Drag to reorder">
-                            <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor">
-                              <circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/>
-                              <circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/>
-                              <circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/>
-                            </svg>
-                          </div>
-                          <select x-model="pr.provider" class="stage-select"
-                            x-init="$nextTick(() => $el.value = pr.provider || '')"
-                            x-on:change="onPhasedProviderChange('bugfix', idx, prIdx)">
-                            <template x-for="[pName, pPreset] in Object.entries(presets)" x-bind:key="pName">
-                              <option x-bind:value="pName" x-text="pName + ' (' + pPreset.type + ')'"></option>
-                            </template>
-                          </select>
-                          <label class="parallel-checkbox" title="Run in parallel with adjacent phased reviewers">
-                            <input type="checkbox" x-model="pr.parallel">
-                            <span class="parallel-label">Parallel</span>
-                          </label>
-                          <select x-model="pr.model" x-init="$nextTick(() => $el.value = pr.model || '')" class="stage-select model-select" required>
-                            <option value="" disabled>Select model</option>
-                            <template x-for="m in (stageModelOptions[pr.provider] || [])" x-bind:key="m">
-                              <option x-bind:value="m" x-text="m"></option>
-                            </template>
-                          </select>
-                          <button class="stage-delete btn-danger btn-sm"
-                            x-on:click="removePhasedReview('bugfix', idx, prIdx)">x</button>
-                        </div>
-                      </template>
-                    </div>
-                    <button class="btn-secondary btn-sm phased-reviews-add"
-                      x-on:click="addPhasedReview('bugfix', idx)">+ Add Reviewer</button>
-                  </div>
-                </div>
-                <button class="stage-delete btn-danger btn-sm" x-on:click="removeStage('bugfix', idx)" x-show="stage.type !== 'implementation'">x</button>
-              </div>
-            </template>
-          </div>
-
-          <!-- Add Stage (non-RCA) -->
-          <div class="add-stage-row">
-            <select x-model="newStageType.bugfix" class="stage-select">
-              <option value="">Select stage type to add...</option>
-              <template x-for="st in getAvailableStageTypes('bugfix').filter(t => t !== 'rca')" x-bind:key="st">
-                <option x-bind:value="st" x-text="st"></option>
-              </template>
-            </select>
-            <button
-              class="btn-secondary btn-sm"
-              x-on:click="addStage('bugfix', newStageType.bugfix)"
-              x-bind:disabled="!newStageType.bugfix"
-            >+ Add Stage</button>
-          </div>
-        </div>
-
-        <!-- Pipeline Settings -->
-        <div class="card">
-          <h3>Pipeline Settings</h3>
-          <form x-on:submit.prevent>
-            <label>
-              Max Iterations per Reviewer
-              <input type="number" min="1" max="50" x-model.number="pipelineConfig.max_iterations">
-            </label>
-            <label>
-              Max Phased Review Iterations per Step
-              <input type="number" min="1" max="20" x-model.number="pipelineConfig.max_phased_iterations" placeholder="3">
-            </label>
-            <label>
-              Review Interval (steps per batch)
-              <input type="number" min="1" max="50" x-model.number="pipelineConfig.review_interval" placeholder="1">
-            </label>
-            <label>
-              Team Name Pattern
-              <input type="text" x-model="pipelineConfig.team_name_pattern">
-            </label>
-          </form>
-        </div>
-      </div>
-    </template>
-  </section>
 
   <!-- ============ Chatroom Tab ============ -->
   <section x-show="tab === 'chatroom'" class="tab-content">
@@ -803,9 +479,19 @@
           <template x-for="(participant, index) in chatroomConfig.participants" x-bind:key="index">
             <div class="stage-card">
               <div class="stage-info">
-                <span class="stage-type-badge" x-text="'P' + index" style="background: #e8f5e9; color: #2e7d32;"></span>
+                <span class="stage-type-badge" x-text="'P' + index" class="stage-type-badge stage-type-implementation"></span>
               </div>
               <div class="stage-controls">
+                <select
+                  class="stage-select"
+                  x-model="participant.system_prompt"
+                  x-init="$nextTick(() => $el.value = participant.system_prompt || '')"
+                >
+                  <option value="">-- No Persona --</option>
+                  <template x-for="p in systemPrompts" x-bind:key="p.name">
+                    <option x-bind:value="p.name" x-text="p.name"></option>
+                  </template>
+                </select>
                 <select
                   class="stage-select"
                   x-model="participant.preset"
@@ -839,7 +525,7 @@
               x-on:click="addParticipant()"
               x-bind:disabled="chatroomConfig.participants.length >= 10"
             >+ Add Participant</button>
-            <span x-show="chatroomConfig.participants.length >= 10" style="color: #6e6e73; font-size: 0.8rem; margin-left: 8px;">
+            <span x-show="chatroomConfig.participants.length >= 10" class="text-muted" style="font-size: 0.8rem; margin-left: 8px;">
               Maximum 10 participants
             </span>
           </div>
@@ -878,6 +564,235 @@
     </template>
   </section>
 
+  <!-- ============ System Prompts Tab (v3) ============ -->
+  <section x-show="tab === 'system-prompts'" class="tab-content">
+    <div class="section-header">
+      <div>
+        <h2>System Prompts</h2>
+        <p class="section-description">Built-in prompts are read-only. Create custom prompts via <code>/dev-buddy-create-prompt</code> or import from gallery.</p>
+      </div>
+      <button class="btn-secondary" x-on:click="openImportDialog()">Import from Gallery</button>
+    </div>
+
+    <template x-if="loadingSystemPrompts">
+      <p>Loading system prompts...</p>
+    </template>
+
+    <template x-if="!loadingSystemPrompts">
+      <div>
+        <template x-for="prompt in systemPrompts" x-bind:key="prompt.name">
+          <div class="card" style="margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <strong x-text="prompt.name"></strong>
+                <span class="badge" x-text="prompt.source" x-bind:class="prompt.source === 'built-in' ? 'badge badge-built-in' : 'badge badge-custom'"></span>
+              </div>
+              <button x-show="prompt.source === 'custom'" x-on:click="deleteSystemPrompt(prompt.name)" class="btn-danger" style="font-size: 0.8rem;">Delete</button>
+            </div>
+            <p class="text-muted" style="font-size: 0.85rem; margin: 4px 0;" x-text="prompt.description"></p>
+            <p class="text-muted" style="font-size: 0.8rem;" x-text="'Tools: ' + prompt.tools.join(', ')"></p>
+          </div>
+        </template>
+      </div>
+    </template>
+  </section>
+
+  
+  <!-- ============ Stages Tab (v3 inline executors) ============ -->
+  <section x-show="tab === 'stages'" class="tab-content">
+    <h2>Stages</h2>
+    <p class="section-description">Each stage has inline executors. Configure system prompt, provider, model, and parallel mode per row.</p>
+
+    <template x-if="loadingStages">
+      <p>Loading stages...</p>
+    </template>
+
+    <template x-if="!loadingStages">
+      <div>
+        <template x-for="[stageType, stageConfig] in Object.entries(v3Stages)" x-bind:key="stageType">
+          <div class="card" style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <h3 style="margin: 0;" x-text="stageType"></h3>
+              <button x-on:click="saveStage(stageType)" class="btn-primary" style="font-size: 0.8rem;">Save</button>
+            </div>
+
+            <!-- Inline executor list (SortableJS enabled) -->
+            <div style="margin-top: 8px;" x-init="$nextTick(() => initSortableExecutors($el, stageType))">
+              <template x-for="(exec, idx) in stageConfig.executors" x-bind:key="exec._id">
+                <div class="executor-row">
+                  <span class="drag-handle" x-bind:class="{ 'is-synthesizer': stageConfig.executors.length > 1 && idx === stageConfig.executors.length - 1 }">&#9776;</span>
+                  <select x-model="exec.system_prompt" x-init="$nextTick(() => $el.value = exec.system_prompt || '')" style="flex: 1; min-width: 120px;">
+                    <option value="">-- System Prompt --</option>
+                    <template x-for="p in systemPrompts" x-bind:key="p.name">
+                      <option x-bind:value="p.name" x-text="p.name"></option>
+                    </template>
+                  </select>
+                  <select x-model="exec.preset" x-on:change="onStagePresetChange(exec)" x-init="$nextTick(() => $el.value = exec.preset || '')" style="flex: 1; min-width: 120px;">
+                    <option value="">-- Preset --</option>
+                    <template x-for="[pName] in Object.entries(presets)" x-bind:key="pName">
+                      <option x-bind:value="pName" x-text="pName"></option>
+                    </template>
+                  </select>
+                  <select x-model="exec.model" x-init="$nextTick(() => $el.value = exec.model || '')" style="flex: 0 1 130px;">
+                    <option value="">-- Model --</option>
+                    <template x-for="m in (stageModelOptions[exec.preset] || [])" x-bind:key="m">
+                      <option x-bind:value="m" x-text="m"></option>
+                    </template>
+                  </select>
+                  <label style="display: flex; align-items: center; gap: 4px; font-size: 0.82rem; color: var(--text-secondary); margin: 0; white-space: nowrap;">
+                    <input type="checkbox" x-model="exec.parallel"
+                      x-bind:disabled="stageConfig.executors.length > 1 && idx === stageConfig.executors.length - 1">
+                    Parallel
+                  </label>
+                  <span x-show="stageConfig.executors.length > 1 && idx === stageConfig.executors.length - 1"
+                    class="badge badge-synthesizer" style="font-size: 0.75rem;">Synthesizer</span>
+                  <button x-on:click="removeExecutorFromStage(stageType, idx)" class="btn-danger" style="font-size: 0.75rem;">Remove</button>
+                </div>
+              </template>
+            </div>
+
+            <button x-on:click="addExecutorToStage(stageType)" style="margin-top: 8px; font-size: 0.85rem;" class="btn-secondary"
+              x-bind:disabled="stageDefinitions[stageType]?.max_executors !== undefined && stageConfig.executors.length >= stageDefinitions[stageType].max_executors">+ Add Executor</button>
+          </div>
+        </template>
+      </div>
+    </template>
+  </section>
+
+  <!-- ============ Pipelines Tab (v3) ============ -->
+  <section x-show="tab === 'v3pipelines'" class="tab-content">
+    <h2>Pipelines</h2>
+    <p class="section-description">Configure the stage order for feature and bug-fix pipelines. Users can add, remove, and reorder stages.</p>
+
+    <template x-if="loadingPipelines">
+      <p>Loading pipelines...</p>
+    </template>
+
+    <template x-if="!loadingPipelines">
+      <div>
+        <template x-for="pKey in ['feature_pipeline', 'bugfix_pipeline']" x-bind:key="pKey">
+          <div class="card" style="margin-bottom: 16px;">
+            <h3 x-text="pKey === 'feature_pipeline' ? 'Feature Pipeline' : 'Bug-Fix Pipeline'"></h3>
+
+            <template x-for="(stage, idx) in v3Pipelines[pKey]" x-bind:key="idx">
+              <div class="executor-row">
+                <span style="font-weight: 500; min-width: 24px;" x-text="(idx + 1) + '.'"></span>
+                <select x-model="v3Pipelines[pKey][idx]" style="flex: 1;">
+                  <option value="requirements">requirements</option>
+                  <option value="planning">planning</option>
+                  <option value="plan-review">plan-review</option>
+                  <option value="implementation">implementation</option>
+                  <option value="code-review">code-review</option>
+                  <option value="rca">rca</option>
+                </select>
+                <button x-on:click="moveStageInPipeline(pKey, idx, -1)" x-bind:disabled="idx === 0" title="Move up" style="padding: 2px 8px;">&#9650;</button>
+                <button x-on:click="moveStageInPipeline(pKey, idx, 1)" x-bind:disabled="idx === v3Pipelines[pKey].length - 1" title="Move down" style="padding: 2px 8px;">&#9660;</button>
+                <button x-on:click="removeStageFromPipeline(pKey, idx)" class="btn-danger" style="font-size: 0.75rem;">Remove</button>
+              </div>
+            </template>
+
+            <button x-on:click="addStageToPipeline(pKey)" style="margin-top: 8px; font-size: 0.85rem;" class="btn-secondary">+ Add Stage</button>
+          </div>
+        </template>
+
+        <button x-on:click="savePipelines()" class="btn-primary" style="margin-top: 12px;">Save Pipelines</button>
+      </div>
+    </template>
+  </section>
+
+  <!-- ============ Settings Tab (v3) ============ -->
+  <section x-show="tab === 'settings'" class="tab-content">
+    <h2>Settings</h2>
+    <p class="section-description">Global pipeline settings.</p>
+
+    <template x-if="loadingSettings">
+      <p>Loading settings...</p>
+    </template>
+
+    <template x-if="!loadingSettings">
+      <div class="card">
+        <div class="form-grid">
+          <label>
+            <span class="form-label">Max Iterations</span>
+            <input type="number" x-model.number="v3Settings.max_iterations" min="1" max="50">
+            <span class="form-hint">Maximum fix/re-review iterations per pipeline run</span>
+          </label>
+          <label>
+            <span class="form-label">Max TDD Iterations</span>
+            <input type="number" x-model.number="v3Settings.max_tdd_iterations" min="1" max="20">
+            <span class="form-hint">Maximum test-fail retries per implementation step</span>
+          </label>
+        </div>
+        <div class="form-actions" style="margin-top: 16px;">
+          <button x-on:click="saveSettings()" class="btn-primary">Save Settings</button>
+        </div>
+      </div>
+    </template>
+  </section>
+
+  <!-- ============ Import from Gallery Modal ============ -->
+  <div class="modal-overlay" x-show="showImportDialog" x-transition
+    role="dialog" aria-modal="true" aria-labelledby="import-dialog-title"
+    x-on:keydown.escape="closeImportDialog()">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="import-dialog-title">Import from Agency Agents Gallery</h3>
+        <button class="modal-close" x-on:click="closeImportDialog()" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Step 1: Category selection -->
+        <template x-if="!importSelectedCategory && !importProgress">
+          <div>
+            <p class="text-muted">Select a category to browse available agents:</p>
+            <template x-if="importLoading">
+              <p class="loading">Loading categories...</p>
+            </template>
+            <div class="import-category-grid">
+              <template x-for="cat in importCategories" x-bind:key="cat.name">
+                <button class="import-category-btn" x-on:click="selectImportCategory(cat.name)" x-text="cat.name"></button>
+              </template>
+            </div>
+          </div>
+        </template>
+
+        <!-- Step 2: Agent selection -->
+        <template x-if="importSelectedCategory && !importProgress">
+          <div>
+            <button class="btn-secondary btn-sm" x-on:click="importSelectedCategory = ''; importAgents = []">&larr; Back to categories</button>
+            <h4 x-text="importSelectedCategory" style="margin: 12px 0 8px; text-transform: capitalize;"></h4>
+            <template x-if="importLoading">
+              <p class="loading">Loading agents...</p>
+            </template>
+            <template x-if="!importLoading">
+              <div>
+                <template x-for="agent in importAgents" x-bind:key="agent.name">
+                  <label class="import-agent-row">
+                    <input type="checkbox" x-model="importSelectedAgents[agent.name]">
+                    <strong x-text="agent.name" style="font-size: 0.85rem; flex: 1;"></strong>
+                    <a x-bind:href="agent.html_url" target="_blank" rel="noopener" class="btn-secondary btn-sm"
+                      style="font-size: 0.75rem; text-decoration: none;" x-on:click.stop>View</a>
+                  </label>
+                </template>
+                <div class="form-actions" style="margin-top: 12px;">
+                  <button class="btn-primary" x-on:click="importSelectedPrompts()"
+                    x-bind:disabled="Object.values(importSelectedAgents).filter(Boolean).length === 0">
+                    Import Selected
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Step 3: Progress -->
+        <template x-if="importProgress">
+          <div>
+            <p class="loading" x-text="importProgress"></p>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
 
 </body>
 </html>

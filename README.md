@@ -21,7 +21,7 @@
 ![41 Standards](https://img.shields.io/badge/Standards-41-blue?style=flat-square)
 ![12 Scopes](https://img.shields.io/badge/Scopes-12-green?style=flat-square)
 ![OWASP Top 10](https://img.shields.io/badge/OWASP_Top_10-Covered-critical?style=flat-square)
-![16 Skills](https://img.shields.io/badge/Skills-16-blue?style=flat-square)
+![21 Skills](https://img.shields.io/badge/Skills-21-blue?style=flat-square)
 ![9 Agents](https://img.shields.io/badge/Agents-9-green?style=flat-square)
 ![6 Hooks](https://img.shields.io/badge/Hooks-6-orange?style=flat-square)
 
@@ -43,7 +43,7 @@ One AI writing and reviewing its own code is like grading your own homework. VCP
 ## Table of Contents
 
 - [Quick Start](#quick-start)
-- [Two Plugins, One Protocol](#two-plugins-one-protocol)
+- [Three Plugins, One Protocol](#three-plugins-one-protocol)
 - [Why This Matters](#why-this-matters)
 - [The Echo Chamber Problem](#the-echo-chamber-problem)
 - [Dev Buddy — Multi-AI Pipeline](#dev-buddy--multi-ai-pipeline)
@@ -93,14 +93,15 @@ See [`docker/README.md`](docker/README.md) for full setup instructions, volume m
 
 ---
 
-## Two Plugins, One Protocol
+## Three Plugins, One Protocol
 
-VCP ships two complementary plugins:
+VCP ships three complementary plugins:
 
 | Plugin | What It Does | Install |
 |--------|-------------|---------|
 | **VCP** | Standards enforcement — 41 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
 | **Dev Buddy** | Multi-AI pipeline — configurable stages, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
+| **mcp-doc** | Documentation manifest generator — indexes project docs as MCP resources with search, path-lookup, and tree-view tools | `/install vcp@mcp-doc` |
 
 Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.
 
@@ -491,6 +492,7 @@ vcp/
 ├── schemas/             # JSON schemas for config and manifest validation
 ├── plugins/vcp/         # VCP plugin — standards enforcement (skills, hooks, agents)
 ├── plugins/dev-buddy/   # Dev Buddy plugin — multi-AI pipeline orchestration
+├── plugins/mcp-doc/     # mcp-doc plugin — documentation manifest generator
 ├── docker/              # Docker image — Claude Code, Codex CLI, Gemini CLI
 └── .claude-plugin/      # Marketplace manifest
 ```

@@ -16,7 +16,8 @@ VCP enforces standards through three layers:
 ### Plugin Structure
 
 - `plugins/vcp/` — VCP plugin with 10 skills, 1 agent, and 4 hooks
-- `plugins/dev-buddy/` — Dev Buddy plugin with 5 skills, 7 agents, and 2 hooks. Pipeline skills use a "spine + shared references" pattern: each SKILL.md contains pipeline-specific logic inline, and references shared procedures in `docs/pipeline/` (8 files covering init, task chain, main loop, phased implementation, provider dispatch, re-review, and variant-specific logic)
+- `plugins/dev-buddy/` — Dev Buddy plugin with 8 skills and 7 built-in system prompts. Uses executor-based architecture: System Prompts + Presets = Executors, assigned to Stages. Stage skills (plan, review, implement, requirements, rca) dispatch executors via `general-purpose` subagent with embedded system prompts. Config format v3 (`~/.vcp/dev-buddy.json`) with auto-migration from v2.
+- `plugins/mcp-doc/` — MCP Doc plugin with 5 skills. Documentation manifest generator for git-doc-mcp — indexes project docs as MCP resources with embedded search, path-lookup, and tree-view tools
 - Skills fetch standards from `standards/manifest.json` at runtime via WebFetch (always latest from main)
 - `.vcp/config.json` in project root configures scopes, compliance frameworks, severity threshold, and CWE ignore list
 - `security-gate.ts` exits 2 (block) on pattern match, 0 (allow) otherwise
@@ -27,7 +28,7 @@ VCP enforces standards through three layers:
 - `standards/` — AI-optimized markdown standards (41 files across 12 scopes, flat layout with `{scope}-{topic}.md` naming)
 - `standards/manifest.json` — Root manifest indexing per-scope manifests in `standards/scopes/`
 - `standards/scopes/` — Per-scope manifest files (core, web-frontend, web-backend, database, mobile, desktop, cli, devops, agentic-ai, compliance-*)
-- `plugins/` — Claude Code plugins (vcp, dev-buddy)
+- `plugins/` — Claude Code plugins (vcp, dev-buddy, mcp-doc)
 - `.claude-plugin/` — Marketplace manifest
 
 ### Conventions

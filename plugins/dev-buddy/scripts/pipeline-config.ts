@@ -1,66 +1,30 @@
 /**
- * Pipeline configuration management.
+ * Pipeline configuration management (v3 inline executor format).
  *
  * Loads and validates ~/.vcp/dev-buddy.json.
- *
- * Config format: ordered arrays of {type, provider, model} stage entries.
- * Both provider and model are required on every stage — no defaults.
+ * Auto-migrates from v2 (StageEntry arrays) and v3-named (top-level executors map) on first load.
  *
  * Usage (CLI mode):
- *   bun pipeline-config.ts validate --cwd <dir>
+ *   bun pipeline-config.ts validate-v3 --cwd <dir>
+ *   bun pipeline-config.ts migrate --cwd <dir>
  */
 
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { readPresets } from './preset-utils.ts';
-import type { PipelineConfig, StageEntry, PhasedReviewEntry } from '../types/pipeline.ts';
-import { STAGE_DEFINITIONS, MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
+import type { PipelineConfig, StageEntry, DevBuddyConfig, StageExecutor, StageConfig } from '../types/pipeline.ts';
+import { STAGE_DEFINITIONS, MODEL_NAME_REGEX, VALID_STAGE_TYPES, getV3OutputFileName } from '../types/stage-definitions.ts';
 import type { StageType } from '../types/stage-definitions.ts';
+import { discoverSystemPrompts } from './system-prompts.ts';
 
-// Config path: ~/.vcp/dev-buddy.json (C11)
+// Config path: ~/.vcp/dev-buddy.json
 export const CONFIG_PATH = path.join(os.homedir(), '.vcp', 'dev-buddy.json');
-
-// ─── Default Config ──────────────────────────────────────────────────────────
-
-/**
- * Default pipeline config — all stages use 'anthropic-subscription'.
- * Every stage has an explicit model — no defaults.
- *
- * Feature pipeline: 9 stages (requirements, planning, 3x plan-review, implementation, 3x code-review)
- * Bug-fix pipeline: 7 stages (2x rca, 1x plan-review, implementation, 3x code-review)
- */
-export const DEFAULT_CONFIG: PipelineConfig = {
-  feature_pipeline: [
-    { type: 'requirements', provider: 'anthropic-subscription', model: 'opus' },
-    { type: 'planning', provider: 'anthropic-subscription', model: 'opus' },
-    { type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet' },
-    { type: 'plan-review', provider: 'anthropic-subscription', model: 'opus' },
-    { type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet' },
-    { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
-    { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
-    { type: 'code-review', provider: 'anthropic-subscription', model: 'opus' },
-    { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
-  ],
-  bugfix_pipeline: [
-    { type: 'rca', provider: 'anthropic-subscription', model: 'sonnet' },
-    { type: 'rca', provider: 'anthropic-subscription', model: 'opus' },
-    { type: 'plan-review', provider: 'anthropic-subscription', model: 'sonnet' },
-    { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
-    { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
-    { type: 'code-review', provider: 'anthropic-subscription', model: 'opus' },
-    { type: 'code-review', provider: 'anthropic-subscription', model: 'sonnet' },
-  ],
-  max_iterations: 10,
-  max_phased_iterations: 3,
-  team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
-};
 
 // ─── Atomic Writes ───────────────────────────────────────────────────────────
 
 /**
  * Write data to filePath atomically using a temp file + rename pattern.
- * Prevents partial writes if the process crashes mid-write.
  * Exported for reuse in config-server.ts.
  */
 export function atomicWriteFile(filePath: string, data: unknown): void {
@@ -71,294 +35,12 @@ export function atomicWriteFile(filePath: string, data: unknown): void {
     fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
     fs.renameSync(tempPath, filePath);
   } catch (err) {
-    // Clean up temp file on failure
     try { fs.unlinkSync(tempPath); } catch { /* ignore cleanup failure */ }
     throw err;
   }
 }
 
-// ─── Config Validation ───────────────────────────────────────────────────────
-
-/**
- * Validate a pipeline config.
- * Throws descriptive errors on constraint violations.
- * Both provider and model are required on every stage.
- *
- * @param config - The config to validate.
- * @param pipelineType - If provided, only validate the specified pipeline array.
- */
-export function validateConfig(config: PipelineConfig, pipelineType?: 'feature' | 'bugfix'): void {
-  const pipelinesToCheck: Array<{ name: string; stages: StageEntry[]; type: 'feature' | 'bugfix' }> = [];
-
-  if (!pipelineType || pipelineType === 'feature') {
-    if (!Array.isArray(config.feature_pipeline)) {
-      throw new Error('Config must have feature_pipeline as an array');
-    }
-    pipelinesToCheck.push({ name: 'feature_pipeline', stages: config.feature_pipeline, type: 'feature' });
-  }
-  if (!pipelineType || pipelineType === 'bugfix') {
-    if (!Array.isArray(config.bugfix_pipeline)) {
-      throw new Error('Config must have bugfix_pipeline as an array');
-    }
-    pipelinesToCheck.push({ name: 'bugfix_pipeline', stages: config.bugfix_pipeline, type: 'bugfix' });
-  }
-
-  for (const { name, stages, type } of pipelinesToCheck) {
-    const validTypes = new Set<string>(Object.keys(STAGE_DEFINITIONS));
-    const singletonCounts: Record<string, number> = {};
-    let implementationCount = 0;
-
-    for (let i = 0; i < stages.length; i++) {
-      const entry = stages[i];
-
-      // Validate stage type
-      if (!entry || typeof entry.type !== 'string' || !validTypes.has(entry.type)) {
-        throw new Error(
-          `${name}[${i}]: invalid stage type '${entry?.type}'. Must be one of: ${[...validTypes].join(', ')}`
-        );
-      }
-
-      const stageDef = STAGE_DEFINITIONS[entry.type as StageType];
-
-      // Pipeline type restriction (requirements/planning only in feature)
-      if (!stageDef.allowed_pipelines.includes(type)) {
-        throw new Error(
-          `${name}[${i}]: stage type '${entry.type}' is not allowed in ${type} pipeline. ` +
-          `Allowed in: ${stageDef.allowed_pipelines.join(', ')}`
-        );
-      }
-
-      // Singleton constraint
-      if (stageDef.singleton) {
-        singletonCounts[entry.type] = (singletonCounts[entry.type] || 0) + 1;
-        if (singletonCounts[entry.type] > 1) {
-          throw new Error(
-            `${name}: '${entry.type}' is a singleton stage and may appear at most once per pipeline`
-          );
-        }
-      }
-
-      // Count implementation stages
-      if (entry.type === 'implementation') {
-        implementationCount++;
-      }
-
-      // Validate parallel flag type and applicability
-      if ('parallel' in entry && typeof entry.parallel !== 'boolean') {
-        throw new Error(
-          `${name}[${i}]: 'parallel' must be a boolean, got ${typeof entry.parallel}`
-        );
-      }
-      if (entry.parallel === true) {
-        if (entry.type !== 'plan-review' && entry.type !== 'code-review' && entry.type !== 'rca') {
-          throw new Error(
-            `${name}[${i}]: 'parallel' is only allowed on plan-review, code-review, and rca stages, not '${entry.type}'`
-          );
-        }
-      }
-
-      // Validate provider (non-empty string)
-      if (typeof entry.provider !== 'string' || entry.provider.trim() === '') {
-        throw new Error(`${name}[${i}]: provider must be a non-empty string`);
-      }
-
-      // Validate model (required, non-empty string matching regex)
-      if (typeof entry.model !== 'string' || entry.model.trim() === '') {
-        throw new Error(`${name}[${i}]: model is required and must be a non-empty string`);
-      }
-      if (!MODEL_NAME_REGEX.test(entry.model)) {
-        throw new Error(
-          `${name}[${i}]: invalid model name '${entry.model}'. Must match /^[a-zA-Z0-9._-]+$/`
-        );
-      }
-
-      // Validate review_gate flag type and applicability
-      if ('review_gate' in entry && typeof entry.review_gate !== 'boolean') {
-        throw new Error(
-          `${name}[${i}]: 'review_gate' must be a boolean, got ${typeof entry.review_gate}`
-        );
-      }
-      if (entry.review_gate === true) {
-        if (entry.type !== 'requirements' && entry.type !== 'planning') {
-          throw new Error(
-            `${name}[${i}]: 'review_gate' is only allowed on requirements and planning stages, not '${entry.type}'. For RCA stages, use the pipeline-level 'rca_review_gate' setting.`
-          );
-        }
-      }
-
-      // Validate phased_reviews if present
-      if ('phased_reviews' in entry && entry.phased_reviews !== undefined) {
-        if (entry.type !== 'implementation') {
-          throw new Error(
-            `${name}[${i}]: phased_reviews is only allowed on implementation stage entries, not '${entry.type}'`
-          );
-        }
-        if (!Array.isArray(entry.phased_reviews)) {
-          throw new Error(`${name}[${i}]: phased_reviews must be an array`);
-        }
-        if (entry.phased_reviews.length > 10) {
-          throw new Error(
-            `${name}[${i}]: phased_reviews array length ${entry.phased_reviews.length} exceeds maximum of 10`
-          );
-        }
-        for (let j = 0; j < entry.phased_reviews.length; j++) {
-          const pr = entry.phased_reviews[j] as PhasedReviewEntry;
-          if (typeof pr.provider !== 'string' || pr.provider.trim() === '') {
-            throw new Error(
-              `${name}[${i}].phased_reviews[${j}]: provider must be a non-empty string`
-            );
-          }
-          if (typeof pr.model !== 'string' || pr.model.trim() === '') {
-            throw new Error(
-              `${name}[${i}].phased_reviews[${j}]: model is required and must be a non-empty string`
-            );
-          }
-          if (!MODEL_NAME_REGEX.test(pr.model)) {
-            throw new Error(
-              `${name}[${i}].phased_reviews[${j}]: invalid model name '${pr.model}'. Must match /^[a-zA-Z0-9._-]+$/`
-            );
-          }
-          if ('parallel' in pr && typeof pr.parallel !== 'boolean') {
-            throw new Error(
-              `${name}[${i}].phased_reviews[${j}]: parallel must be a boolean, got ${typeof pr.parallel}`
-            );
-          }
-        }
-      }
-    }
-
-    // Minimum constraint: every pipeline must have at least one implementation stage
-    if (implementationCount === 0) {
-      throw new Error(
-        `${name}: every pipeline must have at least one implementation stage`
-      );
-    }
-
-    // Bugfix pipeline: RCA stages must form a contiguous block at the beginning
-    if (type === 'bugfix') {
-      let seenNonRca = false;
-      for (let i = 0; i < stages.length; i++) {
-        if (stages[i].type === 'rca') {
-          if (seenNonRca) {
-            throw new Error(
-              `${name}[${i}]: RCA stages must be consecutive at the beginning of the bugfix pipeline. ` +
-              `Found 'rca' after non-RCA stage at index ${i}.`
-            );
-          }
-        } else {
-          seenNonRca = true;
-        }
-      }
-    }
-  }
-
-  // Validate max_phased_iterations if present
-  if ('max_phased_iterations' in config && config.max_phased_iterations !== undefined) {
-    const mpi = config.max_phased_iterations;
-    if (!Number.isInteger(mpi) || mpi <= 0) {
-      throw new Error(
-        `max_phased_iterations must be a positive integer, got ${mpi}`
-      );
-    }
-  }
-
-  // Validate review_interval if present
-  if ('review_interval' in config && config.review_interval !== undefined) {
-    const ri = config.review_interval;
-    if (!Number.isInteger(ri) || ri <= 0) {
-      throw new Error(
-        `review_interval must be a positive integer, got ${ri}`
-      );
-    }
-  }
-
-  // Validate rca_review_gate if present
-  if ('rca_review_gate' in config && typeof config.rca_review_gate !== 'boolean') {
-    throw new Error(
-      `rca_review_gate must be a boolean, got ${typeof config.rca_review_gate}`
-    );
-  }
-}
-
-// ─── Config Loading ───────────────────────────────────────────────────────────
-
-/**
- * Load and validate the pipeline config from disk.
- *
- * Behavior:
- * - No file: returns DEFAULT_CONFIG
- * - Valid JSON: validates and returns
- * - Invalid: throws (fail fast, no fallbacks)
- */
-export function loadPipelineConfig(): PipelineConfig {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    return DEFAULT_CONFIG;
-  }
-
-  const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    throw new Error(`Pipeline config at ${CONFIG_PATH} is not valid JSON`);
-  }
-
-  const config = parsed as unknown as PipelineConfig;
-  validateConfig(config);
-  // Canonical default resolution: max_phased_iterations defaults to 3.
-  // This is the ONLY place this default is applied. Downstream consumers must not apply their own fallback.
-  config.max_phased_iterations = config.max_phased_iterations ?? 3;
-  // Canonical default resolution: review_interval defaults to 1 (review every step).
-  config.review_interval = config.review_interval ?? 1;
-  return config;
-}
-
-// ─── Provider Validation ──────────────────────────────────────────────────────
-
-/**
- * Validate all provider references in the pipeline config.
- * Checks: (1) preset exists, (2) API presets have base_url and api_key.
- */
-export function validateProviderReferences(config: PipelineConfig): void {
-  const presets = readPresets();
-
-  // Collect all unique provider names from both pipelines
-  const providerNames = new Set<string>();
-  for (const entry of [...config.feature_pipeline, ...config.bugfix_pipeline]) {
-    providerNames.add(entry.provider);
-    // Also collect providers from phased_reviews entries
-    if (Array.isArray(entry.phased_reviews)) {
-      for (const pr of entry.phased_reviews) {
-        providerNames.add(pr.provider);
-      }
-    }
-  }
-
-  const errors: string[] = [];
-
-  for (const name of providerNames) {
-    const preset = presets.presets[name];
-    if (!preset) {
-      errors.push(`  - Preset '${name}' not found in ~/.vcp/ai-presets.json`);
-      continue;
-    }
-    if (preset.type === 'api') {
-      if (!preset.base_url) {
-        errors.push(`  - API preset '${name}' is missing base_url`);
-      }
-      if (!preset.api_key) {
-        errors.push(`  - API preset '${name}' is missing api_key`);
-      }
-    }
-  }
-
-  if (errors.length > 0) {
-    throw new Error(
-      `Pipeline config validation failed. The following providers are invalid:\n${errors.join('\n')}\n` +
-      `\nRun '/dev-buddy:manage-presets' to add or fix presets before starting the pipeline.`
-    );
-  }
-}
+// ─── Provider Resolution ─────────────────────────────────────────────────────
 
 /**
  * Get the type of a provider preset by name.
@@ -370,17 +52,6 @@ export function getProviderType(presetName: string): 'subscription' | 'api' | 'c
     throw new Error(`Preset '${presetName}' not found`);
   }
   return preset.type;
-}
-
-/**
- * Resolve a stage entry to its provider type.
- */
-export function resolveStageEntry(entry: StageEntry): { provider_name: string; provider_type: 'subscription' | 'api' | 'cli' } {
-  const providerType = getProviderType(entry.provider);
-  return {
-    provider_name: entry.provider,
-    provider_type: providerType,
-  };
 }
 
 // ─── HTTP Helpers ─────────────────────────────────────────────────────────────
@@ -397,33 +68,436 @@ export async function fetchWithTimeout(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    return response;
+    return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-// ============================================================
-// CLI entry point
-// ============================================================
+// ─── Default v3 Config (inline executors) ────────────────────────────────────
+
+export const DEFAULT_V3_CONFIG: DevBuddyConfig = {
+  version: '3.0',
+  stages: {
+    'requirements': { executors: [{ system_prompt: 'requirements-gatherer', preset: 'anthropic-subscription', model: 'opus' }] },
+    'planning': { executors: [{ system_prompt: 'planner', preset: 'anthropic-subscription', model: 'opus' }] },
+    'plan-review': { executors: [{ system_prompt: 'plan-reviewer', preset: 'anthropic-subscription', model: 'sonnet' }] },
+    'implementation': { executors: [{ system_prompt: 'implementer', preset: 'anthropic-subscription', model: 'sonnet' }] },
+    'code-review': { executors: [{ system_prompt: 'code-reviewer', preset: 'anthropic-subscription', model: 'sonnet' }] },
+    'rca': { executors: [
+      { system_prompt: 'root-cause-analyst', preset: 'anthropic-subscription', model: 'sonnet', parallel: true },
+      { system_prompt: 'root-cause-analyst', preset: 'anthropic-subscription', model: 'opus' },
+    ] },
+  },
+  feature_pipeline: ['requirements', 'planning', 'plan-review', 'implementation', 'code-review'],
+  bugfix_pipeline: ['rca', 'requirements', 'planning', 'plan-review', 'implementation', 'code-review'],
+  max_iterations: 10,
+  max_tdd_iterations: 5,
+};
+
+// ─── v2 → v3-inline Migration ───────────────────────────────────────────────
+
+/**
+ * Migrate a v2 PipelineConfig (StageEntry arrays) to v3 inline format.
+ */
+export function migrateV2ToV3(v2: PipelineConfig): DevBuddyConfig {
+  const stages: Record<string, StageConfig> = {};
+
+  for (const pipeline of [v2.feature_pipeline, v2.bugfix_pipeline]) {
+    for (const entry of pipeline) {
+      const agentType = STAGE_DEFINITIONS[entry.type as StageType]?.agent_type;
+      if (!agentType) continue;
+
+      const stageType = entry.type as StageType;
+      if (!stages[stageType]) {
+        stages[stageType] = { executors: [] };
+      }
+
+      const exec: StageExecutor = {
+        system_prompt: agentType,
+        preset: entry.provider,
+        model: entry.model,
+      };
+      if (entry.parallel) exec.parallel = true;
+
+      // Avoid duplicate executors in same stage
+      const isDup = stages[stageType].executors.some(e =>
+        e.system_prompt === exec.system_prompt && e.preset === exec.preset && e.model === exec.model
+      );
+      if (!isDup) {
+        stages[stageType].executors.push(exec);
+      }
+    }
+  }
+
+  // Ensure all 6 stage types exist
+  for (const stageType of VALID_STAGE_TYPES) {
+    if (!stages[stageType]) {
+      const defaultStage = DEFAULT_V3_CONFIG.stages[stageType as StageType];
+      stages[stageType] = defaultStage ? { executors: [...defaultStage.executors] } : { executors: [] };
+    }
+  }
+
+  const featureStages = [...new Set(v2.feature_pipeline.map(e => e.type as StageType))];
+  const bugfixStages = [...new Set(v2.bugfix_pipeline.map(e => e.type as StageType))];
+
+  return {
+    version: '3.0',
+    stages: stages as Record<StageType, StageConfig>,
+    feature_pipeline: featureStages,
+    bugfix_pipeline: bugfixStages,
+    max_iterations: v2.max_iterations ?? 10,
+    max_tdd_iterations: 5,
+  };
+}
+
+// ─── v3-named → v3-inline Migration ─────────────────────────────────────────
+
+/**
+ * Migrate a v3 config with top-level named executors to v3 inline format.
+ * Detects old format by presence of top-level 'executors' key.
+ */
+function migrateV3NamedToInline(config: Record<string, unknown>): DevBuddyConfig {
+  const namedExecutors = config.executors as Record<string, { system_prompt: string; preset: string; model: string }>;
+  const oldStages = config.stages as Record<string, { executors: Array<{ name: string; parallel?: boolean }> }>;
+  const newStages: Record<string, StageConfig> = {};
+
+  for (const [stageType, stageConfig] of Object.entries(oldStages)) {
+    newStages[stageType] = {
+      executors: stageConfig.executors.map(ref => {
+        const exec = namedExecutors[ref.name];
+        if (!exec) {
+          throw new Error(`Migration failed: stage '${stageType}' references unknown executor '${ref.name}'`);
+        }
+        const inline: StageExecutor = {
+          system_prompt: exec.system_prompt,
+          preset: exec.preset,
+          model: exec.model,
+        };
+        if (ref.parallel) inline.parallel = true;
+        return inline;
+      }),
+    };
+  }
+
+  // Ensure all 6 stage types exist
+  for (const stageType of VALID_STAGE_TYPES) {
+    if (!newStages[stageType]) {
+      const defaultStage = DEFAULT_V3_CONFIG.stages[stageType as StageType];
+      newStages[stageType] = defaultStage ? { executors: [...defaultStage.executors] } : { executors: [] };
+    }
+  }
+
+  return {
+    version: '3.0',
+    stages: newStages as Record<StageType, StageConfig>,
+    feature_pipeline: (config.feature_pipeline || DEFAULT_V3_CONFIG.feature_pipeline) as StageType[],
+    bugfix_pipeline: (config.bugfix_pipeline || DEFAULT_V3_CONFIG.bugfix_pipeline) as StageType[],
+    max_iterations: (config.max_iterations as number) ?? 10,
+    max_tdd_iterations: (config.max_tdd_iterations as number) ?? 5,
+  };
+}
+
+// ─── v3 Validation ──────────────────────────────────────────────────────────
+
+/**
+ * Validate a v3 DevBuddyConfig (inline executor format).
+ */
+export function validateDevBuddyConfig(config: DevBuddyConfig): void {
+  if (config.version !== '3.0') {
+    throw new Error(`Invalid config version: '${config.version}'. Expected '3.0'.`);
+  }
+
+  // Discover available system prompts for name validation
+  const builtInDir = path.join(import.meta.dir, '..', 'system-prompts', 'built-in');
+  let availablePrompts: Set<string>;
+  try {
+    const prompts = discoverSystemPrompts(builtInDir);
+    availablePrompts = new Set(prompts.map(p => p.name));
+  } catch {
+    availablePrompts = new Set();
+  }
+
+  // Validate stages: all 6 stage types must exist
+  for (const stageType of VALID_STAGE_TYPES) {
+    const stage = config.stages[stageType as StageType];
+    if (!stage) {
+      throw new Error(`Missing stage config for '${stageType}'`);
+    }
+    if (!Array.isArray(stage.executors)) {
+      throw new Error(`Stage '${stageType}': executors must be an array`);
+    }
+    for (let i = 0; i < stage.executors.length; i++) {
+      const exec = stage.executors[i];
+      if (!exec.system_prompt || typeof exec.system_prompt !== 'string') {
+        throw new Error(`Stage '${stageType}' executor[${i}]: system_prompt is required`);
+      }
+      if (availablePrompts.size > 0 && !availablePrompts.has(exec.system_prompt)) {
+        throw new Error(`Stage '${stageType}' executor[${i}]: system_prompt '${exec.system_prompt}' not found. Available: ${[...availablePrompts].join(', ')}`);
+      }
+      if (!exec.preset || typeof exec.preset !== 'string') {
+        throw new Error(`Stage '${stageType}' executor[${i}]: preset is required`);
+      }
+      // Validate preset exists
+      try {
+        getProviderType(exec.preset);
+      } catch {
+        throw new Error(`Stage '${stageType}' executor[${i}]: preset '${exec.preset}' not found in ai-presets.json`);
+      }
+      if (!exec.model || typeof exec.model !== 'string') {
+        throw new Error(`Stage '${stageType}' executor[${i}]: model is required`);
+      }
+      if (!MODEL_NAME_REGEX.test(exec.model)) {
+        throw new Error(`Stage '${stageType}' executor[${i}]: invalid model name '${exec.model}'`);
+      }
+      if (exec.parallel !== undefined && typeof exec.parallel !== 'boolean') {
+        throw new Error(`Stage '${stageType}' executor[${i}]: parallel must be a boolean`);
+      }
+    }
+
+    // Enforce max_executors constraint
+    const def = STAGE_DEFINITIONS[stageType as StageType];
+    if (def.max_executors !== undefined && stage.executors.length > def.max_executors) {
+      throw new Error(
+        `Stage '${stageType}': maximum ${def.max_executors} executor(s) allowed, got ${stage.executors.length}`
+      );
+    }
+
+    // Synthesizer rule: last executor must be non-parallel when multiple executors
+    if (stage.executors.length > 1) {
+      const lastExec = stage.executors[stage.executors.length - 1];
+      if (lastExec.parallel === true) {
+        throw new Error(
+          `Stage '${stageType}': last executor must be non-parallel (it acts as the synthesizer)`
+        );
+      }
+    }
+  }
+
+  // Stages in active pipelines must have at least 1 executor
+  for (const stageType of VALID_STAGE_TYPES) {
+    const stage = config.stages[stageType as StageType];
+    const inFeature = config.feature_pipeline.includes(stageType as StageType);
+    const inBugfix = config.bugfix_pipeline.includes(stageType as StageType);
+    if ((inFeature || inBugfix) && stage.executors.length === 0) {
+      throw new Error(`Stage '${stageType}': must have at least 1 executor (used in active pipeline)`);
+    }
+  }
+
+  // Validate pipelines
+  for (const [key, pipeline] of [['feature_pipeline', config.feature_pipeline], ['bugfix_pipeline', config.bugfix_pipeline]] as const) {
+    if (!Array.isArray(pipeline)) {
+      throw new Error(`${key} must be an array`);
+    }
+    for (let i = 0; i < pipeline.length; i++) {
+      if (!VALID_STAGE_TYPES.has(pipeline[i])) {
+        throw new Error(`${key}[${i}]: invalid stage type '${pipeline[i]}'`);
+      }
+      if (pipeline[i] === 'rca' && key === 'feature_pipeline') {
+        throw new Error(`${key}[${i}]: 'rca' is only allowed in bugfix_pipeline`);
+      }
+    }
+  }
+
+  // Validate numeric fields
+  if (!Number.isInteger(config.max_iterations) || config.max_iterations <= 0) {
+    throw new Error(`max_iterations must be a positive integer`);
+  }
+  if (!Number.isInteger(config.max_tdd_iterations) || config.max_tdd_iterations <= 0) {
+    throw new Error(`max_tdd_iterations must be a positive integer`);
+  }
+
+  // Validate optional theme field
+  if (config.theme !== undefined && config.theme !== 'light' && config.theme !== 'dark') {
+    throw new Error(`theme must be 'light' or 'dark'`);
+  }
+}
+
+// ─── Config Format Detection ────────────────────────────────────────────────
+
+function isV3Inline(parsed: Record<string, unknown>): boolean {
+  if (parsed.version !== '3.0') return false;
+  // v3-inline: no top-level 'executors' key, stages have inline executor defs
+  return !parsed.executors;
+}
+
+function isV3Named(parsed: Record<string, unknown>): boolean {
+  if (parsed.version !== '3.0') return false;
+  // v3-named: has top-level 'executors' key
+  return !!parsed.executors;
+}
+
+// ─── Config Loading ─────────────────────────────────────────────────────────
+
+/**
+ * Load the dev-buddy config as v3-inline.
+ * Auto-migrates from v2 or v3-named format and persists with backup.
+ */
+export function loadDevBuddyConfig(): DevBuddyConfig {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    return DEFAULT_V3_CONFIG;
+  }
+
+  const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Config at ${CONFIG_PATH} is not valid JSON`);
+  }
+
+  // Already v3-inline — auto-fix synthesizer rule, then validate and return
+  if (isV3Inline(parsed)) {
+    const config = parsed as unknown as DevBuddyConfig;
+    // Auto-fix: last executor in multi-executor stage must be non-parallel (synthesizer)
+    let synthMigrated = false;
+    for (const stage of Object.values(config.stages)) {
+      if (stage.executors.length > 1 && stage.executors[stage.executors.length - 1].parallel === true) {
+        stage.executors[stage.executors.length - 1].parallel = false;
+        synthMigrated = true;
+      }
+    }
+    if (synthMigrated) {
+      const backupPath = `${CONFIG_PATH}.backup-synth-${Date.now()}`;
+      fs.copyFileSync(CONFIG_PATH, backupPath);
+      atomicWriteFile(CONFIG_PATH, config);
+      console.error(`[Pipeline] Auto-migrated synthesizer rule (last executor non-parallel). Backup at ${backupPath}`);
+    }
+    validateDevBuddyConfig(config);
+    return config;
+  }
+
+  // v3-named — migrate to v3-inline
+  if (isV3Named(parsed)) {
+    const v3 = migrateV3NamedToInline(parsed);
+    validateDevBuddyConfig(v3);
+    const backupPath = `${CONFIG_PATH}.v3-named.backup`;
+    if (!fs.existsSync(backupPath)) {
+      fs.copyFileSync(CONFIG_PATH, backupPath);
+    }
+    atomicWriteFile(CONFIG_PATH, v3);
+    console.error(`[Pipeline] Auto-migrated config from v3-named to v3-inline. Backup at ${backupPath}`);
+    return v3;
+  }
+
+  // v2 format — migrate to v3-inline
+  const v2 = parsed as unknown as PipelineConfig;
+  const v3 = migrateV2ToV3(v2);
+  validateDevBuddyConfig(v3);
+  const backupPath = `${CONFIG_PATH}.v2.backup`;
+  if (!fs.existsSync(backupPath)) {
+    fs.copyFileSync(CONFIG_PATH, backupPath);
+  }
+  atomicWriteFile(CONFIG_PATH, v3);
+  console.error(`[Pipeline] Auto-migrated config from v2 to v3-inline. Backup at ${backupPath}`);
+  return v3;
+}
+
+// ─── Executor Resolution ────────────────────────────────────────────────────
+
+/**
+ * Resolve a stage executor's provider type.
+ * Simple helper since inline executors already have all fields.
+ */
+export function resolveExecutor(executor: StageExecutor): StageExecutor & { providerType: 'subscription' | 'api' | 'cli' } {
+  return {
+    ...executor,
+    providerType: getProviderType(executor.preset),
+  };
+}
+
+// ─── Pipeline Expansion ─────────────────────────────────────────────────────
+
+/** A single expanded task entry for pipeline-tasks.json. */
+export interface ExpandedStageEntry {
+  type: StageType;
+  system_prompt: string;
+  provider: string;
+  model: string;
+  providerType: 'subscription' | 'api' | 'cli';
+  output_file: string;
+  parallel_group_id: string | null;
+  current_version: number;
+}
+
+/**
+ * Expand a v3 pipeline config into task entries.
+ * Each inline executor becomes one entry.
+ */
+export function expandPipelineToEntries(
+  config: DevBuddyConfig,
+  pipelineKey: 'feature_pipeline' | 'bugfix_pipeline',
+): ExpandedStageEntry[] {
+  const pipeline = config[pipelineKey];
+  const entries: ExpandedStageEntry[] = [];
+  const typeCounters: Record<string, number> = {};
+  let parallelGroupCounter = 0;
+
+  for (const stageType of pipeline) {
+    const stageConfig = config.stages[stageType];
+    if (!stageConfig) continue;
+
+    let inParallelGroup = false;
+    let currentGroupId: string | null = null;
+
+    for (const exec of stageConfig.executors) {
+      const providerType = getProviderType(exec.preset);
+      typeCounters[stageType] = (typeCounters[stageType] || 0) + 1;
+      const index = typeCounters[stageType];
+
+      if (exec.parallel) {
+        if (!inParallelGroup) {
+          parallelGroupCounter++;
+          currentGroupId = `pg_${parallelGroupCounter}`;
+          inParallelGroup = true;
+        }
+      } else {
+        inParallelGroup = false;
+        currentGroupId = null;
+      }
+
+      const outputFile = getV3OutputFileName(stageType, exec.system_prompt, index, exec.preset, exec.model, 1);
+
+      entries.push({
+        type: stageType,
+        system_prompt: exec.system_prompt,
+        provider: exec.preset,
+        model: exec.model,
+        providerType,
+        output_file: outputFile,
+        parallel_group_id: currentGroupId,
+        current_version: 1,
+      });
+    }
+  }
+
+  return entries;
+}
+
+// ─── CLI ────────────────────────────────────────────────────────────────────
 
 if (import.meta.main) {
   const command = process.argv[2];
-  const cwdIndex = process.argv.indexOf('--cwd');
-  const cwd = cwdIndex >= 0 ? process.argv[cwdIndex + 1] : process.cwd();
 
   try {
-    const config = loadPipelineConfig();
-
     switch (command) {
-      case 'validate':
-        validateProviderReferences(config);
-        console.log('[Pipeline] Config validation passed');
+      case 'validate-v3': {
+        const config = loadDevBuddyConfig();
+        const stageCount = Object.values(config.stages).reduce((n, s) => n + s.executors.length, 0);
+        console.log(`[Pipeline] v3 config valid. ${stageCount} total executors, ${config.feature_pipeline.length} feature stages, ${config.bugfix_pipeline.length} bugfix stages`);
         break;
+      }
+
+      case 'migrate': {
+        const v3 = loadDevBuddyConfig();
+        atomicWriteFile(CONFIG_PATH, v3);
+        const stageCount = Object.values(v3.stages).reduce((n, s) => n + s.executors.length, 0);
+        console.log(`[Pipeline] Config migrated to v3-inline. ${stageCount} total executors.`);
+        break;
+      }
 
       default:
-        console.error(`Unknown command: ${command}. Use: validate`);
+        console.error(`Unknown command: ${command}. Use: validate-v3, migrate`);
         process.exit(1);
     }
   } catch (err) {

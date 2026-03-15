@@ -14,6 +14,7 @@ import type { ChatroomConfig, ChatroomParticipant } from '../types/chatroom.ts';
 import type { PresetConfig, CliPreset } from '../types/presets.ts';
 import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 import { atomicWriteFile } from './pipeline-config.ts';
+import { discoverSystemPrompts } from './system-prompts.ts';
 
 // Config path: ~/.vcp/dev-buddy-chatroom.json
 export const CHATROOM_CONFIG_PATH = path.join(CONFIG_DIR, 'dev-buddy-chatroom.json');
@@ -28,7 +29,7 @@ export const DEFAULT_CHATROOM_CONFIG: ChatroomConfig = {
 // ─── Field Allowlists (CWE-915) ─────────────────────────────────────────────
 
 export const ALLOWED_CHATROOM_FIELDS = new Set(['participants', 'max_rounds']);
-export const ALLOWED_PARTICIPANT_FIELDS = new Set(['preset', 'model']);
+export const ALLOWED_PARTICIPANT_FIELDS = new Set(['preset', 'model', 'system_prompt']);
 
 // ─── Config Loading ──────────────────────────────────────────────────────────
 
@@ -205,6 +206,21 @@ export function validateChatroomConfig(body: unknown, presets: PresetConfig): st
       if (!(preset as CliPreset).one_shot_args_template) {
         return `participants[${i}]: CLI preset '${pObj.preset}' has no one_shot_args_template configured`;
       }
+    }
+
+    // Validate optional system_prompt name against discovered prompts
+    if ('system_prompt' in pObj && pObj.system_prompt !== '' && pObj.system_prompt !== undefined) {
+      if (typeof pObj.system_prompt !== 'string') {
+        return `participants[${i}]: system_prompt must be a string`;
+      }
+      const builtInDir = path.join(import.meta.dir, '..', 'system-prompts', 'built-in');
+      try {
+        const prompts = discoverSystemPrompts(builtInDir);
+        const names = new Set(prompts.map(p => p.name));
+        if (!names.has(pObj.system_prompt)) {
+          return `participants[${i}]: system_prompt '${pObj.system_prompt}' not found. Available: ${[...names].join(', ')}`;
+        }
+      } catch { /* discovery failure is non-fatal for validation */ }
     }
   }
 

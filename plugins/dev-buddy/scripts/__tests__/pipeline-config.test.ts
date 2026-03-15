@@ -1,513 +1,152 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
+import { describe, test, expect } from 'bun:test';
 import {
-  getImplStepFileName,
-  getPhasedReviewFileName,
-  getPhasedBatchReviewFileName,
-  SAFE_PATH_RE,
-} from '../../types/stage-definitions.ts';
-import {
-  validateConfig,
-  DEFAULT_CONFIG,
+  DEFAULT_V3_CONFIG,
+  validateDevBuddyConfig,
+  migrateV2ToV3,
 } from '../pipeline-config.ts';
-import type { PipelineConfig } from '../../types/pipeline.ts';
+import type { PipelineConfig, DevBuddyConfig } from '../../types/pipeline.ts';
 
-// ─── Minimal valid config factory ────────────────────────────────────────────
+// ─── DEFAULT_V3_CONFIG ──────────────────────────────────────────────────────
 
-function makeValidConfig(overrides: Partial<PipelineConfig> = {}): PipelineConfig {
-  return {
-    feature_pipeline: [
-      { type: 'requirements', provider: 'anthropic-subscription', model: 'opus' },
-      { type: 'planning', provider: 'anthropic-subscription', model: 'opus' },
-      { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
-    ],
-    bugfix_pipeline: [
-      { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
-    ],
-    max_iterations: 10,
-    team_name_pattern: 'pipeline-{BASENAME}-{HASH}',
-    ...overrides,
-  };
-}
-
-// ─── getImplStepFileName ──────────────────────────────────────────────────────
-
-describe('getImplStepFileName', () => {
-  test('returns impl-step-3-v1.json for step=3, version=1', () => {
-    expect(getImplStepFileName(3, 1)).toBe('impl-step-3-v1.json');
+describe('DEFAULT_V3_CONFIG', () => {
+  test('has version 3.0', () => {
+    expect(DEFAULT_V3_CONFIG.version).toBe('3.0');
   });
 
-  test('returns impl-step-1-v2.json for step=1, version=2', () => {
-    expect(getImplStepFileName(1, 2)).toBe('impl-step-1-v2.json');
+  test('has all 6 stage types', () => {
+    const stages = Object.keys(DEFAULT_V3_CONFIG.stages);
+    expect(stages).toContain('requirements');
+    expect(stages).toContain('planning');
+    expect(stages).toContain('plan-review');
+    expect(stages).toContain('implementation');
+    expect(stages).toContain('code-review');
+    expect(stages).toContain('rca');
   });
 
-  test('output passes SAFE_PATH_RE', () => {
-    expect(SAFE_PATH_RE.test(getImplStepFileName(5, 3))).toBe(true);
+  test('each stage has inline executors with system_prompt, preset, model', () => {
+    for (const [, stage] of Object.entries(DEFAULT_V3_CONFIG.stages)) {
+      expect(Array.isArray(stage.executors)).toBe(true);
+      for (const exec of stage.executors) {
+        expect(exec.system_prompt).toBeTruthy();
+        expect(exec.preset).toBeTruthy();
+        expect(exec.model).toBeTruthy();
+      }
+    }
   });
 
-  test('returns impl-step-10-v1.json for step=10', () => {
-    expect(getImplStepFileName(10, 1)).toBe('impl-step-10-v1.json');
+  test('has no top-level executors key', () => {
+    expect((DEFAULT_V3_CONFIG as Record<string, unknown>).executors).toBeUndefined();
   });
 
-  test('throws on non-positive step', () => {
-    expect(() => getImplStepFileName(0, 1)).toThrow('step must be a positive integer');
-    expect(() => getImplStepFileName(-1, 1)).toThrow('step must be a positive integer');
+  test('has max_tdd_iterations', () => {
+    expect(DEFAULT_V3_CONFIG.max_tdd_iterations).toBe(5);
   });
 
-  test('throws on non-integer step', () => {
-    expect(() => getImplStepFileName(1.5, 1)).toThrow('step must be a positive integer');
-  });
-
-  test('throws on non-positive version', () => {
-    expect(() => getImplStepFileName(1, 0)).toThrow('version must be a positive integer');
-    expect(() => getImplStepFileName(1, -1)).toThrow('version must be a positive integer');
+  test('rca last executor is non-parallel (synthesizer)', () => {
+    const rcaExecutors = DEFAULT_V3_CONFIG.stages.rca.executors;
+    expect(rcaExecutors.length).toBeGreaterThan(1);
+    const last = rcaExecutors[rcaExecutors.length - 1];
+    expect(last.parallel).not.toBe(true);
   });
 });
 
-// ─── getPhasedReviewFileName ──────────────────────────────────────────────────
+// ─── validateDevBuddyConfig ─────────────────────────────────────────────────
 
-describe('getPhasedReviewFileName', () => {
-  test('returns correct filename for standard inputs', () => {
-    expect(getPhasedReviewFileName(3, 'anthropic', 'claude-sonnet-4', 1)).toBe(
-      'phased-review-anthropic-claude-sonnet-4-step-3-v1.json'
-    );
+describe('validateDevBuddyConfig', () => {
+  test('accepts valid config', () => {
+    expect(() => validateDevBuddyConfig(DEFAULT_V3_CONFIG)).not.toThrow();
   });
 
-  test('sanitizes uppercase in provider and model', () => {
-    // sanitizeForFilename lowercases input
-    const result = getPhasedReviewFileName(2, 'Anthropic', 'Claude-Sonnet', 1);
-    expect(result).toBe('phased-review-anthropic-claude-sonnet-step-2-v1.json');
+  test('rejects wrong version', () => {
+    const config = { ...DEFAULT_V3_CONFIG, version: '2.0' as '3.0' };
+    expect(() => validateDevBuddyConfig(config)).toThrow(/version/);
   });
 
-  test('sanitizes spaces/underscores to hyphens', () => {
-    const result = getPhasedReviewFileName(1, 'my provider', 'my_model', 1);
-    expect(result).toBe('phased-review-my-provider-my-model-step-1-v1.json');
+  test('rejects missing stage', () => {
+    const stages = { ...DEFAULT_V3_CONFIG.stages };
+    delete (stages as Record<string, unknown>)['requirements'];
+    const config = { ...DEFAULT_V3_CONFIG, stages };
+    expect(() => validateDevBuddyConfig(config)).toThrow(/Missing stage/);
   });
 
-  test('output passes SAFE_PATH_RE', () => {
-    expect(SAFE_PATH_RE.test(getPhasedReviewFileName(3, 'anthropic', 'claude-sonnet-4', 1))).toBe(true);
+  test('rejects executor without system_prompt', () => {
+    const config = structuredClone(DEFAULT_V3_CONFIG);
+    config.stages.planning.executors = [{ system_prompt: '', preset: 'x', model: 'y' }];
+    expect(() => validateDevBuddyConfig(config)).toThrow(/system_prompt/);
   });
 
-  test('follows convention: phased-review-{provider}-{model}-step-{N}-v{version}.json', () => {
-    const result = getPhasedReviewFileName(5, 'mypreset', 'gpt-4o', 2);
-    expect(result).toBe('phased-review-mypreset-gpt-4o-step-5-v2.json');
+  test('rejects rca in feature_pipeline', () => {
+    const config = { ...DEFAULT_V3_CONFIG, feature_pipeline: ['rca' as const, ...DEFAULT_V3_CONFIG.feature_pipeline] };
+    expect(() => validateDevBuddyConfig(config)).toThrow(/rca.*only allowed in bugfix/);
   });
 
-  test('increments version correctly', () => {
-    expect(getPhasedReviewFileName(3, 'anthropic', 'sonnet', 1)).toBe(
-      'phased-review-anthropic-sonnet-step-3-v1.json'
-    );
-    expect(getPhasedReviewFileName(3, 'anthropic', 'sonnet', 2)).toBe(
-      'phased-review-anthropic-sonnet-step-3-v2.json'
-    );
+  test('rejects implementation stage with more than 1 executor', () => {
+    const config = structuredClone(DEFAULT_V3_CONFIG);
+    config.stages.implementation.executors = [
+      { system_prompt: 'implementer', preset: 'anthropic-subscription', model: 'sonnet' },
+      { system_prompt: 'implementer', preset: 'anthropic-subscription', model: 'opus' },
+    ];
+    expect(() => validateDevBuddyConfig(config)).toThrow(/implementation.*maximum 1/);
   });
 
-  test('throws on non-positive step', () => {
-    expect(() => getPhasedReviewFileName(0, 'a', 'b', 1)).toThrow('step must be a positive integer');
+  test('rejects last executor as parallel when multiple executors (synthesizer rule)', () => {
+    const config = structuredClone(DEFAULT_V3_CONFIG);
+    config.stages.planning.executors = [
+      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'sonnet', parallel: true },
+      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'opus', parallel: true },
+    ];
+    expect(() => validateDevBuddyConfig(config)).toThrow(/last executor must be non-parallel/);
   });
 
-  test('throws on non-positive version', () => {
-    expect(() => getPhasedReviewFileName(1, 'a', 'b', 0)).toThrow('version must be a positive integer');
+  test('accepts multiple executors when last is non-parallel', () => {
+    const config = structuredClone(DEFAULT_V3_CONFIG);
+    config.stages.planning.executors = [
+      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'sonnet', parallel: true },
+      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'opus' },
+    ];
+    expect(() => validateDevBuddyConfig(config)).not.toThrow();
+  });
+
+  test('rejects non-boolean parallel value', () => {
+    const config = structuredClone(DEFAULT_V3_CONFIG);
+    config.stages.planning.executors = [
+      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'opus', parallel: 'yes' as unknown as boolean },
+    ];
+    expect(() => validateDevBuddyConfig(config)).toThrow(/parallel must be a boolean/);
+  });
+
+  test('rejects zero executors in active pipeline stage', () => {
+    const config = structuredClone(DEFAULT_V3_CONFIG);
+    config.stages.planning.executors = [];
+    expect(() => validateDevBuddyConfig(config)).toThrow(/must have at least 1 executor/);
   });
 });
 
-// ─── DEFAULT_CONFIG ──────────────────────────────────────────────────────────
+// ─── migrateV2ToV3 ──────────────────────────────────────────────────────────
 
-describe('DEFAULT_CONFIG', () => {
-  test('includes max_phased_iterations: 3', () => {
-    expect(DEFAULT_CONFIG.max_phased_iterations).toBe(3);
-  });
-});
-
-// ─── validateConfig - phased_reviews ─────────────────────────────────────────
-
-describe('validateConfig - phased_reviews', () => {
-  const validPhasedReview = { provider: 'anthropic-subscription', model: 'sonnet' };
-
-  test('rejects phased_reviews on plan-review stage', () => {
-    const config = makeValidConfig({
+describe('migrateV2ToV3', () => {
+  test('converts v2 StageEntry arrays to inline executors', () => {
+    const v2: PipelineConfig = {
       feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus' },
-        { type: 'plan-review', provider: 'p', model: 'sonnet', phased_reviews: [validPhasedReview] } as any,
-        { type: 'implementation', provider: 'p', model: 'sonnet' },
+        { type: 'requirements', provider: 'anthropic-subscription', model: 'opus' },
+        { type: 'planning', provider: 'anthropic-subscription', model: 'opus' },
+        { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
       ],
-    });
-    expect(() => validateConfig(config)).toThrow(/phased_reviews is only allowed on implementation/);
-  });
-
-  test('rejects phased_reviews on code-review stage', () => {
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus' },
-        { type: 'implementation', provider: 'p', model: 'sonnet' },
-        { type: 'code-review', provider: 'p', model: 'sonnet', phased_reviews: [validPhasedReview] } as any,
-      ],
-    });
-    expect(() => validateConfig(config)).toThrow(/phased_reviews is only allowed on implementation/);
-  });
-
-  test('rejects phased_reviews on requirements stage', () => {
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus', phased_reviews: [validPhasedReview] } as any,
-        { type: 'planning', provider: 'p', model: 'opus' },
-        { type: 'implementation', provider: 'p', model: 'sonnet' },
-      ],
-    });
-    expect(() => validateConfig(config)).toThrow(/phased_reviews is only allowed on implementation/);
-  });
-
-  test('rejects phased_reviews on planning stage', () => {
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus', phased_reviews: [validPhasedReview] } as any,
-        { type: 'implementation', provider: 'p', model: 'sonnet' },
-      ],
-    });
-    expect(() => validateConfig(config)).toThrow(/phased_reviews is only allowed on implementation/);
-  });
-
-  test('rejects phased_reviews on rca stage', () => {
-    const config = makeValidConfig({
       bugfix_pipeline: [
-        { type: 'rca', provider: 'p', model: 'sonnet', phased_reviews: [validPhasedReview] } as any,
-        { type: 'implementation', provider: 'p', model: 'sonnet' },
+        { type: 'rca', provider: 'anthropic-subscription', model: 'sonnet' },
+        { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
       ],
-    });
-    expect(() => validateConfig(config)).toThrow(/phased_reviews is only allowed on implementation/);
-  });
+      max_iterations: 10,
+      team_name_pattern: 'test-{BASENAME}-{HASH}',
+    };
 
-  test('accepts phased_reviews on implementation stage with valid entries', () => {
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus' },
-        {
-          type: 'implementation',
-          provider: 'p',
-          model: 'sonnet',
-          phased_reviews: [
-            { provider: 'anthropic-subscription', model: 'sonnet' },
-            { provider: 'my-api', model: 'claude-3.5-sonnet', parallel: true },
-          ],
-        },
-      ],
-    });
-    expect(() => validateConfig(config)).not.toThrow();
-  });
+    const v3 = migrateV2ToV3(v2);
+    expect(v3.version).toBe('3.0');
+    expect((v3 as Record<string, unknown>).executors).toBeUndefined();
 
-  test('accepts empty phased_reviews array on implementation stage', () => {
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus' },
-        { type: 'implementation', provider: 'p', model: 'sonnet', phased_reviews: [] },
-      ],
-    });
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-
-  test('accepts config with phased_reviews omitted (backward compat)', () => {
-    const config = makeValidConfig();
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-
-  test('rejects entry with empty provider string', () => {
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus' },
-        {
-          type: 'implementation',
-          provider: 'p',
-          model: 'sonnet',
-          phased_reviews: [{ provider: '', model: 'sonnet' }],
-        },
-      ],
-    });
-    expect(() => validateConfig(config)).toThrow(/provider must be a non-empty string/);
-  });
-
-  test('rejects entry with model not matching MODEL_NAME_REGEX', () => {
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus' },
-        {
-          type: 'implementation',
-          provider: 'p',
-          model: 'sonnet',
-          phased_reviews: [{ provider: 'p', model: 'model;rm -rf /' }],
-        },
-      ],
-    });
-    expect(() => validateConfig(config)).toThrow(/invalid model name/);
-  });
-
-  test('rejects entry with non-boolean parallel', () => {
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus' },
-        {
-          type: 'implementation',
-          provider: 'p',
-          model: 'sonnet',
-          phased_reviews: [{ provider: 'p', model: 'sonnet', parallel: 'yes' as any }],
-        },
-      ],
-    });
-    expect(() => validateConfig(config)).toThrow(/parallel must be a boolean/);
-  });
-
-  test('rejects array of 11 entries (max 10)', () => {
-    const entries = Array.from({ length: 11 }, () => ({ provider: 'p', model: 'sonnet' }));
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus' },
-        { type: 'implementation', provider: 'p', model: 'sonnet', phased_reviews: entries },
-      ],
-    });
-    expect(() => validateConfig(config)).toThrow(/exceeds maximum of 10/);
-  });
-
-  test('accepts array of 10 valid entries', () => {
-    const entries = Array.from({ length: 10 }, () => ({ provider: 'p', model: 'sonnet' }));
-    const config = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'p', model: 'opus' },
-        { type: 'planning', provider: 'p', model: 'opus' },
-        { type: 'implementation', provider: 'p', model: 'sonnet', phased_reviews: entries },
-      ],
-    });
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-});
-
-// ─── validateConfig - max_phased_iterations ──────────────────────────────────
-
-describe('validateConfig - max_phased_iterations', () => {
-  test('rejects 0 (not positive)', () => {
-    const config = makeValidConfig({ max_phased_iterations: 0 });
-    expect(() => validateConfig(config)).toThrow(/max_phased_iterations must be a positive integer/);
-  });
-
-  test('rejects -1 (negative)', () => {
-    const config = makeValidConfig({ max_phased_iterations: -1 });
-    expect(() => validateConfig(config)).toThrow(/max_phased_iterations must be a positive integer/);
-  });
-
-  test('rejects 3.5 (non-integer)', () => {
-    const config = makeValidConfig({ max_phased_iterations: 3.5 });
-    expect(() => validateConfig(config)).toThrow(/max_phased_iterations must be a positive integer/);
-  });
-
-  test('accepts 1 (minimum valid)', () => {
-    const config = makeValidConfig({ max_phased_iterations: 1 });
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-
-  test('accepts 3 (default value)', () => {
-    const config = makeValidConfig({ max_phased_iterations: 3 });
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-
-  test('accepts undefined (uses resolved default after loadPipelineConfig)', () => {
-    const config = makeValidConfig();
-    // max_phased_iterations not set -> no error from validateConfig
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-});
-
-// ─── validateProviderReferences - phased_reviews ─────────────────────────────
-
-describe('validateProviderReferences - phased_reviews providers collected', () => {
-  const presetsPath = path.join(os.homedir(), '.vcp', 'ai-presets.json');
-  let originalPresets: string | null = null;
-
-  beforeEach(() => {
-    // Back up existing presets if any
-    if (fs.existsSync(presetsPath)) {
-      originalPresets = fs.readFileSync(presetsPath, 'utf-8');
-    } else {
-      originalPresets = null;
-    }
-  });
-
-  afterEach(() => {
-    // Restore original presets
-    if (originalPresets !== null) {
-      fs.writeFileSync(presetsPath, originalPresets, 'utf-8');
-    } else if (fs.existsSync(presetsPath)) {
-      fs.unlinkSync(presetsPath);
-    }
-  });
-
-  function writePresets(presets: Record<string, unknown>) {
-    const vcpDir = path.dirname(presetsPath);
-    fs.mkdirSync(vcpDir, { recursive: true });
-    fs.writeFileSync(presetsPath, JSON.stringify({ presets }), 'utf-8');
-  }
-
-  test('validateProviderReferences collects providers from phased_reviews entries', () => {
-    writePresets({
-      'anthropic-subscription': { type: 'subscription', name: 'Anthropic' },
-      'my-api-preset': {
-        type: 'api',
-        name: 'My API',
-        base_url: 'https://api.example.com',
-        api_key: 'sk-test',
-        models: ['claude-sonnet-4'],
-      },
-    });
-
-    const { validateProviderReferences } = require('../pipeline-config.ts');
-
-    const config: PipelineConfig = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'anthropic-subscription', model: 'opus' },
-        { type: 'planning', provider: 'anthropic-subscription', model: 'opus' },
-        {
-          type: 'implementation',
-          provider: 'anthropic-subscription',
-          model: 'sonnet',
-          phased_reviews: [{ provider: 'my-api-preset', model: 'claude-sonnet-4' }],
-        },
-      ],
-    });
-
-    // Should not throw since 'my-api-preset' exists and has required fields
-    expect(() => validateProviderReferences(config)).not.toThrow();
-  });
-
-  test('reports missing phased_reviews provider in error', () => {
-    writePresets({
-      'anthropic-subscription': { type: 'subscription', name: 'Anthropic' },
-      // 'my-api-preset' intentionally absent
-    });
-
-    const { validateProviderReferences } = require('../pipeline-config.ts');
-
-    const config: PipelineConfig = makeValidConfig({
-      feature_pipeline: [
-        { type: 'requirements', provider: 'anthropic-subscription', model: 'opus' },
-        { type: 'planning', provider: 'anthropic-subscription', model: 'opus' },
-        {
-          type: 'implementation',
-          provider: 'anthropic-subscription',
-          model: 'sonnet',
-          phased_reviews: [{ provider: 'my-api-preset', model: 'claude-sonnet-4' }],
-        },
-      ],
-    });
-
-    expect(() => validateProviderReferences(config)).toThrow(/my-api-preset/);
-  });
-});
-
-// ─── validateConfig - review_interval ────────────────────────────────────────
-
-describe('validateConfig - review_interval', () => {
-  test('rejects 0 (not positive)', () => {
-    const config = makeValidConfig({ review_interval: 0 });
-    expect(() => validateConfig(config)).toThrow(/review_interval must be a positive integer/);
-  });
-
-  test('rejects -1 (negative)', () => {
-    const config = makeValidConfig({ review_interval: -1 });
-    expect(() => validateConfig(config)).toThrow(/review_interval must be a positive integer/);
-  });
-
-  test('rejects 3.5 (non-integer)', () => {
-    const config = makeValidConfig({ review_interval: 3.5 });
-    expect(() => validateConfig(config)).toThrow(/review_interval must be a positive integer/);
-  });
-
-  test('accepts 1 (default value)', () => {
-    const config = makeValidConfig({ review_interval: 1 });
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-
-  test('accepts 3 (typical batch size)', () => {
-    const config = makeValidConfig({ review_interval: 3 });
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-
-  test('accepts undefined (uses resolved default after loadPipelineConfig)', () => {
-    const config = makeValidConfig();
-    // review_interval not set -> no error from validateConfig
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-});
-
-// ─── DEFAULT_CONFIG - review_interval ────────────────────────────────────────
-
-describe('DEFAULT_CONFIG - review_interval', () => {
-  test('does not include review_interval (resolved at load time)', () => {
-    // DEFAULT_CONFIG should not set review_interval — it's resolved in loadPipelineConfig
-    expect(DEFAULT_CONFIG.review_interval).toBeUndefined();
-  });
-});
-
-// ─── getPhasedBatchReviewFileName ────────────────────────────────────────────
-
-describe('getPhasedBatchReviewFileName', () => {
-  test('returns correct filename for steps 1-3', () => {
-    expect(getPhasedBatchReviewFileName(1, 3, 'anthropic-subscription', 'sonnet', 1))
-      .toBe('phased-review-anthropic-subscription-sonnet-steps-1-3-v1.json');
-  });
-
-  test('returns correct filename for single step range', () => {
-    expect(getPhasedBatchReviewFileName(5, 5, 'anthropic-subscription', 'opus', 1))
-      .toBe('phased-review-anthropic-subscription-opus-steps-5-5-v1.json');
-  });
-
-  test('increments version correctly', () => {
-    expect(getPhasedBatchReviewFileName(1, 3, 'anthropic-subscription', 'sonnet', 2))
-      .toBe('phased-review-anthropic-subscription-sonnet-steps-1-3-v2.json');
-  });
-
-  test('sanitizes provider and model names', () => {
-    expect(getPhasedBatchReviewFileName(1, 3, 'My API Preset', 'Claude_Sonnet_4', 1))
-      .toBe('phased-review-my-api-preset-claude-sonnet-4-steps-1-3-v1.json');
-  });
-
-  test('output passes SAFE_PATH_RE', () => {
-    expect(SAFE_PATH_RE.test(getPhasedBatchReviewFileName(1, 3, 'anthropic-subscription', 'sonnet', 1))).toBe(true);
-  });
-
-  test('throws on startStep < 1', () => {
-    expect(() => getPhasedBatchReviewFileName(0, 3, 'a', 'b', 1)).toThrow(/startStep must be a positive integer/);
-  });
-
-  test('throws on endStep < startStep', () => {
-    expect(() => getPhasedBatchReviewFileName(5, 3, 'a', 'b', 1)).toThrow(/endStep.*must be >= startStep/);
-  });
-
-  test('throws on version < 1', () => {
-    expect(() => getPhasedBatchReviewFileName(1, 3, 'a', 'b', 0)).toThrow(/version must be a positive integer/);
-  });
-
-  test('throws on non-integer startStep', () => {
-    expect(() => getPhasedBatchReviewFileName(1.5, 3, 'a', 'b', 1)).toThrow(/startStep must be a positive integer/);
-  });
-
-  test('throws on non-integer endStep', () => {
-    expect(() => getPhasedBatchReviewFileName(1, 3.5, 'a', 'b', 1)).toThrow(/endStep must be a positive integer/);
-  });
-});
-
-// ─── getPhasedReviewFileName - backward compat ───────────────────────────────
-
-describe('getPhasedReviewFileName - backward compat', () => {
-  test('still produces single-step filename (not affected by batch helper)', () => {
-    expect(getPhasedReviewFileName(3, 'anthropic-subscription', 'sonnet', 1))
-      .toBe('phased-review-anthropic-subscription-sonnet-step-3-v1.json');
+    // Check inline executors
+    expect(v3.stages.planning.executors[0].system_prompt).toBe('planner');
+    expect(v3.stages.planning.executors[0].preset).toBe('anthropic-subscription');
+    expect(v3.stages.planning.executors[0].model).toBe('opus');
   });
 });

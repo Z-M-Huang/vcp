@@ -1,8 +1,5 @@
 /**
- * Shared pipeline utilities — single source of truth for phase detection.
- *
- * Both orchestrator.ts and guidance-hook.ts import from here,
- * eliminating the duplicated determinePhase logic.
+ * Shared pipeline utilities — phase detection and artifact discovery.
  */
 
 import fs from 'fs';

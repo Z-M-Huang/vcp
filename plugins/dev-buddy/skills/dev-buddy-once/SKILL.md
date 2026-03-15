@@ -122,7 +122,7 @@ The script:
 
 **Prerequisite:** The CLI preset must have a `one_shot_args_template` configured. This template uses only `{model}`, `{prompt}`, and `{reasoning_effort}` placeholders (no `{output_file}` or `{schema_path}` — those are pipeline-only).
 
-If the preset does not have `one_shot_args_template`, report the error to the user and suggest configuring it via `/dev-buddy-config` or `/dev-buddy-manage-presets`.
+If the preset does not have `one_shot_args_template`, report the error to the user and suggest configuring it via `/dev-buddy-config` or `/dev-buddy-config`.
 
 Run the one-shot runner script:
 
@@ -185,7 +185,7 @@ Report what went wrong (session failure, CLI not installed, auth error).
 {"event": "error", "phase": "api_execution|cli_execution", "error": "..."}
 ```
 
-Report that the task timed out. Suggest increasing `timeout_ms` on the preset via `/dev-buddy-manage-presets`.
+Report that the task timed out. Suggest increasing `timeout_ms` on the preset via `/dev-buddy-config`.
 
 ---
 
@@ -193,10 +193,10 @@ Report that the task timed out. Suggest increasing `timeout_ms` on the preset vi
 
 | Scenario | Action |
 |----------|--------|
-| Preset not found | List available presets, suggest `/dev-buddy-manage-presets list` |
+| Preset not found | List available presets, suggest `/dev-buddy-config list` |
 | Model not in preset | List preset's available models |
 | Multiple preset matches | AskUserQuestion with matching names |
-| CLI preset missing `one_shot_args_template` | Report error, suggest `/dev-buddy-config` or `/dev-buddy-manage-presets` to add it |
+| CLI preset missing `one_shot_args_template` | Report error, suggest `/dev-buddy-config` or `/dev-buddy-config` to add it |
 | CLI tool not installed | Report error, suggest installing the tool |
 | API task runner fails | Report error from script output |
 | Task times out | Report timeout, suggest increasing `timeout_ms` |

@@ -33,6 +33,7 @@ if (err) { console.error('CONFIG ERROR: ' + err); process.exit(1); }
 console.log(JSON.stringify({
   participants: config.participants.map((p, i) => ({
     index: i,
+    system_prompt: p.system_prompt || '',
     preset: p.preset,
     model: p.model,
     type: presets.presets[p.preset]?.type || 'unknown',
@@ -95,6 +96,20 @@ bun -e "console.log('VCPTASK_' + require('crypto').randomBytes(4).toString('hex'
 ```
 Store result as `{DELIM}` (e.g., `VCPTASK_a3f7b2c1`).
 
+### 2a-bis. Resolve participant system prompts
+
+For each participant that has a non-empty `system_prompt` field, resolve the content:
+
+```bash
+bun -e "
+import { getSystemPrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
+const prompt = getSystemPrompt('{SYSTEM_PROMPT}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
+console.log(prompt ? prompt.content : '');
+"
+```
+
+Store the resolved content for each participant. If the result is empty or the command fails, skip — the participant uses default behavior (no system prompt prepended).
+
 ### 2b. Dispatch ALL participants in parallel
 
 For each participant at index `{i}`:
@@ -102,6 +117,22 @@ For each participant at index `{i}`:
 **Output ID:** `cr-{SESSION_ID}-p{i}-r1`
 
 **Opening prompt template:**
+
+If the participant has resolved `system_prompt` content (from Step 2a-bis), prepend it before the debate prompt:
+```
+{system_prompt_content}
+---
+You are participating in a multi-AI debate on the following topic.
+
+TOPIC:
+{user_topic}
+
+Provide your analysis, recommendations, and reasoning. Be specific and concrete.
+
+IMPORTANT: ONLY read and analyze. Do NOT modify any files. Do NOT use Write, Edit, or Bash tools to change anything.
+```
+
+If the participant has no `system_prompt` (empty or unresolved), use the prompt without the prefix:
 ```
 You are participating in a multi-AI debate on the following topic.
 
@@ -207,6 +238,33 @@ Read ALL collected responses (Claude's own + all external participants).
 Generate a new heredoc delimiter (same method as Step 2a).
 
 **Consensus check prompt template:**
+
+If the participant has resolved `system_prompt` content (from Step 2a-bis), prepend it before the consensus check prompt:
+```
+{system_prompt_content}
+---
+MULTI-AI DEBATE — Round {N} Consensus Check
+
+ORIGINAL TOPIC:
+{user_topic}
+
+DEBATE HISTORY SUMMARY:
+{summary_of_positions_from_all_rounds}
+
+CURRENT SYNTHESIS:
+{claude_synthesis}
+
+Do you agree with this synthesis? Respond with one of:
+- AGREE — if you accept this approach
+- DISAGREE: <your specific objection and alternative> — if you reject it
+- PARTIAL: <what you accept> / <what you contest> — if you partially agree
+
+Then explain your reasoning.
+
+IMPORTANT: ONLY read and analyze. Do NOT modify any files.
+```
+
+If the participant has no `system_prompt` (empty or unresolved), use the prompt without the prefix:
 ```
 MULTI-AI DEBATE — Round {N} Consensus Check
 

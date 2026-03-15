@@ -198,6 +198,43 @@ describe('validateChatroomConfig', () => {
     const err = validateChatroomConfig(config, presets);
     expect(err).toContain('invalid characters');
   });
+
+  test('accepts participant with valid system_prompt', () => {
+    const config = {
+      participants: [{ system_prompt: 'planner', preset: 'anthropic-subscription', model: 'sonnet' }],
+      max_rounds: 3,
+    };
+    const err = validateChatroomConfig(config, presets);
+    expect(err).toBeNull();
+  });
+
+  test('accepts participant with empty system_prompt', () => {
+    const config = {
+      participants: [{ system_prompt: '', preset: 'anthropic-subscription', model: 'sonnet' }],
+      max_rounds: 3,
+    };
+    const err = validateChatroomConfig(config, presets);
+    expect(err).toBeNull();
+  });
+
+  test('accepts participant without system_prompt field', () => {
+    const config = {
+      participants: [{ preset: 'anthropic-subscription', model: 'sonnet' }],
+      max_rounds: 3,
+    };
+    const err = validateChatroomConfig(config, presets);
+    expect(err).toBeNull();
+  });
+
+  test('rejects participant with non-existent system_prompt', () => {
+    const config = {
+      participants: [{ system_prompt: 'does-not-exist', preset: 'anthropic-subscription', model: 'sonnet' }],
+      max_rounds: 3,
+    };
+    const err = validateChatroomConfig(config, presets);
+    expect(err).toContain('system_prompt');
+    expect(err).toContain('not found');
+  });
 });
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -219,7 +256,8 @@ describe('constants', () => {
   test('ALLOWED_PARTICIPANT_FIELDS contains expected fields', () => {
     expect(ALLOWED_PARTICIPANT_FIELDS.has('preset')).toBe(true);
     expect(ALLOWED_PARTICIPANT_FIELDS.has('model')).toBe(true);
-    expect(ALLOWED_PARTICIPANT_FIELDS.size).toBe(2);
+    expect(ALLOWED_PARTICIPANT_FIELDS.has('system_prompt')).toBe(true);
+    expect(ALLOWED_PARTICIPANT_FIELDS.size).toBe(3);
   });
 });
 

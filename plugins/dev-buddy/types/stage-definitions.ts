@@ -27,12 +27,20 @@ export interface StageDefinition {
   /** The agent type key used to spawn this stage. */
   agent_type: string;
   /**
-   * Output file name pattern.
+   * Output file name pattern (v2 format).
    * Singletons: exact file name (e.g. 'user-story.json').
    * Multi-instance: pattern with {provider}, {model}, {index}, and {version} placeholders
    * (e.g. 'plan-review-{provider}-{model}-{index}-v{version}.json').
    */
   output_file_pattern: string;
+  /**
+   * v3 output file name pattern including {system_prompt} for traceability.
+   * Only present on multi-instance stages.
+   * Format: '{stage}-{system_prompt}-{provider}-{model}-{index}-v{version}.json'
+   */
+  v3_output_file_pattern?: string;
+  /** Maximum number of executors allowed for this stage. undefined = unlimited. */
+  max_executors?: number;
 }
 
 // ─── Stage Registry ───────────────────────────────────────────────────────────
@@ -44,13 +52,13 @@ export interface StageDefinition {
 export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
   requirements: {
     singleton: true,
-    allowed_pipelines: ['feature'],
+    allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'requirements-gatherer',
     output_file_pattern: 'user-story/manifest.json',
   },
   planning: {
     singleton: true,
-    allowed_pipelines: ['feature'],
+    allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'planner',
     output_file_pattern: 'plan/manifest.json',
   },
@@ -59,24 +67,29 @@ export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
     allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'plan-reviewer',
     output_file_pattern: 'plan-review-{provider}-{model}-{index}-v{version}.json',
+    /** v3 output pattern includes system prompt name for traceability. */
+    v3_output_file_pattern: 'plan-review-{system_prompt}-{provider}-{model}-{index}-v{version}.json',
   },
   implementation: {
     singleton: true,
     allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'implementer',
     output_file_pattern: 'impl-result.json',
+    max_executors: 1,
   },
   'code-review': {
     singleton: false,
     allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'code-reviewer',
     output_file_pattern: 'code-review-{provider}-{model}-{index}-v{version}.json',
+    v3_output_file_pattern: 'code-review-{system_prompt}-{provider}-{model}-{index}-v{version}.json',
   },
   rca: {
     singleton: false,
     allowed_pipelines: ['bugfix'],
     agent_type: 'root-cause-analyst',
     output_file_pattern: 'rca-{provider}-{model}-{index}-v{version}.json',
+    v3_output_file_pattern: 'rca-{system_prompt}-{provider}-{model}-{index}-v{version}.json',
   },
 };
 
@@ -124,6 +137,38 @@ export function getOutputFileName(
     return def.output_file_pattern;
   }
   return def.output_file_pattern
+    .replace('{index}', String(index))
+    .replace('{provider}', sanitizeForFilename(provider))
+    .replace('{model}', sanitizeForFilename(model))
+    .replace('{version}', String(version));
+}
+
+/**
+ * Compute the output file name for a v3 stage entry (includes executor name).
+ * Falls back to v2 pattern if no v3 pattern defined (singletons).
+ *
+ * @param type - The stage type.
+ * @param systemPromptName - The system prompt name (for traceability in filename).
+ * @param index - The 1-based index (ignored for singletons).
+ * @param provider - The provider/preset name (sanitized).
+ * @param model - The model name (sanitized).
+ * @param version - The version number (starts at 1).
+ */
+export function getV3OutputFileName(
+  type: StageType,
+  systemPromptName: string,
+  index: number,
+  provider: string,
+  model: string,
+  version: number,
+): string {
+  const def = STAGE_DEFINITIONS[type];
+  if (def.singleton) {
+    return def.output_file_pattern;
+  }
+  const pattern = def.v3_output_file_pattern ?? def.output_file_pattern;
+  return pattern
+    .replace('{system_prompt}', sanitizeForFilename(systemPromptName))
     .replace('{index}', String(index))
     .replace('{provider}', sanitizeForFilename(provider))
     .replace('{model}', sanitizeForFilename(model))

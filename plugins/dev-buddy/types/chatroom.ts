@@ -5,6 +5,8 @@
  */
 
 export interface ChatroomParticipant {
+  /** Optional system prompt for participant persona (e.g., 'code-reviewer', 'planner'). If omitted, uses general-purpose behavior. */
+  system_prompt?: string;
   preset: string;
   model: string;
 }
