@@ -72,3 +72,22 @@ Task(
 The `--preset` flag selects the CLI preset from `~/.vcp/ai-presets.json`. The preset's `args_template` contains placeholders (`{model}`, `{output_file}`, `{prompt}`, `{schema_path}`) that the executor substitutes at runtime.
 
 Do NOT pass model parameter to Task tool. Model is passed via --model flag to cli-executor.ts.
+
+### Stage Type Auto-Resolution
+
+The `--stage-type` flag enables auto-resolution of stage definitions from `stages/{type}.md`. When passed, the runner loads the stage definition markdown and prepends it to the system prompt content. Combine with `--system-prompt` to inject a role prompt file — the runner composes `stage + role` into the system prompt layer. Example:
+
+```bash
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/api-task-runner.ts" \
+  --preset "<stage.provider>" \
+  --model "<stage.model>" \
+  --stage-type "<stage.type>" \
+  --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/<role>.md" \
+  --cwd "${CLAUDE_PROJECT_DIR}" \
+  --task-timeout "<timeout_ms>" \
+  --task-stdin <<'TASK_EOF'
+...prompt...
+TASK_EOF
+```
+
+When `--stage-type` is provided, the runner auto-resolves the stage definition from `stages/`. The `--system-prompt` flag provides the role prompt content. Together they compose `stage_definition + role_prompt` as the session's system prompt. If `--system-prompt` is omitted, only the stage definition is used (no role perspective).

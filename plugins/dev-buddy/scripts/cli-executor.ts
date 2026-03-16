@@ -79,6 +79,8 @@ interface ParsedArgs {
   changesSummary: string | null;
   outputFile: string | null;
   model: string | null;
+  /** Stage type for auto-resolving stage definition (e.g., 'plan-review', 'code-review'). */
+  stageType: string | null;
 }
 
 /** Regex for valid model names — alphanumeric, dots, hyphens, underscores only. */
@@ -86,7 +88,7 @@ const MODEL_NAME_REGEX = /^[a-zA-Z0-9._-]+$/;
 
 function parseArgs(): ParsedArgs {
   const args = process.argv.slice(2);
-  const result: ParsedArgs = { type: null, pluginRoot: null, preset: null, forceResume: false, changesSummary: null, outputFile: null, model: null };
+  const result: ParsedArgs = { type: null, pluginRoot: null, preset: null, forceResume: false, changesSummary: null, outputFile: null, model: null, stageType: null };
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--type' && args[i + 1]) {
@@ -108,6 +110,9 @@ function parseArgs(): ParsedArgs {
       i++;
     } else if (args[i] === '--model' && args[i + 1]) {
       result.model = args[i + 1];
+      i++;
+    } else if (args[i] === '--stage-type' && args[i + 1]) {
+      result.stageType = args[i + 1];
       i++;
     }
   }
@@ -288,8 +293,21 @@ interface CmdConfig {
   args: string[];
 }
 
-/** Build the review prompt based on review type and context. */
+/** Build the review prompt based on review type and context.
+ *  When --stage-type is provided, prepends the stage definition content. */
 function buildReviewPrompt(args: ParsedArgs, isResume: boolean): string {
+  // Auto-resolve stage definition if --stage-type provided (fail-closed)
+  let stagePrefix = '';
+  if (args.stageType && args.pluginRoot) {
+    const { loadStageDefinition } = require('./system-prompts.ts');
+    const stagesDir = path.join(args.pluginRoot, 'stages');
+    const stageDef = loadStageDefinition(args.stageType, stagesDir);
+    if (!stageDef) {
+      throw new Error(`Stage definition not found for type '${args.stageType}' in ${stagesDir}`);
+    }
+    stagePrefix = stageDef.content + '\n\n---\n\n';
+  }
+
   // Multi-file artifact paths with legacy fallback
   const planInput = fileExists('.vcp/task/plan/manifest.json')
     ? '.vcp/task/plan/manifest.json (read manifest, then step files from sections.steps[])'
@@ -307,14 +325,14 @@ function buildReviewPrompt(args: ParsedArgs, isResume: boolean): string {
   const readFilesFirst = `IMPORTANT: You MUST use your shell tools to read ALL referenced files BEFORE producing your review output. Do NOT output the review JSON until you have read and analyzed every file. Read the files first, then produce your final structured review. Also read ${guidelinesPath} for the full review rubric and severity definitions.`;
 
   if (isResume && args.changesSummary) {
-    return `${readFilesFirst}\n\nRe-review after fixes. Changes made:\n${args.changesSummary}\n\nVerify fixes address previous concerns. Check against ${guidelinesPath}.${userStoryRef}`;
+    return `${stagePrefix}${readFilesFirst}\n\nRe-review after fixes. Changes made:\n${args.changesSummary}\n\nVerify fixes address previous concerns. Check against ${guidelinesPath}.${userStoryRef}`;
   } else if (isResume) {
-    return `${readFilesFirst}\n\nRe-review ${inputFile}. Previous concerns should be addressed. Verify against ${guidelinesPath}.${userStoryRef}`;
+    return `${stagePrefix}${readFilesFirst}\n\nRe-review ${inputFile}. Previous concerns should be addressed. Verify against ${guidelinesPath}.${userStoryRef}`;
   } else {
     const criteriaInstruction = args.type === 'plan'
       ? 'Map each acceptance criterion to plan steps.'
       : 'Verify implementation evidence for each acceptance criterion.';
-    return `${readFilesFirst}\n\nReview ${inputFile} against ${guidelinesPath}.${userStoryRef} Final gate review for ${args.type === 'plan' ? 'plan approval' : 'code quality'}. ${criteriaInstruction} Only set needs_clarification if you have a genuine question for the user after reading the files — NOT because you have not read them yet.`;
+    return `${stagePrefix}${readFilesFirst}\n\nReview ${inputFile} against ${guidelinesPath}.${userStoryRef} Final gate review for ${args.type === 'plan' ? 'plan approval' : 'code quality'}. ${criteriaInstruction} Only set needs_clarification if you have a genuine question for the user after reading the files — NOT because you have not read them yet.`;
   }
 }
 

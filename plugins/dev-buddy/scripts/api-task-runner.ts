@@ -677,6 +677,8 @@ export interface ParsedArgs {
   taskFromStdin: boolean;
   /** Optional path to a file whose content is appended to the system prompt. */
   systemPrompt?: string;
+  /** Stage type for auto-resolving stage definition (e.g., 'plan-review', 'code-review'). */
+  stageType?: string;
   /** When true, print result text to stdout instead of JSON wrapper. For one-shot mode. */
   stream: boolean;
 }
@@ -723,6 +725,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case '--system-prompt':
         if (!next) throw new Error('--system-prompt requires a value');
         result.systemPrompt = next;
+        i++;
+        break;
+      case '--stage-type':
+        if (!next) throw new Error('--stage-type requires a value');
+        result.stageType = next;
         i++;
         break;
       case '--stream':
@@ -792,12 +799,13 @@ async function main(): Promise<void> {
   let systemPromptContent: string | undefined;
   if (args.systemPrompt) {
     try {
-      // Path validation: must resolve under plugin's docs/ directory (CWE-22)
-      const docsDir = path.resolve(path.join(import.meta.dir, '..', 'docs'));
+      // Path validation: must resolve under plugin root directory (CWE-22)
+      // Allows docs/, system-prompts/, and stages/ subdirectories
+      const pluginRoot = path.resolve(path.join(import.meta.dir, '..'));
       const resolved = path.resolve(args.systemPrompt);
-      const relative = path.relative(docsDir, resolved);
+      const relative = path.relative(pluginRoot, resolved);
       if (relative.startsWith('..') || path.isAbsolute(relative)) {
-        emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt path must be under plugin docs/ directory. Got: ${args.systemPrompt}` }, 1);
+        emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt path must be under plugin directory. Got: ${args.systemPrompt}` }, 1);
       }
       systemPromptContent = fs.readFileSync(resolved, 'utf-8');
       if (!systemPromptContent.trim()) {
@@ -810,6 +818,21 @@ async function main(): Promise<void> {
       // Re-throw if not already handled by emitAndExit (which calls process.exit)
       throw err;
     }
+  }
+
+  // Auto-resolve stage definition and compose with system prompt if --stage-type provided
+  if (args.stageType) {
+    const { loadStageDefinition, composePrompt } = await import('./system-prompts.ts');
+    const stagesDir = path.join(import.meta.dir, '..', 'stages');
+    const stageDef = loadStageDefinition(args.stageType, stagesDir);
+    if (!stageDef) {
+      emitAndExit({ event: 'error', phase: 'validation', error: `Stage definition not found for type '${args.stageType}' in ${stagesDir}` }, 1);
+    }
+    // Compose: stage definition content + existing system prompt content (role/guidelines)
+    const roleContent = systemPromptContent ?? '';
+    systemPromptContent = roleContent
+      ? `${stageDef!.content}\n\n---\n\n${roleContent}`
+      : stageDef!.content;
   }
 
   // Load preset — no session yet, emitAndExit is safe

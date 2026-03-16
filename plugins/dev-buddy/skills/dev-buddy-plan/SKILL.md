@@ -96,20 +96,23 @@ Write output to .vcp/task/plan/ using the multi-file format (meta.json, steps/{N
 
 ## Step 4: Dispatch Executors
 
-**Resolve system prompt:** Read the system prompt content for this executor via `system-prompts.ts`:
+**Resolve system prompt with stage/role composition.** Compose the `planning` stage definition with the executor's role prompt:
 ```bash
 bun -e "
-import { getSystemPrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
-const prompt = getSystemPrompt('{executor.system_prompt}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
-console.log(prompt ? prompt.content : '');
+import { loadStageDefinition, getSystemPrompt, composePrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
+const stage = loadStageDefinition('planning', '${CLAUDE_PLUGIN_ROOT}/stages');
+const role = getSystemPrompt('{executor.system_prompt}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
+if (!stage) { console.error('FATAL: Stage definition not found for planning'); process.exit(1); }
+if (!role) { console.error('FATAL: Role prompt not found: {executor.system_prompt}'); process.exit(1); }
+console.log(composePrompt(stage, role));
 "
 ```
 
-Route each executor by provider type:
+Use the composed output as the system prompt content, then route each executor by provider type:
 
-- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<system_prompt_content>\n---\n<assembled task prompt>")`
-- **api:** `Bash(run_in_background: true)` → `api-task-runner.ts --preset <preset> --model <model> --task-stdin` → `TaskOutput(timeout: min(timeout_ms + 120000, 600000))`
-- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun '${CLAUDE_PLUGIN_ROOT}/scripts/cli-executor.ts' ...")`
+- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed_prompt>\n---\n<assembled task prompt>")`
+- **api:** `Bash(run_in_background: true)` → `api-task-runner.ts --preset <preset> --model <model> --stage-type planning --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md" --task-stdin` → `TaskOutput(timeout: min(timeout_ms + 120000, 600000))`
+- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun '${CLAUDE_PLUGIN_ROOT}/scripts/cli-executor.ts' --stage-type planning ...")`
 
 **Single executor (common case):** Route directly — write to `.vcp/task/plan/`. No variant indirection.
 

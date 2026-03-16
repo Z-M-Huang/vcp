@@ -100,7 +100,7 @@ VCP ships three complementary plugins:
 | Plugin | What It Does | Install |
 |--------|-------------|---------|
 | **VCP** | Standards enforcement — 41 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
-| **Dev Buddy** | Multi-AI pipeline — configurable stages, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
+| **Dev Buddy** | Multi-AI pipeline — configurable stages with role-based prompts, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
 | **mcp-doc** | Documentation manifest generator — indexes project docs as MCP resources with search, path-lookup, and tree-view tools | `/install vcp@mcp-doc` |
 
 Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.
@@ -196,6 +196,8 @@ Their findings inform requirements gathering — producing richer, more complete
 ### Configurable Pipeline
 
 The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. Each stage specifies a type, provider, and model. Add, remove, or reorder stages. Swap AI providers per stage — API presets support both **Anthropic-compatible** and **OpenAI-compatible** endpoints via the `protocol` field. Use the web portal (`/dev-buddy-config`) or edit JSON directly.
+
+Each executor combines a **stage definition** (output format, process rules — bound to the stage type) with a **role prompt** (persona, expertise — swappable). Stage definitions auto-resolve from the stage type, ensuring consistent output schemas regardless of which role prompt is used.
 
 <details>
 <summary><strong>Example: feature pipeline with Codex final gates</strong> — click to expand</summary>

@@ -16,7 +16,7 @@ VCP enforces standards through three layers:
 ### Plugin Structure
 
 - `plugins/vcp/` — VCP plugin with 10 skills, 1 agent, and 4 hooks
-- `plugins/dev-buddy/` — Dev Buddy plugin with 8 skills and 7 built-in system prompts. Uses executor-based architecture: System Prompts + Presets = Executors, assigned to Stages. Stage skills (plan, review, implement, requirements, rca) dispatch executors via `general-purpose` subagent with embedded system prompts. Config format v3 (`~/.vcp/dev-buddy.json`) with auto-migration from v2.
+- `plugins/dev-buddy/` — Dev Buddy plugin with 8 skills, 6 stage definitions, and 6 role prompts. Uses executor-based architecture: Stage Definitions + Role Prompts + Presets = Executors, assigned to Stages. Stage skills (plan, review, implement, requirements, rca) dispatch executors via `general-purpose` subagent with embedded system prompts. Config format v3 (`~/.vcp/dev-buddy.json`) with auto-migration from v2.
 - `plugins/mcp-doc/` — MCP Doc plugin with 5 skills. Documentation manifest generator for git-doc-mcp — indexes project docs as MCP resources with embedded search, path-lookup, and tree-view tools
 - Skills fetch standards from `standards/manifest.json` at runtime via WebFetch (always latest from main)
 - `.vcp/config.json` in project root configures scopes, compliance frameworks, severity threshold, and CWE ignore list

@@ -356,3 +356,14 @@ Each reviewer has primary focus areas while still checking all items:
 | API Design | Input validation | Response consistency | Overall |
 | Backward Compat | - | Breaking changes | Migration |
 | Testing | Tests exist | Test quality | Coverage |
+
+---
+
+## Output Schema Reminder
+
+Your output MUST conform to the review schema. Common violations that cause rejection:
+- Missing fields: id, reviewer, model, revision_number, reviewed_at, requirements_coverage (plan review) / acceptance_criteria_verification (code review)
+- Invalid status values: ONLY approved, needs_changes, needs_clarification, rejected
+- Invalid fix_type values: ONLY must_fix, advisory
+- Wrong field names: use `suggestion` not `recommendation`
+- summary must be a string, not an object

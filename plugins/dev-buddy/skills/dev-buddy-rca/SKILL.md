@@ -79,11 +79,23 @@ console.log(getV3OutputFileName('rca', '{executor-name}', {index}, '{preset}', '
 
 ## Step 4: Dispatch Executors
 
-**Resolve system prompt** for each executor via `system-prompts.ts`, then route by provider type:
+**Resolve system prompt with stage/role composition.** Compose the `rca` stage definition with the executor's role prompt:
+```bash
+bun -e "
+import { loadStageDefinition, getSystemPrompt, composePrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
+const stage = loadStageDefinition('rca', '${CLAUDE_PLUGIN_ROOT}/stages');
+const role = getSystemPrompt('{executor.system_prompt}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
+if (!stage) { console.error('FATAL: Stage definition not found for rca'); process.exit(1); }
+if (!role) { console.error('FATAL: Role prompt not found: {executor.system_prompt}'); process.exit(1); }
+console.log(composePrompt(stage, role));
+"
+```
 
-- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<system_prompt_content>\n---\n<assembled RCA prompt>")`
-- **api:** `Bash(run_in_background: true)` → `api-task-runner.ts`
-- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun cli-executor.ts ...")`
+Use the composed output as the system prompt content, then route by provider type:
+
+- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed_prompt>\n---\n<assembled RCA prompt>")`
+- **api:** `Bash(run_in_background: true)` → `api-task-runner.ts --stage-type rca --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md"`
+- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun cli-executor.ts --stage-type rca ...")`
 
 Group adjacent `parallel: true` executors → dispatch simultaneously. Sequential executors → dispatch one at a time.
 

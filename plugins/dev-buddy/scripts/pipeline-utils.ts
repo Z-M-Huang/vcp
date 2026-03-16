@@ -463,8 +463,14 @@ export function determinePhase(progress: PipelineProgress): PhaseResult {
           message: '**Phase: Implementation Failed**\nCheck impl-result.json for failure details.'
         };
       }
-      // 'complete' — continue to next stage
-      continue;
+      if (implStatus === 'complete') {
+        continue;
+      }
+      // Unknown implementation status — don't silently treat as complete
+      return {
+        phase: 'implementation_unknown',
+        message: `**Phase: Implementation Unknown Status**\nimpl-result.json has unexpected status '${implStatus}'. Expected: complete, partial, or failed.`
+      };
     }
 
     // Review stages (plan-review, code-review): check stageOutputs
@@ -502,7 +508,14 @@ export function determinePhase(progress: PipelineProgress): PhaseResult {
         message: `**Phase: ${stageType === 'plan-review' ? 'Plan' : 'Code'} Rejected**\nStage ${stageType} ${typeIndex} rejected. Major rework required.`
       };
     }
-    // 'approved' — continue to next stage
+    if (status === 'approved') {
+      continue;
+    }
+    // Unknown status — don't silently treat as approved
+    return {
+      phase: `invalid_${stageType.replace('-', '_')}_${typeIndex}`,
+      message: `**Phase: Invalid Review Output**\nStage ${stageType} ${typeIndex} has invalid status '${status}'. Expected: approved, needs_changes, needs_clarification, rejected. Re-run the review executor.`
+    };
   }
 
   // All stages have approved status

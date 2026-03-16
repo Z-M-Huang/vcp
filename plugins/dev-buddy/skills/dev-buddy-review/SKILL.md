@@ -121,11 +121,24 @@ console.log(getV3OutputFileName('{stage-type}', '{executor-name}', {index}, '{pr
 "
 ```
 
-**Resolve system prompt** for each executor via `system-prompts.ts`, then route by provider type:
+**Resolve system prompt with stage/role composition** for each executor. The stage type depends on the review type: `plan-review` (for `--plan`) or `code-review` (for `--code`).
 
-- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<system_prompt_content>\n---\n<assembled review prompt>")`
-- **api:** `Bash(run_in_background: true)` → `api-task-runner.ts` with `--system-prompt "${CLAUDE_PLUGIN_ROOT}/docs/review-guidelines.md"`
-- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun cli-executor.ts ...")` — pass `--changes-summary` with the reviewer identity and revision_number so the CLI prompt includes them
+**For subscription dispatches**, compose the stage definition and role prompt into a single system prompt:
+```bash
+bun -e "
+import { loadStageDefinition, getSystemPrompt, composePrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
+const stage = loadStageDefinition('{plan-review|code-review}', '${CLAUDE_PLUGIN_ROOT}/stages');
+const role = getSystemPrompt('{executor.system_prompt}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
+if (!stage) { console.error('FATAL: Stage definition not found for {plan-review|code-review}'); process.exit(1); }
+if (!role) { console.error('FATAL: Role prompt not found: {executor.system_prompt}'); process.exit(1); }
+console.log(composePrompt(stage, role));
+"
+```
+Use the composed output as the system prompt content in the Task dispatch:
+
+- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed_prompt>\n---\n<assembled review prompt>")`
+- **api:** `Bash(run_in_background: true)` → `api-task-runner.ts` with `--stage-type {plan-review|code-review} --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md"` (stage definition auto-resolved via --stage-type, role prompt via --system-prompt)
+- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun cli-executor.ts --stage-type {plan-review|code-review} ...")` — pass `--changes-summary` with the reviewer identity and revision_number so the CLI prompt includes them
 
 - Group adjacent `parallel: true` executors → dispatch simultaneously, wait for all
 - Sequential executors → dispatch one at a time, wait for each

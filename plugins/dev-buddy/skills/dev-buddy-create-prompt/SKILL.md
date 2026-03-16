@@ -43,32 +43,24 @@ If the user chose a category (not "custom"), offer to show a relevant built-in p
 
 ---
 
-## Step 3: Determine Tools
+## Step 3: Tools (Role-Only Prompts)
 
-Based on the prompt type, suggest appropriate tools:
+**Custom system prompts are role/perspective definitions only.** Stage rules (output format, process, completion requirements) and tool permissions are provided automatically by stage definitions at dispatch time. Custom prompts should NOT include tools, output format, or completion requirements.
 
-| Type | Recommended Tools | Rationale |
-|------|------------------|-----------|
-| Reviewer | Read, Glob, Grep, LSP | Read-only analysis, no code modification |
-| Planner | Read, Write, Glob, Grep, LSP | Needs to write plan files |
-| Analyst | Read, Glob, Grep, Bash, LSP | Needs Bash for diagnostic commands |
-| Implementer | Read, Write, Edit, Glob, Grep, Bash, LSP | Full code modification access |
-| Custom | Ask user | User defines |
-
-Ask the user to confirm or adjust the tool list.
+Leave `tools` empty in the frontmatter — the stage definition provides the tool list at runtime.
 
 ---
 
 ## Step 4: Help Write the System Prompt Content
 
-Based on the user's purpose, help them write the system prompt body. Include:
+Based on the user's purpose, help them write the system prompt body. Role prompts define the **perspective and expertise** the agent brings — NOT the output format or process (those come from stage definitions).
+
+Include:
 
 1. **Role definition** — "You are a [role] with expertise in [area]."
 2. **Core competencies** — 3-5 bullet points of what this agent excels at
-3. **Process/workflow** — step-by-step instructions for the agent
-4. **Output format** — what the agent should produce (JSON structure, file format, etc.)
-5. **Anti-patterns** — what the agent should NOT do
-6. **Completion requirements** — what must be true before the agent finishes
+
+Do NOT include output format, process/workflow, or completion requirements — those are provided by the stage definition at dispatch time.
 
 Present the draft to the user for review. Iterate if they want changes.
 

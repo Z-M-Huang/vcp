@@ -79,8 +79,21 @@ For each plan step N = 1 to step_count:
         {If iteration > 0: "Previous attempt FAILED. Test failures:\n{failure_output}\nFix the issues."}
         Write implementation result to .vcp/task/impl-steps/impl-step-{N}-v{iteration+1}.json
 
-    3b. Dispatch implementer via provider routing
-        (subscription: Task, api: api-task-runner.ts, cli: cli-executor.ts)
+    3b. Resolve system prompt with stage/role composition for the `implementation` stage:
+        ```bash
+        bun -e "
+        import { loadStageDefinition, getSystemPrompt, composePrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
+        const stage = loadStageDefinition('implementation', '${CLAUDE_PLUGIN_ROOT}/stages');
+        const role = getSystemPrompt('{executor.system_prompt}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
+        if (!stage) { console.error('FATAL: Stage definition not found for implementation'); process.exit(1); }
+        if (!role) { console.error('FATAL: Role prompt not found: {executor.system_prompt}'); process.exit(1); }
+        console.log(composePrompt(stage, role));
+        "
+        ```
+        Dispatch via provider routing using composed prompt:
+        - subscription: Task with composed prompt
+        - api: api-task-runner.ts with --stage-type implementation --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md"
+        - cli: cli-executor.ts with --stage-type implementation
 
     3c. Run relevant tests from test-plan.json:
         - Read test_cases from .vcp/task/plan/test-plan.json

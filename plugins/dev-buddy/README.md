@@ -5,7 +5,8 @@
 **Break the AI echo chamber. Ship secure code.**
 
 ![Skills-9](https://img.shields.io/badge/Skills-9-blue?style=flat-square)
-![System Prompts-6](https://img.shields.io/badge/System%20Prompts-6-green?style=flat-square)
+![Stages-6](https://img.shields.io/badge/Stages-6-green?style=flat-square)
+![Role Prompts-6](https://img.shields.io/badge/Role%20Prompts-6-purple?style=flat-square)
 
 <img src="../../assets/hero.png" alt="Dev Buddy — Multi-AI Pipeline Orchestration" width="700">
 

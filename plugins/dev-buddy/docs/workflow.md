@@ -9,12 +9,13 @@ Dev Buddy has two architectures: **v3 Stage Skills** (granular, executor-based) 
 ### Core Concepts
 
 ```
-System Prompt (.md file) + Preset + Model = Executor
+Stage Definition + Role Prompt (.md file) + Preset + Model = Executor
 Stage = collection of Executors (parallel/sequential)
 Stage Skill = individually-invocable command that runs a stage's executors
 ```
 
-- **System Prompts** — Reusable agent definitions. Built-in (`agents/*.md`, read-only) + custom (`~/.vcp/system-prompts/*.md`)
+- **Stage Definitions** — 6 fixed types (requirements, planning, plan-review, implementation, code-review, rca) that define WHAT happens at each pipeline phase
+- **Role Prompts** — Reusable agent role definitions. Built-in (`system-prompts/built-in/*.md`, read-only) + custom (`~/.vcp/system-prompts/*.md`)
 - **Executors** — Named combinations of system_prompt + preset + model. Defined in `~/.vcp/dev-buddy.json`
 - **Stages** — 6 fixed types, each with an array of executor refs. Executors can run in parallel or sequential
 - **Pipelines** — User-configurable ordered lists of stages
@@ -91,19 +92,18 @@ All stage skills resolve the executor's system prompt, embed it in the task prom
 
 ---
 
-## System Prompts (built-in)
+## Role Prompts (built-in)
 
-| Prompt | Purpose |
-|--------|---------|
+| Role Prompt | Purpose |
+|-------------|---------|
 | `requirements-gatherer` | Business Analyst + PM hybrid |
 | `planner` | Architect + Fullstack planning |
 | `plan-reviewer` | Architecture + Security + QA validation |
 | `implementer` | Fullstack + TDD implementation |
 | `code-reviewer` | Security + Performance + QA review |
 | `root-cause-analyst` | Autonomous bug diagnosis |
-| `cli-executor` | CLI tool wrapper |
 
-Located in `system-prompts/built-in/`. Users create custom prompts in `~/.vcp/system-prompts/`.
+Located in `system-prompts/built-in/`. Users create custom role prompts in `~/.vcp/system-prompts/`.
 
 ---
 

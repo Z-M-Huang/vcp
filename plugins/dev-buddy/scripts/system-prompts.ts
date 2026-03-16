@@ -1,17 +1,26 @@
 /**
- * System prompt discovery and management.
+ * System prompt discovery, management, and stage definition loading.
  *
- * Discovers system prompts from two sources:
- * 1. Built-in: plugins/dev-buddy/agents/*.md (read-only)
+ * Discovers system prompts (role definitions) from two sources:
+ * 1. Built-in: plugins/dev-buddy/system-prompts/built-in/*.md (read-only)
  * 2. Custom: ~/.vcp/system-prompts/*.md (user-created)
  *
- * Frontmatter format (YAML between --- delimiters):
+ * Loads stage definitions from:
+ *   plugins/dev-buddy/stages/*.md (read-only, one per StageType)
+ *
+ * Role prompt frontmatter (YAML between --- delimiters):
  *   name: planner
  *   description: Senior software architect...
- *   tools: Read, Write, Glob, Grep, LSP
- *   disallowedTools: Bash
+ *   tools: Read, Write, Glob, Grep, LSP   (optional — defaults to [])
+ *   disallowedTools: Bash                  (optional)
  *
- * Name collision between custom and built-in is an error.
+ * Stage definition frontmatter:
+ *   stage: plan-review
+ *   description: Review implementation plans...
+ *   tools: Read, Write, Glob, Grep, LSP
+ *   disallowedTools: Edit, Bash
+ *
+ * Name collision between custom and built-in role prompts is an error.
  */
 
 import fs from 'fs';
@@ -36,6 +45,34 @@ export interface SystemPrompt {
   /** Absolute path to the .md file. */
   filePath: string;
 }
+
+/** Stage definition loaded from stages/{stage-type}.md. */
+export interface StagePrompt {
+  /** Stage type from frontmatter (must match a StageType). */
+  stage: string;
+  /** Description from frontmatter. */
+  description: string;
+  /** Allowed tools for this stage. */
+  tools: string[];
+  /** Disallowed tools for this stage (optional). */
+  disallowedTools?: string[];
+  /** Full markdown body (everything after the closing ---). */
+  content: string;
+  /** Absolute path to the .md file. */
+  filePath: string;
+}
+
+// ─── Stage-Rule Markers for Legacy Detection ────────────────────────────────
+
+/** Patterns that indicate a role prompt still contains stage rules. */
+const STAGE_RULE_MARKERS = [
+  '## Output Format',
+  '## Output Contract',
+  '"fix_type"',
+  'must_fix|advisory',
+  '## Completion Requirements',
+  '## Pre-Write Verification',
+];
 
 // ─── Frontmatter Parsing ────────────────────────────────────────────────────
 
@@ -77,7 +114,8 @@ function parseFrontmatter(raw: string): { meta: Record<string, string>; body: st
 
 /**
  * Parse a single .md file into a SystemPrompt.
- * Throws on missing required fields (name, description, tools).
+ * Throws on missing required fields (name, description).
+ * tools defaults to [] if not specified (role-only prompts).
  */
 function parseSystemPromptFile(filePath: string, source: 'built-in' | 'custom'): SystemPrompt {
   const raw = fs.readFileSync(filePath, 'utf-8');
@@ -95,14 +133,11 @@ function parseSystemPromptFile(filePath: string, source: 'built-in' | 'custom'):
   if (!meta.description) {
     throw new Error(`System prompt file missing 'description' in frontmatter: ${filePath}`);
   }
-  if (!meta.tools) {
-    throw new Error(`System prompt file missing 'tools' in frontmatter: ${filePath}`);
-  }
 
   return {
     name: meta.name,
     description: meta.description,
-    tools: parseCommaSeparated(meta.tools),
+    tools: meta.tools ? parseCommaSeparated(meta.tools) : [],
     disallowedTools: meta.disallowedTools ? parseCommaSeparated(meta.disallowedTools) : undefined,
     content: body,
     source,
@@ -249,6 +284,63 @@ export function deleteCustomPrompt(name: string): void {
     throw new Error(`Custom prompt '${name}' not found`);
   }
   fs.unlinkSync(filePath);
+}
+
+// ─── Stage Definition Loading ───────────────────────────────────────────────
+
+/**
+ * Load a stage definition by stage type.
+ *
+ * @param stageType - The stage type to load (e.g., 'plan-review', 'code-review')
+ * @param stagesDir - Path to the stages directory (plugins/dev-buddy/stages/)
+ * @returns The StagePrompt or null if not found / invalid
+ */
+export function loadStageDefinition(stageType: string, stagesDir: string): StagePrompt | null {
+  const filePath = path.join(stagesDir, `${stageType}.md`);
+  if (!fs.existsSync(filePath)) return null;
+
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  const parsed = parseFrontmatter(raw);
+  if (!parsed) return null;
+
+  const { meta, body } = parsed;
+
+  // Validate stage field matches requested type
+  if (!meta.stage || meta.stage !== stageType) return null;
+  if (!meta.description) return null;
+  if (!meta.tools) return null;
+
+  return {
+    stage: meta.stage,
+    description: meta.description,
+    tools: parseCommaSeparated(meta.tools),
+    disallowedTools: meta.disallowedTools ? parseCommaSeparated(meta.disallowedTools) : undefined,
+    content: body,
+    filePath,
+  };
+}
+
+/**
+ * Compose a full prompt from a stage definition and a role prompt.
+ * Stage definition goes first (establishes the output contract),
+ * role prompt follows (adds perspective and expertise).
+ *
+ * Emits a warning to stderr if the role prompt contains stage-rule markers,
+ * indicating it may be a legacy combined prompt that should be stripped.
+ */
+export function composePrompt(stage: StagePrompt, role: SystemPrompt): string {
+  // Check for legacy stage-rule markers in the role prompt
+  for (const marker of STAGE_RULE_MARKERS) {
+    if (role.content.includes(marker)) {
+      console.error(
+        `[system-prompts] WARNING: Role prompt '${role.name}' contains stage-rule marker '${marker}'. ` +
+        `This content should be in the stage definition, not the role prompt.`
+      );
+      break; // One warning is enough
+    }
+  }
+
+  return `${stage.content}\n\n---\n\n${role.content}`;
 }
 
 // ─── CLI ────────────────────────────────────────────────────────────────────
