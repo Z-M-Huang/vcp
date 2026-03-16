@@ -1,6 +1,6 @@
 {
   "name": "dev-buddy",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Modular multi-AI stage orchestration with executor-based architecture, TDD enforcement, and configurable system prompts",
   "author": {
     "name": "Z-M-Huang"
