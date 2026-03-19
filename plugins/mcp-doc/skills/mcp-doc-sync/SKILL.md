@@ -199,6 +199,59 @@ Only regenerate these three default tools:
 
 6. **Update tool entries** in the manifest with the new `actionHash` values for each of the three default tools.
 
+7. **Rewrite default tool metadata** — update the `description` and `title` fields on the three default tool entries (`search_docs`, `get_applicable_docs`, `get_doc_tree`) in the manifest to use the structured format:
+
+   ```yaml
+   - name: search_docs
+     title: Search Project Documentation
+     description: |
+       Search project documentation by keyword across titles, section headers, and content.
+
+       USE THIS WHEN:
+       - The user asks a question about the project and you need to find relevant docs
+       - You need to discover what documentation exists on a topic
+       - You want to search by keyword, tag, or path fragment
+
+       DO NOT USE WHEN:
+       - You already know the exact doc path (read the resource directly)
+       - You need docs for a specific source file (use get_applicable_docs)
+   ```
+
+   **Custom tools** (any tool NOT named `search_docs`, `get_applicable_docs`, or `get_doc_tree`) must NOT have their `description` or `title` fields rewritten.
+
+8. **Rewrite the top-level `instructions` field** in the manifest with the imperative format — ALWAYS/NEVER rules plus a decision tree:
+
+   ```yaml
+   instructions: |
+     ALWAYS read relevant documentation before writing or modifying code.
+     ALWAYS use search_docs when the user asks a question about the project.
+     ALWAYS use get_applicable_docs before editing a file to check for applicable standards or conventions.
+     NEVER guess at project conventions — search the docs first.
+
+     Decision tree:
+     - Need docs for a specific file? → get_applicable_docs
+     - Looking for a topic or keyword? → search_docs
+     - Want to see what's documented? → get_doc_tree
+   ```
+
+9. **Add welcome prompt if missing** — check if the manifest has a `prompts` section with a `welcome` entry. If not, add it:
+
+   ```yaml
+   prompts:
+     - name: welcome
+       title: Welcome - Get Started
+       description: Introduction to project documentation and available tools
+       messages:
+         - role: user
+           content:
+             type: text
+             text: |
+               I'm exploring this project. Give me a brief overview of what documentation
+               is available and what tools I can use, then ask what I'd like to learn about.
+   ```
+
+10. **Pin git-doc-mcp version** — read `.mcp.json` and check if the server command uses an unpinned `git-doc-mcp` (e.g., `npx git-doc-mcp` without a version). If so, update it to `npx git-doc-mcp@0.2.2`. If it already has a pinned version, leave it unchanged.
+
 ## Step 6: Report
 
 Present what was done:

@@ -202,6 +202,8 @@ After all manifest changes are complete, regenerate all three default action scr
 
 4. **Update tool entries** in `.mcp/manifest.yml` with the new hashes.
 
+5. **Rewrite default tool metadata** — when regenerating, also update the `title` and `description` fields on the three default tool entries in the manifest to use the structured `USE THIS WHEN` / `DO NOT USE WHEN` pattern (same format as `/mcp-doc-init` generates). Do not rewrite metadata for custom tools.
+
 **Important:** Only regenerate the three default tools (`search_docs`, `get_applicable_docs`, `get_doc_tree`). Do not touch any custom tools created by `/mcp-doc-add-tool`.
 
 ## Step 8: Report

@@ -66,7 +66,7 @@ The subprocess env (Anthropic path) uses a platform-aware allowlist (not `...pro
 Per-task timeout defaults to 5 minutes, configurable via `ApiPreset.timeout_ms` (set in the web portal under "Task Timeout").
 `api-task-runner.ts --task-timeout` receives the preset's timeout value.
 
-The runner also supports `--system-prompt <path>` to append a file (must be under plugin's `docs/` dir) to the session's system prompt — used for review stages to inject centralized review guidelines.
+The runner also supports `--system-prompt <path>` to append a file (must be under the plugin directory) to the session's system prompt — used to inject role prompts and review guidelines. Combined with `--stage-type <type>`, this auto-resolves the stage definition and composes `stage + role` as the system prompt.
 
 ### Writing Standards
 

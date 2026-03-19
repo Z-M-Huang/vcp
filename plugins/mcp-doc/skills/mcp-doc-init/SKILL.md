@@ -204,12 +204,33 @@ schemaVersion: "1.0"
 name: {project-name}-docs
 version: 1.0.0
 description: "Documentation index for {project-name}"
-instructions: >
-  Use these tools and resources to understand the project.
-  - search_docs: find documentation by keyword (searches titles, sections, and summaries)
-  - get_applicable_docs: given a source file path, find relevant documentation
-  - get_doc_tree: see the documentation structure with coverage status
-  - Resources: read specific documentation files directly
+instructions: |
+  You are a documentation assistant for {project-name}.
+  You MUST use the tools below to answer questions — do NOT rely on prior knowledge.
+
+  MANDATORY RULES:
+  - ALWAYS use at least one tool BEFORE answering any question about this project.
+  - NEVER answer from memory alone — the documentation is the source of truth.
+  - If a tool returns no results, try different keywords or a different tool before giving up.
+
+  DECISION TREE — match the user's intent to a tool:
+  User asks a specific question or has a keyword → search_docs
+  User asks "what docs cover this file/directory?" → get_applicable_docs
+  User wants to see documentation coverage or structure → get_doc_tree
+  User wants to read a specific doc → use Resources directly
+  If unsure which tool to use → search_docs (safest default)
+
+prompts:
+  - name: welcome
+    title: Welcome - Get Started
+    description: Introduction to {project-name} documentation and available tools
+    messages:
+      - role: user
+        content:
+          type: text
+          text: |
+            I'm exploring this project. Give me a brief overview of what documentation
+            is available and what tools I can use, then ask what I'd like to learn about.
 
 resources:
   - name: root_readme
@@ -292,7 +313,8 @@ export default async function(input, ctx) {
     return entry;
   }).join("\n\n");
 
-  return { content: [{ type: "text", text: `Found ${results.length} result(s) for "${input.query}":\n\n${text}` }] };
+  const footer = `\n\n---\nNext steps:\n- Read a specific doc above using its resource URI\n- Use get_applicable_docs to find docs for a specific source file\n- Refine your search with different keywords`;
+  return { content: [{ type: "text", text: `Found ${results.length} result(s) for "${input.query}":\n\n${text}${footer}` }] };
 }
 ```
 
@@ -334,7 +356,8 @@ export default async function(input, ctx) {
     return `- **${r.title}** (${r.path})${scopeNote}\n  ${r.description}`;
   }).join("\n\n");
 
-  return { content: [{ type: "text", text: `Documentation applicable to "${p}":\n\n${text}` }] };
+  const footer = `\n\n---\nNext steps:\n- Read any doc above using its resource URI\n- Use search_docs to find specific topics within these docs\n- Use get_doc_tree to see the full documentation structure`;
+  return { content: [{ type: "text", text: `Documentation applicable to "${p}":\n\n${text}${footer}` }] };
 }
 ```
 
@@ -380,7 +403,8 @@ export default async function(input, ctx) {
   });
 
   const header = `Documentation coverage: ${documented}/${total} directories (${coverage}%)\n`;
-  const text = header + "\n" + lines.join("\n");
+  const footer = `\n\n---\nNext steps:\n- Use search_docs to find specific topics\n- Use get_applicable_docs to find docs for a specific source file\n- Filter with undocumentedOnly: true to find gaps`;
+  const text = header + "\n" + lines.join("\n") + footer;
 
   return { content: [{ type: "text", text }] };
 }
@@ -401,7 +425,22 @@ Add tool entries to the manifest with the computed hashes:
 ```yaml
 tools:
   - name: search_docs
-    description: "Search project documentation by keyword. Searches titles, section headers, summaries, tags, and paths."
+    title: Search Documentation
+    description: |
+      Search project documentation by keyword.
+      Searches titles, section headers, summaries, tags, and file paths.
+
+      USE THIS WHEN:
+      - The user asks a question about the project
+      - The user mentions a keyword, error, or concept
+      - You need to find relevant documentation before answering
+      - You're unsure which tool to use (this is the safest default)
+
+      DO NOT USE WHEN:
+      - You know the exact file path (use get_applicable_docs instead)
+      - The user wants to see the documentation tree/structure (use get_doc_tree)
+
+      Example: "How does authentication work?" / "What is the API rate limit?"
     inputSchema:
       type: object
       properties:
@@ -415,7 +454,21 @@ tools:
       readOnlyHint: true
 
   - name: get_applicable_docs
-    description: "Given a source file path, find all documentation that applies to it (parent READMEs, related standards, API docs)."
+    title: Get Applicable Documentation
+    description: |
+      Given a source file or directory path, find all documentation that applies to it.
+      Returns parent READMEs, scope-matched docs, and global docs sorted by specificity.
+
+      USE THIS WHEN:
+      - The user asks "what documentation covers this file/directory?"
+      - You need context before modifying a specific file
+      - The user provides a file path and wants related docs
+
+      DO NOT USE WHEN:
+      - The user has a general question without a specific file (use search_docs)
+      - The user wants to browse the doc tree (use get_doc_tree)
+
+      Example: "What docs apply to src/api/routes/users.ts?" / "Show me docs for the auth module"
     inputSchema:
       type: object
       properties:
@@ -429,7 +482,21 @@ tools:
       readOnlyHint: true
 
   - name: get_doc_tree
-    description: "Get the project documentation tree with coverage status. Supports filtering by subtree and depth."
+    title: Documentation Tree
+    description: |
+      Get the project documentation tree with coverage status.
+      Supports filtering by subtree, depth, and undocumented-only mode.
+
+      USE THIS WHEN:
+      - The user wants to see what documentation exists
+      - The user asks about documentation coverage or gaps
+      - The user wants to browse the project structure
+
+      DO NOT USE WHEN:
+      - The user has a specific question (use search_docs)
+      - The user asks about a specific file (use get_applicable_docs)
+
+      Example: "What directories have documentation?" / "Show me the doc tree" / "Which areas are undocumented?"
     inputSchema:
       type: object
       properties:
@@ -457,7 +524,7 @@ Read the existing `.mcp.json` if present. Preserve any existing MCP server entri
   "mcpServers": {
     "{project-name}-docs": {
       "command": "npx",
-      "args": ["-y", "git-doc-mcp", "--manifest", ".mcp/manifest.yml"]
+      "args": ["-y", "git-doc-mcp@0.2.2", "--manifest", ".mcp/manifest.yml"]
     }
   }
 }

@@ -807,10 +807,18 @@ async function main(): Promise<void> {
       if (relative.startsWith('..') || path.isAbsolute(relative)) {
         emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt path must be under plugin directory. Got: ${args.systemPrompt}` }, 1);
       }
-      systemPromptContent = fs.readFileSync(resolved, 'utf-8');
-      if (!systemPromptContent.trim()) {
+      let rawContent = fs.readFileSync(resolved, 'utf-8');
+      if (!rawContent.trim()) {
         emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt file is empty: ${args.systemPrompt}` }, 1);
       }
+      // Strip YAML frontmatter if present (role prompt .md files have ---..--- headers)
+      if (rawContent.startsWith('---')) {
+        const endIdx = rawContent.indexOf('\n---', 3);
+        if (endIdx !== -1) {
+          rawContent = rawContent.slice(endIdx + 4).trim();
+        }
+      }
+      systemPromptContent = rawContent;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt file not found: ${args.systemPrompt}` }, 1);

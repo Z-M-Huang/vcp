@@ -93,7 +93,7 @@ For each plan step N = 1 to step_count:
         Dispatch via provider routing using composed prompt:
         - subscription: Task with composed prompt
         - api: api-task-runner.ts with --stage-type implementation --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md"
-        - cli: cli-executor.ts with --stage-type implementation
+        - cli: Not supported for implementation stage — CLI executors only support review stages
 
     3c. Run relevant tests from test-plan.json:
         - Read test_cases from .vcp/task/plan/test-plan.json

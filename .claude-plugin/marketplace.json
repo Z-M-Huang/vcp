@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Vibe Coding Protocol — Standards and enforcement for AI-generated code quality",
-    "version": "0.3.4"
+    "version": "0.3.5"
   },
   "plugins": [
     {
@@ -27,7 +27,7 @@
     {
       "name": "mcp-doc",
       "description": "Documentation manifest generator for git-doc-mcp — indexes project docs as MCP resources with search, path-lookup, and tree-view tools for AI assistants",
-      "version": "0.3.1",
+      "version": "0.3.5",
       "author": { "name": "Z-M-Huang" },
       "source": "./plugins/mcp-doc",
       "category": "documentation"

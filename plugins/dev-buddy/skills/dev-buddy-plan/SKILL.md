@@ -112,7 +112,7 @@ Use the composed output as the system prompt content, then route each executor b
 
 - **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed_prompt>\n---\n<assembled task prompt>")`
 - **api:** `Bash(run_in_background: true)` → `api-task-runner.ts --preset <preset> --model <model> --stage-type planning --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md" --task-stdin` → `TaskOutput(timeout: min(timeout_ms + 120000, 600000))`
-- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun '${CLAUDE_PLUGIN_ROOT}/scripts/cli-executor.ts' --stage-type planning ...")`
+- **cli:** Not supported for planning stage — CLI executors only support review stages (plan/code). If a CLI preset is configured, skip it and report the limitation.
 
 **Single executor (common case):** Route directly — write to `.vcp/task/plan/`. No variant indirection.
 

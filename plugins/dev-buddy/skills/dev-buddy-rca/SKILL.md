@@ -95,7 +95,7 @@ Use the composed output as the system prompt content, then route by provider typ
 
 - **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed_prompt>\n---\n<assembled RCA prompt>")`
 - **api:** `Bash(run_in_background: true)` → `api-task-runner.ts --stage-type rca --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md"`
-- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun cli-executor.ts --stage-type rca ...")`
+- **cli:** Not supported for RCA stage — CLI executors only support review stages (plan/code). If a CLI preset is configured, skip it and report the limitation.
 
 Group adjacent `parallel: true` executors → dispatch simultaneously. Sequential executors → dispatch one at a time.
 

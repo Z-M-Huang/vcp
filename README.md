@@ -100,7 +100,7 @@ VCP ships three complementary plugins:
 | Plugin | What It Does | Install |
 |--------|-------------|---------|
 | **VCP** | Standards enforcement — 41 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
-| **Dev Buddy** | Multi-AI pipeline — configurable stages with role-based prompts, cross-model review gates, 7 specialist agents | `/plugin install vcp@dev-buddy` |
+| **Dev Buddy** | Multi-AI pipeline — configurable stages with role-based prompts, cross-model review gates, specialist analysis team | `/plugin install vcp@dev-buddy` |
 | **mcp-doc** | Documentation manifest generator — indexes project docs as MCP resources with search, path-lookup, and tree-view tools | `/install vcp@mcp-doc` |
 
 Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.

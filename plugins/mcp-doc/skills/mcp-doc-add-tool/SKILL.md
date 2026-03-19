@@ -59,9 +59,23 @@ If the name collides, tell the user and ask for a different name.
 
 ### 2b: Tool description
 
-Ask: "Describe what this tool does in one sentence. This description is shown to AI assistants so they know when to use the tool."
+Ask: "Describe what this tool does. Include:
+- A one-sentence summary of the tool's purpose
+- USE THIS WHEN: when should the AI use this tool? (2-3 bullet points)
+- DO NOT USE WHEN: when should the AI use a different tool instead? (1-2 bullet points)"
 
-Example: "Returns all coding standards and conventions for this project."
+Example:
+```yaml
+description: |
+  Returns all coding standards and conventions for this project.
+
+  USE THIS WHEN:
+  - The user asks about coding standards, conventions, or style rules
+  - You need to check project conventions before writing code
+
+  DO NOT USE WHEN:
+  - The user asks about a specific file or module (use get_applicable_docs)
+```
 
 ### 2c: Tool purpose
 
@@ -234,7 +248,8 @@ Add the tool entry to `.mcp/manifest.yml`. Insert it after the existing tool ent
 
 ```yaml
   - name: {tool_name}
-    description: "{user-provided description}"
+    title: "{short human-readable title}"
+    description: "{user-provided description with USE THIS WHEN / DO NOT USE WHEN}"
     inputSchema:
       type: object
       properties:

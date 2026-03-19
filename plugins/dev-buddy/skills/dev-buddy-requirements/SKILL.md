@@ -139,7 +139,7 @@ Use the composed output as the system prompt content, then route by provider typ
 
 - **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed_prompt>\n---\n<assembled task prompt>")`
 - **api:** `Bash(run_in_background: true)` → `api-task-runner.ts --stage-type requirements --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md"` → `TaskOutput`
-- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun cli-executor.ts --stage-type requirements ...")`
+- **cli:** Not supported for requirements stage — CLI executors only support review stages (plan/code). If a CLI preset is configured, skip it and report the limitation.
 
 ---
 
