@@ -1,15 +1,13 @@
 ---
 name: dev-buddy-rca
-description: Root cause analysis for bugs. Dispatches RCA executors in parallel, consolidates findings into a diagnosis. Outputs diagnosis only — does NOT create user-story or plan.
+description: Root cause analysis for bugs. Dispatches RCA executors in parallel, consolidates findings, and appends RCA Diagnosis to the plan file.
 user-invocable: true
-allowed-tools: Read, Write, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion
 ---
 
 # RCA Stage Skill
 
-Diagnose a bug by dispatching root cause analysis executors. Consolidates findings into a single diagnosis artifact. Does NOT create user-story or plan — user chains to `/dev-buddy-requirements` → `/dev-buddy-plan` next.
-
-**Task directory:** `${CLAUDE_PROJECT_DIR}/.vcp/task/`
+Diagnose a bug by dispatching root cause analysis executors. Consolidates findings and appends the RCA Diagnosis section to the plan file.
 
 ---
 
@@ -30,7 +28,28 @@ console.log(JSON.stringify({ executors }));
 
 ---
 
-## Step 2: Prompt Assembly (Anti-Drift)
+## Step 2: Resolve Session Variables
+
+1. Resolve tmpdir:
+   ```bash
+   bun -e "console.log(require('os').tmpdir())"
+   ```
+   Store as `{TMPDIR}`.
+
+2. Generate unique output IDs:
+   ```bash
+   bun -e "console.log(require('crypto').randomBytes(4).toString('hex'))"
+   ```
+   Store as `{RAND}`. Output file for executor at index `{i}`: `{TMPDIR}/.vcp/oneshot/rca-{RAND}-{i}.json`
+
+3. Ensure output directory:
+   ```bash
+   mkdir -p "{TMPDIR}/.vcp/oneshot"
+   ```
+
+---
+
+## Step 3: Prompt Assembly
 
 For each RCA executor:
 
@@ -42,44 +61,62 @@ You are executing the ROOT CAUSE ANALYSIS stage.
 
 Diagnose the bug described above. Do NOT fix it — diagnosis only.
 
+PESSIMISTIC-FIRST: Do NOT assume the obvious cause is the root cause.
+- Trace the data flow from symptom to source. Cite git blame, stack traces, or log evidence.
+- Ask "why" five times. The root cause is rarely where the error message points.
+- Every claim must cite file:line. No speculation without code evidence.
+
+Process:
 1. Reproduce the bug (if possible)
 2. Trace the data flow from symptom to source
 3. Identify the root cause with evidence
 4. Document affected files and fix constraints
 
-Write output to .vcp/task/{output_file}
+Write output to {TMPDIR}/.vcp/oneshot/rca-{RAND}-{i}.json
 
-Output JSON format:
+Output JSON format (must match stage definition contract):
 {
-  "root_cause": { "summary": "...", "category": "logic|config|dependency|concurrency|..." },
-  "root_file": "path/to/file.ts",
-  "root_line": 42,
-  "confidence": "high|medium|low",
-  "affected_files": ["..."],
-  "fix_constraints": ["minimal change", "..."],
-  "evidence": ["trace of how you found it"],
-  "excluded_hypotheses": ["things you ruled out and why"]
+  "id": "rca-YYYYMMDD-HHMMSS",
+  "reviewer": "your-model-id",
+  "bug_report": {
+    "title": "Short bug title",
+    "reported_behavior": "What the bug does",
+    "expected_behavior": "What should happen",
+    "reproduction_steps": ["Step 1", "Step 2"],
+    "reproduction_result": "pass|fail|inconclusive",
+    "reproduction_output": "Truncated terminal output"
+  },
+  "root_cause": {
+    "summary": "One-sentence root cause",
+    "detailed_explanation": "Multi-sentence causal chain",
+    "category": "logic_error|race_condition|missing_validation|...",
+    "root_file": "path/to/file.ts",
+    "root_line": 42,
+    "confidence": "high|medium|low"
+  },
+  "impact_analysis": {
+    "affected_files": ["path/to/file1.ts"],
+    "affected_functions": ["functionName"],
+    "blast_radius": "isolated|module|cross-module|system-wide",
+    "regression_risk": "low|medium|high"
+  },
+  "fix_constraints": {
+    "must_preserve": ["Behaviors that must not break"],
+    "safe_to_change": ["Areas where changes are safe"],
+    "existing_tests": ["path/to/test.ts"]
+  },
+  "recommended_approach": {
+    "strategy": "Brief fix direction (do NOT implement)",
+    "estimated_complexity": "trivial|minor|moderate|major"
+  }
 }
-```
-
----
-
-## Step 3: Determine Output Filenames
-
-For each executor, compute the output filename:
-
-```bash
-bun -e "
-import { getV3OutputFileName } from '${CLAUDE_PLUGIN_ROOT}/types/stage-definitions.ts';
-console.log(getV3OutputFileName('rca', '{executor-name}', {index}, '{preset}', '{model}', 1));
-"
 ```
 
 ---
 
 ## Step 4: Dispatch Executors
 
-**Resolve system prompt with stage/role composition.** Compose the `rca` stage definition with the executor's role prompt:
+**Resolve system prompt with stage/role composition:**
 ```bash
 bun -e "
 import { loadStageDefinition, getSystemPrompt, composePrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
@@ -91,60 +128,93 @@ console.log(composePrompt(stage, role));
 "
 ```
 
-Use the composed output as the system prompt content, then route by provider type:
-
+Route by provider type:
 - **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed_prompt>\n---\n<assembled RCA prompt>")`
-- **api:** `Bash(run_in_background: true)` → `api-task-runner.ts --stage-type rca --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md"`
-- **cli:** Not supported for RCA stage — CLI executors only support review stages (plan/code). If a CLI preset is configured, skip it and report the limitation.
+- **api:** `Bash(run_in_background: true)` → `bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" --type api --output-id rca-{RAND}-{i} --preset "{PRESET}" --model "{MODEL}" --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin <<'{DELIM}'`
 
-Group adjacent `parallel: true` executors → dispatch simultaneously. Sequential executors → dispatch one at a time.
+Group adjacent `parallel: true` executors → dispatch simultaneously. Sequential executors → one at a time.
 
 ---
 
-## Step 5: Consolidate Findings
+## Step 5: Collect and Consolidate
 
-After all RCA executors complete, read all output files and consolidate:
+After all executors complete, read all output files from `{TMPDIR}/.vcp/oneshot/rca-{RAND}-*.json`.
 
-**Multi-executor with synthesizer:**
-When multiple executors are configured, all analysts (including the synthesizer — the last executor) write individual RCA files using the existing v3 output pattern. The synthesizer does its own root cause analysis AND reads prior outputs to form its diagnosis.
+**For API/CLI executors:** The output file is wrapped in an envelope `{"event":"complete","provider":"...","model":"...","result":"..."}`. Parse the `result` field (which is a JSON string) to get the actual executor output. For subscription executors, the result is returned directly from the Task tool.
 
-The consolidation logic below then runs across ALL RCA outputs (including the synthesizer's). The synthesizer CANNOT override the disagreement arbitration — if diagnoses conflict, the skill still escalates to the user via AskUserQuestion.
+**If RCAs agree** (same root_file, similar root_cause):
+- Use the most detailed diagnosis
+- Merge evidence from all
 
-1. **If RCAs agree** (same root_file, similar root_cause):
-   - Use the most detailed diagnosis
-   - Merge evidence from all
+**If RCAs disagree** (different root_file or contradictory causes):
+- Present both diagnoses to the user via AskUserQuestion
+- Ask: "Two analyses disagree on the root cause. Which is correct?"
+- Use the user's choice
 
-2. **If RCAs disagree** (different root_file or contradictory causes):
-   - Present both diagnoses to the user via AskUserQuestion
-   - Ask: "Two analyses disagree on the root cause. Which is correct?"
-   - Include summaries from each
-   - Use the user's choice
+---
 
-3. **Write consolidated diagnosis** to `.vcp/task/rca-diagnosis.json`:
+## Step 6: Append RCA Diagnosis to Plan File
+
+Read the current plan file. If no plan file exists, this is likely the first phase — the plan file header will be created by the orchestrator.
+
+**Append the `## RCA Diagnosis` section to the plan file** using the Edit tool:
+
+```markdown
+## RCA Diagnosis
+
+**Root Cause:** {consolidated root_cause.summary}
+**Root File:** {root_file}:{root_line}
+**Confidence:** {confidence}
+**Category:** {category}
+
+**Evidence:**
+- {evidence item 1 — with file:line}
+- {evidence item 2 — with file:line}
+
+**Affected Files:**
+- {file 1}
+- {file 2}
+
+**Fix Constraints:**
+- {constraint 1}
+- {constraint 2}
+
+**Excluded Hypotheses:**
+- {hypothesis 1 — ruled out because...}
+
 ```json
 {
-  "root_cause": "...",
-  "root_file": "path/to/file.ts",
-  "root_line": 42,
-  "confidence": "high",
-  "affected_files": ["..."],
-  "fix_constraints": ["..."],
-  "evidence": ["..."],
-  "sources": ["rca-executor1-...", "rca-executor2-..."]
+  "root_cause_summary": "{summary}",
+  "root_file": "{file}",
+  "root_line": {line},
+  "confidence": "{high|medium|low}",
+  "category": "{category}",
+  "affected_files": ["{file1}", "{file2}"],
+  "fix_constraints": ["{constraint1}"],
+  "sources": ["rca-{RAND}-0", "rca-{RAND}-1"]
 }
+```
 ```
 
 ---
 
-## Step 6: Report Results
+## Step 7: Cleanup and Report
 
-Present the consolidated diagnosis to the user:
-- Root cause summary
-- Root file and line
-- Confidence level
-- Affected files
-- Fix constraints
+1. Remove temp files: `rm -f "{TMPDIR}/.vcp/oneshot/rca-{RAND}-"*`
+2. Present the diagnosis to the user:
+   - Root cause summary
+   - Root file and line
+   - Confidence level
+   - Affected files
+3. Suggest next: `/dev-buddy-requirements` (or continue in pipeline automatically)
 
-Suggest next steps:
-- `/dev-buddy-requirements` (create minimal user story from RCA context)
-- Then `/dev-buddy-plan` → `/dev-buddy-implement`
+---
+
+## Error Handling
+
+| Scenario | Action |
+|----------|--------|
+| No RCA executors configured | Report error, suggest configuring via `/dev-buddy-config` |
+| All executors fail | Report error to user — cannot diagnose |
+| Single executor fails | Continue with remaining (if any succeeded) |
+| Executors disagree | AskUserQuestion — let user choose |

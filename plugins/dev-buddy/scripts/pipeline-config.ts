@@ -393,19 +393,6 @@ export function loadDevBuddyConfig(): DevBuddyConfig {
   return v3;
 }
 
-// ─── Executor Resolution ────────────────────────────────────────────────────
-
-/**
- * Resolve a stage executor's provider type.
- * Simple helper since inline executors already have all fields.
- */
-export function resolveExecutor(executor: StageExecutor): StageExecutor & { providerType: 'subscription' | 'api' | 'cli' } {
-  return {
-    ...executor,
-    providerType: getProviderType(executor.preset),
-  };
-}
-
 // ─── Pipeline Expansion ─────────────────────────────────────────────────────
 
 /** A single expanded task entry for pipeline-tasks.json. */

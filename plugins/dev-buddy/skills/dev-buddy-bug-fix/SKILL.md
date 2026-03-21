@@ -1,23 +1,19 @@
 ---
 name: dev-buddy-bug-fix
-description: Bug fix pipeline — chains root cause analysis, requirements, planning, plan review, implementation, and code review stage skills using the configured bugfix_pipeline
+description: Bug fix pipeline — chains root cause analysis, requirements, planning, plan review, implementation, and code review. Uses single plan file and TaskManagement for progress tracking.
 user-invocable: true
-allowed-tools: Read, Write, Bash, Glob, Grep, Skill, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, TaskGet
 ---
 
 # Bug Fix Pipeline Orchestrator
 
-Run the full bug fix pipeline end-to-end. Chains individual stage skills in the order defined by `bugfix_pipeline` in `~/.vcp/dev-buddy.json`.
-
-**Task directory:** `${CLAUDE_PROJECT_DIR}/.vcp/task/`
+Run the full bug fix pipeline end-to-end. Chains individual stage skills in the order defined by `bugfix_pipeline` in `~/.vcp/dev-buddy.json`. All phases append to a single plan file.
 
 ---
 
 ## Step 1: Initialize
 
-1. Create `.vcp/task/` directory if it doesn't exist
-2. Save the user's bug report to `.vcp/task/requirements-prompt.md`
-3. Load the pipeline config and expand stages:
+1. Load the pipeline config:
 
 ```bash
 bun -e "
@@ -32,19 +28,36 @@ console.log(JSON.stringify({
 "
 ```
 
-4. Write `.vcp/task/pipeline-tasks.json`:
-```json
-{
-  "pipeline_type": "bug-fix",
-  "stages": [<expanded stage entries>],
-  "created_at": "ISO8601"
-}
-```
-
-5. Display the pipeline stages to the user:
+2. Display the pipeline stages to the user:
 ```
 Bug Fix Pipeline: rca → requirements → planning → plan-review → implementation → code-review
 Executors: {count} total across {stage_count} stages
+```
+
+3. **Initialize plan file** — the plan file must exist before any stage appends to it. Create it now via the Write tool or by entering plan mode. Write the header:
+```markdown
+# Plan: Bug Fix — {user's bug description (short title)}
+**Status:** rca
+**Pipeline:** bug-fix
+**Created:** {date}
+
+---
+```
+
+4. **Create pipeline phase tasks with TaskManagement:**
+
+```
+T_rca = TaskCreate(subject='Phase: Root Cause Analysis', description='Diagnose the bug — find root cause with evidence', activeForm='Diagnosing...')
+T_req = TaskCreate(subject='Phase: Requirements + TDD Test Plan', description='Define fix requirements, create TDD tests, identify risks', activeForm='Gathering requirements...')
+TaskUpdate(T_req, addBlockedBy: [T_rca])
+T_plan = TaskCreate(subject='Phase: Implementation Planning', description='Create granular fix steps mapped to ACs and tests', activeForm='Planning...')
+TaskUpdate(T_plan, addBlockedBy: [T_req])
+T_review_plan = TaskCreate(subject='Phase: Plan Review', description='Review fix plan for coverage and granularity', activeForm='Reviewing plan...')
+TaskUpdate(T_review_plan, addBlockedBy: [T_plan])
+T_impl = TaskCreate(subject='Phase: Implementation', description='Implement fix with TDD loop', activeForm='Implementing...')
+TaskUpdate(T_impl, addBlockedBy: [T_review_plan])
+T_review_code = TaskCreate(subject='Phase: Code Review', description='Review fix against ACs with evidence', activeForm='Reviewing code...')
+TaskUpdate(T_review_code, addBlockedBy: [T_impl])
 ```
 
 ---
@@ -55,28 +68,40 @@ For each stage type in `bugfix_pipeline`:
 
 ### Stage-to-Skill Mapping
 
-| Stage Type | Skill | Notes |
+| Stage Type | Skill | Plan File Section Produced |
 |---|---|---|
-| `rca` | `Skill(skill: "dev-buddy-rca")` | Root cause analysis. Outputs `rca-diagnosis.json`. |
-| `requirements` | `Skill(skill: "dev-buddy-requirements")` | Auto-picks up `rca-diagnosis.json` as context |
-| `planning` | `Skill(skill: "dev-buddy-plan")` | Creates fix plan with TDD test cases |
-| `plan-review` | `Skill(skill: "dev-buddy-review", args: "--plan")` | Reviews plan. Owns review→repair→re-review loop. |
-| `implementation` | `Skill(skill: "dev-buddy-implement")` | Implements fix with TDD loop |
-| `code-review` | `Skill(skill: "dev-buddy-review", args: "--code")` | Reviews code. Owns review→repair→re-review loop. |
+| `rca` | `Skill(skill: "dev-buddy-rca")` | RCA Diagnosis |
+| `requirements` | `Skill(skill: "dev-buddy-requirements")` | Requirements + TDD Test Plan + Risk Registry |
+| `planning` | `Skill(skill: "dev-buddy-plan")` | Implementation Steps |
+| `plan-review` | `Skill(skill: "dev-buddy-review", args: "--plan")` | Plan Review Record |
+| `implementation` | `Skill(skill: "dev-buddy-implement")` | Step status updates |
+| `code-review` | `Skill(skill: "dev-buddy-review", args: "--code")` | Code Review Record + Sign-off |
 
 ### Execution Flow
 
 Same as feature pipeline:
-1. Announce each stage
-2. Invoke the corresponding skill
-3. Verify output artifact exists
-4. If a review stage returned `rejected` → **STOP the pipeline**
+1. `TaskUpdate(phase_task_id, status: 'in_progress')`
+2. Announce each stage
+3. Invoke the corresponding skill
+4. Verify expected plan file section exists
+5. `TaskUpdate(phase_task_id, status: 'completed')`
+6. If review returns `rejected` → **STOP**, mark blocked, report
 
 ---
 
-## Step 3: Report
+## Step 3: Resume Support
+
+Same as feature pipeline:
+1. `TaskList()` to find completed vs pending phases
+2. Read plan file to check which sections exist
+3. Skip completed phases, continue from next pending
+
+---
+
+## Step 4: Report
 
 After all stages complete:
 1. Present per-stage status summary
-2. If all stages passed → "Bug fix pipeline complete!"
-3. If any stage was rejected → report which stage and remaining findings
+2. `TaskList()` for final task statuses
+3. If all passed → "Bug fix pipeline complete!"
+4. If any rejected → report which stage and remaining findings

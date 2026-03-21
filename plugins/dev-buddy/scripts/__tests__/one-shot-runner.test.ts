@@ -3,7 +3,6 @@ import {
   parseArgs,
   tokenizeTemplate,
   substitutePlaceholders,
-  findUnsupportedPlaceholders,
   escapeWinArg,
   makeComplete,
   makeError,
@@ -162,31 +161,6 @@ describe('substitutePlaceholders', () => {
   test('leaves unmatched placeholders intact', () => {
     const result = substitutePlaceholders('{model} {unknown}', { model: 'o3' });
     expect(result).toBe('o3 {unknown}');
-  });
-});
-
-// ================== findUnsupportedPlaceholders ==================
-
-describe('findUnsupportedPlaceholders', () => {
-  test('finds output_file placeholder', () => {
-    expect(findUnsupportedPlaceholders('--model {model} --output {output_file}'))
-      .toEqual(['output_file']);
-  });
-
-  test('finds schema_path placeholder', () => {
-    expect(findUnsupportedPlaceholders('--schema {schema_path}'))
-      .toEqual(['schema_path']);
-  });
-
-  test('finds both unsupported placeholders', () => {
-    const result = findUnsupportedPlaceholders('{output_file} {schema_path} {model}');
-    expect(result).toContain('output_file');
-    expect(result).toContain('schema_path');
-  });
-
-  test('returns empty for supported-only template', () => {
-    expect(findUnsupportedPlaceholders('exec --model {model} {prompt}'))
-      .toEqual([]);
   });
 });
 

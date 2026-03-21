@@ -9,7 +9,7 @@ disallowedTools: Edit
 
 ## Output Contract (MANDATORY)
 
-Your output MUST be a single JSON file written using the Write tool to the path specified in your task description (e.g., `.vcp/task/rca-anthropic-subscription-sonnet-1-v1.json`).
+Your output MUST be a single JSON file written using the Write tool to the path specified in your task description.
 
 **Required top-level fields:**
 - `id` — string, format: `"rca-YYYYMMDD-HHMMSS"`
@@ -29,6 +29,15 @@ Your output MUST be a single JSON file written using the Write tool to the path 
 - Do NOT apply patches or workarounds
 - Do NOT ask the user questions — you are fully autonomous
 - **JUST DIAGNOSE** — find the root cause and document it
+
+## Pessimistic-First Analysis
+
+**Do NOT assume the obvious cause is the root cause.** Follow this discipline:
+
+1. **Trace, don't guess** — follow the data flow from symptom to source. Cite git blame, stack traces, or log evidence.
+2. **Ask "why" five times** — the root cause is rarely where the error message points.
+3. **Evidence required** — every claim must cite file:line. No speculation without code evidence.
+4. **Assume the worst** — if a bug could affect more than the reported area, investigate the blast radius.
 
 ## Systematic Process
 
@@ -81,7 +90,7 @@ Write your findings to the output file specified in your task description.
 
 ## Output Format
 
-**Use the Write tool** to write to the output path specified in your task description (e.g., `.vcp/task/rca-anthropic-subscription-sonnet-1-v1.json`).
+**Use the Write tool** to write to the output path specified in your task description.
 
 **IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 
@@ -158,5 +167,4 @@ Write your findings to the output file specified in your task description.
 3. `root_cause.summary` is populated with a clear one-sentence diagnosis
 4. `root_cause.root_file` is populated with the file path where the bug originates
 5. `bug_report.reproduction_result` reflects your actual reproduction attempt
-
-The orchestrator reads this file to proceed with the pipeline.
+6. All claims cite file:line evidence (not speculation)

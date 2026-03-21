@@ -240,20 +240,6 @@ function substitutePlaceholders(template: string, placeholders: Record<string, s
 }
 
 /**
- * Check if template contains unsupported placeholders for one-shot mode.
- * Returns list of unsupported placeholders found.
- * @deprecated Kept for export compatibility. Prefer one_shot_args_template on the preset.
- */
-function findUnsupportedPlaceholders(template: string): string[] {
-  const pipelineOnly = ['output_file', 'schema_path'];
-  const found: string[] = [];
-  for (const ph of pipelineOnly) {
-    if (template.includes(`{${ph}}`)) found.push(ph);
-  }
-  return found;
-}
-
-/**
  * Escape an argument for Windows cmd.exe shell invocation (CWE-78 prevention).
  * Mirrors escapeWinArg from cli-executor.ts.
  */
@@ -621,7 +607,6 @@ export {
   parseArgs,
   tokenizeTemplate,
   substitutePlaceholders,
-  findUnsupportedPlaceholders,
   escapeWinArg,
   makeComplete,
   makeError,
