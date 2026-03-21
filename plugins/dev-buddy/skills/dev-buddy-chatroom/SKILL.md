@@ -13,6 +13,8 @@ Fan out a topic to ALL configured AIs + Claude simultaneously, synthesize the be
 
 **Config:** `~/.vcp/dev-buddy-chatroom.json` — use `/dev-buddy-config` web portal or edit manually.
 
+**Plan mode:** This skill can run in plan mode. Participants are instructed to only read and analyze (not modify files), but this is prompt-level enforcement only — see Known Limitation #1. Use it to gather multi-AI perspectives before finalizing a plan.
+
 ---
 
 ## Step 1: Parse & Load Config
@@ -122,24 +124,40 @@ If the participant has resolved `system_prompt` content (from Step 2a-bis), prep
 ```
 {system_prompt_content}
 ---
-You are participating in a multi-AI debate on the following topic.
+You are a participant in a COMPETITIVE multi-AI debate. {participant_count} other AI systems will also respond. Your goal is to present the STRONGEST position and be prepared to defend it.
 
 TOPIC:
 {user_topic}
 
-Provide your analysis, recommendations, and reasoning. Be specific and concrete.
+RESPOND WITH THESE SECTIONS:
+
+**POSITION:** Your core recommendation in 2-3 sentences. Be specific — no fence-sitting.
+
+**ARGUMENTS:** 3-5 key arguments supporting your position, each as a bullet point with concrete evidence or reasoning.
+
+**ANTICIPATED OBJECTIONS:** 2-3 counter-arguments you expect and your preemptive rebuttals.
+
+**BOTTOM LINE:** One sentence — why your approach wins over alternatives.
 
 IMPORTANT: ONLY read and analyze. Do NOT modify any files. Do NOT use Write, Edit, or Bash tools to change anything.
 ```
 
 If the participant has no `system_prompt` (empty or unresolved), use the prompt without the prefix:
 ```
-You are participating in a multi-AI debate on the following topic.
+You are a participant in a COMPETITIVE multi-AI debate. {participant_count} other AI systems will also respond. Your goal is to present the STRONGEST position and be prepared to defend it.
 
 TOPIC:
 {user_topic}
 
-Provide your analysis, recommendations, and reasoning. Be specific and concrete.
+RESPOND WITH THESE SECTIONS:
+
+**POSITION:** Your core recommendation in 2-3 sentences. Be specific — no fence-sitting.
+
+**ARGUMENTS:** 3-5 key arguments supporting your position, each as a bullet point with concrete evidence or reasoning.
+
+**ANTICIPATED OBJECTIONS:** 2-3 counter-arguments you expect and your preemptive rebuttals.
+
+**BOTTOM LINE:** One sentence — why your approach wins over alternatives.
 
 IMPORTANT: ONLY read and analyze. Do NOT modify any files. Do NOT use Write, Edit, or Bash tools to change anything.
 ```
@@ -209,83 +227,178 @@ While background tasks run, generate your own analysis of the topic inline. This
 
 ---
 
-## Step 4: Synthesize & Check Consensus
+## Step 4: Recap, Synthesize & Check Consensus
 
 Read ALL collected responses (Claude's own + all external participants).
 
-**For Round 1 (opening):**
-- Identify the strongest ideas from each participant
-- Note areas of agreement and disagreement
-- Synthesize a combined approach that takes the best elements
+### 4a. Update participant ledger
 
-**For subsequent rounds:**
-- Apply CLI output normalization (strip ANSI, as above)
+**Maintain a running ledger of each participant's state across rounds.** After each round, record for each participant:
+- Round N position summary (Core Position + Key Arguments, extracted from their response)
+- Round N verdict (AGREE/DISAGREE/PARTIAL — for rounds 2+, or "OPENING" for round 1)
+- Round N concessions (what they gave up from previous rounds, if any)
+
+**Also track disagreement resolution events** (feeds Step 6 "Points Resolved During Debate"):
+- After each round's conflict matrix (Step 4b), compare with the previous round's conflicts
+- Record any disagreement that existed in Round N-1 but no longer appears in Round N
+- Format: `"{topic}: resolved in Round {N} — {participant} conceded to {participant}"`
+
+For participants that **failed or timed out** this round:
+- Record status as "NO RESPONSE (timeout/error)" in the ledger
+- Carry forward their last known position from the previous round
+- Note them as absent in the recap (do NOT fabricate a position)
+
+This ledger feeds Steps 4b, 5, and 6. It is Claude's internal state — not sent to participants.
+
+### 4b. Present per-participant recap to user (EVERY round)
+
+**This is shown to the user inline. NOT sent to participants.**
+
+```
+## Round {N} — Participant Positions
+
+### Claude
+**Core Position:** {2-3 sentence summary}
+**Key Arguments:**
+- {argument 1}
+- {argument 2}
+
+### {preset}/{model} (p0)
+**Core Position:** {2-3 sentence summary}
+**Key Arguments:**
+- {argument 1}
+- {argument 2}
+
+### {preset}/{model} (p1) — NO RESPONSE (timeout)
+*Carried forward from Round {N-1}: {previous position}*
+
+{...repeat for all participants...}
+
+---
+
+### Conflict Matrix
+
+| Point of Contention | Who Agrees | Who Disagrees |
+|---------------------|-----------|---------------|
+| {topic 1} | {list} | {list} |
+| {topic 2} | {list} | {list} |
+
+**Key Disagreements:**
+1. {who} vs {who}: {1-sentence clash summary}
+{...list ALL disagreements, not capped...}
+
+**Areas of Universal Agreement:**
+- {points all agree on}
+```
+
+### 4c. Generate/update moderator synthesis
+
+**Claude MUST generate an updated synthesis every round.** This synthesis:
+- Identifies the strongest argument on each side of each key disagreement
+- Proposes a combined approach that resolves the top conflicts
+- Notes which participant's reasoning was most persuasive on each point
+- Explicitly states what remains unresolved
+
+Present the synthesis to the user after the recap.
+
+### 4d. Consensus check (rounds 2+ only, skip for Round 1)
+
+For rounds 2+, apply CLI output normalization (strip ANSI) and parse each response for verdict keywords:
 - Search for consensus keywords **anywhere** in each response (not just the first line):
   - `AGREE` — participant accepts the synthesis
   - `DISAGREE: <reason>` — participant rejects with specific reason
   - `PARTIAL: <accepted> / <contested>` — partial agreement
 - If no keyword found, interpret overall sentiment to classify as agree/disagree/partial
+- Also evaluate: are participants actually engaging with each other's arguments, or just restating?
 
-**Decision:**
-- If ALL participants agree → go to **Step 6**
-- If max_rounds reached → go to **Step 6** (report final state)
-- If any disagree and rounds remaining → refine synthesis, go to **Step 5**
+### 4e. Decision
+
+**Consensus is evaluated only among ACTIVE participants** (those who responded this round). ABSENT participants (timed out / errored) are excluded from the consensus count but noted in the final output.
+
+- **Round 1:** Always proceed to **Step 5** (participants haven't seen each other yet)
+- **Rounds 2+ — all ACTIVE participants agree:** Go to **Step 6**
+- **Rounds 2+ — max_rounds reached:** Go to **Step 6** (report final state)
+- **Rounds 2+ — any ACTIVE participant disagrees, rounds remaining:** Refine synthesis, go to **Step 5**
 
 ---
 
-## Step 5: Subsequent Rounds
+## Step 5: Subsequent Rounds — Adversarial Rebuttal
 
 Generate a new heredoc delimiter (same method as Step 2a).
 
-**Consensus check prompt template:**
+**Adversarial debate prompt template:**
 
-If the participant has resolved `system_prompt` content (from Step 2a-bis), prepend it before the consensus check prompt:
+If the participant has resolved `system_prompt` content (from Step 2a-bis), prepend it before the debate prompt:
 ```
 {system_prompt_content}
 ---
-MULTI-AI DEBATE — Round {N} Consensus Check
+MULTI-AI DEBATE — Round {N}
 
 ORIGINAL TOPIC:
 {user_topic}
 
-DEBATE HISTORY SUMMARY:
-{summary_of_positions_from_all_rounds}
+YOUR PREVIOUS POSITION (Round {N-1}):
+{this_participant_position_and_arguments_from_ledger}
 
-CURRENT SYNTHESIS:
+---
+
+OTHER PARTICIPANTS' POSITIONS (Round {N-1}):
+
+**NOTE: Showing the most divergent positions. {total_participant_count} total participants.**
+
+**Claude:**
+Position: {summary}
+Arguments:
+- {arg 1}
+- {arg 2}
+
+**{preset}/{model} (p{i}):**
+Position: {summary}
+Arguments:
+- {arg 1}
+- {arg 2}
+
+{...show up to 4 most divergent participants, not all...}
+
+**Participants aligned with synthesis (not shown in detail):**
+- {list any participants who AGREED last round}
+
+---
+
+CURRENT SYNTHESIS (from debate moderator):
 {claude_synthesis}
 
-Do you agree with this synthesis? Respond with one of:
-- AGREE — if you accept this approach
-- DISAGREE: <your specific objection and alternative> — if you reject it
-- PARTIAL: <what you accept> / <what you contest> — if you partially agree
+UNRESOLVED DISAGREEMENTS:
+1. {participant_A} vs {participant_B}: {clash description} — {1-sentence summary of each side}
+2. {participant_C} vs {participant_D}: {clash description} — {1-sentence summary of each side}
+{...ALL disagreements, each with participant names and both sides summarized so you can rebut even if the participant's full position is not shown above...}
 
-Then explain your reasoning.
+---
+
+YOUR TASK — respond with ALL sections:
+
+1. **CRITIQUES** — For each disagreement above where you have a view, identify the weakest argument from the opposing side. Name the participant, reference their specific claim, explain why it fails.
+
+2. **DEFENSE** — Address the strongest critique of YOUR position from last round. Concede valid points or explain why they don't apply.
+
+3. **UPDATED POSITION** — Restate your position with any concessions or refinements. If unchanged, explain why others failed to persuade you.
+
+4. **VERDICT:** — One of:
+   - AGREE — you accept the current synthesis
+   - DISAGREE: <specific objection and what must change>
+   - PARTIAL: <what you accept> / <what you contest>
 
 IMPORTANT: ONLY read and analyze. Do NOT modify any files.
 ```
 
-If the participant has no `system_prompt` (empty or unresolved), use the prompt without the prefix:
-```
-MULTI-AI DEBATE — Round {N} Consensus Check
+If the participant has no `system_prompt` (empty or unresolved), use the prompt without the `{system_prompt_content}` prefix (same content starting from "MULTI-AI DEBATE — Round {N}").
 
-ORIGINAL TOPIC:
-{user_topic}
+**Scaling rules (participant positions only — disagreements are NOT capped):**
+- With 1-4 participants: show all positions in detail
+- With 5-10 participants: show the 3-4 most divergent positions in detail, list AGREE'd participants by name only
+- All disagreements are shown — no cap on disagreement count
 
-DEBATE HISTORY SUMMARY:
-{summary_of_positions_from_all_rounds}
-
-CURRENT SYNTHESIS:
-{claude_synthesis}
-
-Do you agree with this synthesis? Respond with one of:
-- AGREE — if you accept this approach
-- DISAGREE: <your specific objection and alternative> — if you reject it
-- PARTIAL: <what you accept> / <what you contest> — if you partially agree
-
-Then explain your reasoning.
-
-IMPORTANT: ONLY read and analyze. Do NOT modify any files.
-```
+**Claude's own round N response:** While background tasks run, Claude also produces its own response following the same 4-section structure (CRITIQUES, DEFENSE, UPDATED POSITION, VERDICT) inline.
 
 Dispatch to all participants using the same pattern as Step 2b (parallel fan-out with `run_in_background: true`).
 
@@ -301,32 +414,56 @@ Return to **Step 4** with the new responses.
 
 ### Present final results to user:
 
+Use the participant ledger built in Step 4a to generate position evolution.
+
 **If consensus reached:**
 ```
 ## Consensus Reached (Round {N}/{max_rounds})
 
-All {count} participants agree on the following approach:
-
+### Final Synthesis
 {final_synthesis}
 
-### Participant Positions:
+### Position Evolution
+**Claude:**
+- Round 1: {original position from ledger}
+- Final: {final position from ledger}
+- Key Concessions: {from ledger, or "None — held firm"}
+
+**{preset}/{model} (p0):**
+- Round 1: {original position from ledger}
+- Final: {final position from ledger}
+- Key Concessions: {from ledger}
+
+**{preset}/{model} (p2) — ABSENT (timed out Round 3)**
+- Round 1: {position}
+- Last known: Round 2 — {position}
+
+{...all participants from ledger...}
+
+### Consensus Votes
 - Claude: AGREE
 - {preset}/{model} (p0): AGREE
-- {preset}/{model} (p1): AGREE
+- {preset}/{model} (p2): ABSENT
 ```
 
 **If max rounds exhausted without full consensus:**
 ```
 ## Debate Complete — No Full Consensus (Round {max_rounds}/{max_rounds})
 
-### Best Synthesis:
+### Best Synthesis
 {final_synthesis}
 
-### Remaining Disagreements:
-- {preset}/{model} (p1): DISAGREE — {reason}
+### Position Evolution
+{same format as above, include Final Verdict per participant from ledger}
 
-### Areas of Agreement:
-{agreed_points}
+### Remaining Disagreements
+- {participant}: {their specific objection from last DISAGREE/PARTIAL verdict}
+
+### Points Resolved During Debate
+- {topic}: resolved in Round {N} — {participant} conceded to {participant} (from ledger disagreement-resolution events)
+
+### Areas of Universal Agreement
+- {what everyone agreed on}
 ```
 
 ### Cleanup
