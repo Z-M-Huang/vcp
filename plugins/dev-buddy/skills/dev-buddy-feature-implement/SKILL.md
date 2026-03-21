@@ -1,23 +1,19 @@
 ---
 name: dev-buddy-feature-implement
-description: Full feature development pipeline — chains requirements, planning, plan review, implementation, and code review stage skills using the configured feature_pipeline
+description: Full feature development pipeline — chains requirements, planning, plan review, implementation, and code review stage skills. Uses single plan file and TaskManagement for progress tracking.
 user-invocable: true
-allowed-tools: Read, Write, Bash, Glob, Grep, Skill, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, TaskGet
 ---
 
 # Feature Pipeline Orchestrator
 
-Run the full feature development pipeline end-to-end. Chains individual stage skills in the order defined by `feature_pipeline` in `~/.vcp/dev-buddy.json`.
-
-**Task directory:** `${CLAUDE_PROJECT_DIR}/.vcp/task/`
+Run the full feature development pipeline end-to-end. All phases append to a single plan file. Uses TaskManagement for progress tracking across context compactions.
 
 ---
 
 ## Step 1: Initialize
 
-1. Create `.vcp/task/` directory if it doesn't exist
-2. Save the user's original request to `.vcp/task/requirements-prompt.md`
-3. Load the pipeline config and expand stages:
+1. Load the pipeline config:
 
 ```bash
 bun -e "
@@ -32,19 +28,24 @@ console.log(JSON.stringify({
 "
 ```
 
-4. Write `.vcp/task/pipeline-tasks.json`:
-```json
-{
-  "pipeline_type": "feature-implement",
-  "stages": [<expanded stage entries>],
-  "created_at": "ISO8601"
-}
-```
-
-5. Display the pipeline stages to the user:
+2. Display the pipeline stages to the user:
 ```
 Feature Pipeline: requirements → planning → plan-review → implementation → code-review
 Executors: {count} total across {stage_count} stages
+```
+
+3. **Create pipeline phase tasks with TaskManagement:**
+
+```
+T_req = TaskCreate(subject='Phase: Requirements + TDD Test Plan', description='Gather requirements, create TDD tests, identify risks', activeForm='Gathering requirements...')
+T_plan = TaskCreate(subject='Phase: Implementation Planning', description='Create granular implementation steps mapped to ACs and tests', activeForm='Planning...')
+TaskUpdate(T_plan, addBlockedBy: [T_req])
+T_review_plan = TaskCreate(subject='Phase: Plan Review', description='Review plan for coverage, granularity, and risk acknowledgment', activeForm='Reviewing plan...')
+TaskUpdate(T_review_plan, addBlockedBy: [T_plan])
+T_impl = TaskCreate(subject='Phase: Implementation', description='Implement plan with TDD loop', activeForm='Implementing...')
+TaskUpdate(T_impl, addBlockedBy: [T_review_plan])
+T_review_code = TaskCreate(subject='Phase: Code Review', description='Review implementation against ACs with evidence', activeForm='Reviewing code...')
+TaskUpdate(T_review_code, addBlockedBy: [T_impl])
 ```
 
 ---
@@ -55,29 +56,41 @@ For each stage type in `feature_pipeline`:
 
 ### Stage-to-Skill Mapping
 
-| Stage Type | Skill | Notes |
+| Stage Type | Skill | Plan File Section Produced |
 |---|---|---|
-| `requirements` | `Skill(skill: "dev-buddy-requirements")` | Gathers requirements, creates user-story artifacts |
-| `planning` | `Skill(skill: "dev-buddy-plan")` | Creates implementation plan with TDD test cases |
-| `plan-review` | `Skill(skill: "dev-buddy-review", args: "--plan")` | Reviews plan. Owns review→repair→re-review loop internally. |
-| `implementation` | `Skill(skill: "dev-buddy-implement")` | Implements plan with TDD loop |
-| `code-review` | `Skill(skill: "dev-buddy-review", args: "--code")` | Reviews code. Owns review→repair→re-review loop internally. |
+| `requirements` | `Skill(skill: "dev-buddy-requirements")` | Requirements + TDD Test Plan + Risk Registry |
+| `planning` | `Skill(skill: "dev-buddy-plan")` | Implementation Steps |
+| `plan-review` | `Skill(skill: "dev-buddy-review", args: "--plan")` | Plan Review Record |
+| `implementation` | `Skill(skill: "dev-buddy-implement")` | Step status updates |
+| `code-review` | `Skill(skill: "dev-buddy-review", args: "--code")` | Code Review Record + Sign-off |
 
 ### Execution Flow
 
 For each stage:
-1. Announce: `**Stage: {stage_type}** — dispatching...`
-2. Invoke the corresponding skill (see mapping above)
-3. After skill completes, verify the expected output artifact exists
-4. If a review stage returned `rejected` after exhausting its iteration budget → **STOP the pipeline** and report to user
+1. `TaskUpdate(phase_task_id, status: 'in_progress')`
+2. Announce: `**Stage: {stage_type}** — dispatching...`
+3. Invoke the corresponding skill (see mapping above)
+4. After skill completes, verify the expected plan file section exists (Read the plan file, check for the section header)
+5. `TaskUpdate(phase_task_id, status: 'completed')`
+6. If a review stage status is `rejected` (check the fenced JSON in the review record section) → **STOP the pipeline**, `TaskUpdate(phase_task_id, status: 'blocked')`, report to user
 
-**IMPORTANT:** Review stages (`plan-review`, `code-review`) handle their own review→repair→re-review loops internally via `/dev-buddy-review`. The orchestrator just invokes the skill once and waits for it to complete. Do NOT implement loop logic here.
+**IMPORTANT:** Review stages handle their own repair loops internally. The orchestrator just invokes once and waits.
 
 ---
 
-## Step 3: Report
+## Step 3: Resume Support
+
+If context is compacted mid-pipeline:
+1. `TaskList()` — find which phase tasks are completed vs pending
+2. Read the plan file — check which sections exist
+3. Skip completed phases, continue from the next pending one
+
+---
+
+## Step 4: Report
 
 After all stages complete:
 1. Present per-stage status summary
-2. If all stages passed → "Feature pipeline complete!"
-3. If any stage was rejected → report which stage and the remaining must_fix findings
+2. `TaskList()` to show final task statuses
+3. If all stages passed → "Feature pipeline complete!"
+4. If any stage was rejected → report which stage and remaining findings

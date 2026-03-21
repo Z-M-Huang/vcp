@@ -1,45 +1,44 @@
 ---
 name: dev-buddy-implement
-description: Implement a plan using TDD loop. Dispatches implementer executor step-by-step, runs tests after each step, fixes failures. Escalates to user after 5 failures per step.
+description: Implement a plan using TDD loop with TaskManagement progress tracking. Reads Implementation Steps from plan file, dispatches implementer step-by-step, runs tests after each step. Fully autonomous — no user prompts.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, TaskCreate, TaskUpdate, TaskList, TaskGet
 ---
 
 # Implementation Stage Skill
 
-Implement an approved plan using a TDD loop. The skill orchestrates the implementer agent step-by-step, running tests after each step to enforce accuracy.
+Implement an approved plan using a TDD loop with TaskManagement-based progress tracking. Reads Implementation Steps and TDD Test Plan from the plan file. Dispatches the implementer agent step-by-step, runs mapped tests after each step.
 
-**Task directory:** `${CLAUDE_PROJECT_DIR}/.vcp/task/`
+**Fully autonomous — does NOT use AskUserQuestion.** Only true blockers (missing credentials, external dependency down) stop execution.
 
 ---
 
 ## Step 1: Validate Inputs
 
-```
-Required: .vcp/task/user-story/manifest.json
-Required: .vcp/task/plan/manifest.json (with step_count > 0)
-Required: .vcp/task/plan/test-plan.json (with test_cases[])
-```
+Read the plan file and verify required sections exist:
+- `## Requirements` with acceptance criteria
+- `## TDD Test Plan` with test IDs
+- `## Implementation Steps` with step details
+- `## Plan Review Record` with `"status": "approved"` in its fenced JSON block
+- `## Risk Registry` with all risks acknowledged
 
-Read `plan/manifest.json` to get `step_count`. Read `plan/test-plan.json` to get test cases.
+If plan review is not approved, tell the user to run `/dev-buddy-review --plan` first.
+If any risk is unacknowledged, tell the user to acknowledge risks first.
 
-If `test-plan.json` is missing or has no `test_cases`, warn the user: "No test cases found. TDD loop will be disabled — implementation will run without automated verification."
-
-## Step 1a: Check for Review Repair Context
-
-If `.vcp/task/review-findings-to-fix.json` exists, this is a re-implementation after code review failure. Read the file and inject its `must_fix` findings into the implementer prompt as additional context:
-
-```
-REVIEW FINDINGS TO FIX:
-The following must_fix findings were raised by code reviewers. Fix each one during implementation:
-{findings from review-findings-to-fix.json}
-```
-
-This file is written by `/dev-buddy-review --code` when the review loop triggers a re-implement.
+**Code review repair mode:** If `## Code Review Record` exists with `"status": "needs_changes"` in its fenced JSON block, this is a repair invocation:
+1. Read the `must_fix` findings from the code review record's fenced JSON
+2. For each finding, identify which implementation step is affected (via `contract_reference` field referencing AC or step)
+3. Reset affected steps' status from `[x] done` back to `[ ] not started` in the plan file
+4. Inject the findings into the implementer prompt for affected steps as:
+   ```
+   ISSUES FROM PRIOR REVIEW:
+   - {finding.description} (file: {finding.file}:{finding.line}, fix: {finding.suggestion})
+   ```
+5. Re-run the TDD loop only for reset steps (skip steps still marked `[x] done`)
 
 ---
 
-## Step 2: Load Config and Resolve Executor
+## Step 2: Load Config
 
 ```bash
 bun -e "
@@ -54,145 +53,193 @@ console.log(JSON.stringify({ executors, max_tdd_iterations: config.max_tdd_itera
 "
 ```
 
-Implementation typically uses a single executor. If multiple are configured, use the first one (implementation is inherently sequential — only one agent should modify code at a time).
+---
+
+## Step 3: Extract Steps and Tests from Plan File
+
+Read the plan file and extract:
+1. All implementation steps (titles, AC mappings, test IDs, files, descriptions, rollbacks)
+2. All tests from TDD Test Plan (IDs, commands, AC mappings)
+3. Total step count
+
+Parse the step status checkboxes:
+- `[ ] not started` — pending
+- `[x] done` — completed (skip)
+- `[!] blocked` — blocked (skip)
+
+This enables resume after context compaction.
 
 ---
 
-## Step 3: TDD Loop
+## Step 4: Create Progress Tasks (TaskManagement)
 
-**CRITICAL: This loop is orchestrated by this SKILL, NOT the implementer agent. The implementer never interacts with the user.**
+**Create one task per implementation step using TaskCreate.**
 
 ```
-For each plan step N = 1 to step_count:
+For each step N (that is not already completed):
+  T{N} = TaskCreate(
+    subject='Step {N}: {title}',
+    description='AC: {ac_ids} | Tests: {test_ids}
+Files: {files}
+What to do: {description}
+Rollback: {rollback}',
+    activeForm='Implementing step {N}...'
+  )
 
-  iteration = 0
-  step_passed = false
-
-  While NOT step_passed AND iteration < max_tdd_iterations:
-
-    3a. Assemble implementer prompt:
-        ORIGINAL REQUEST: {user's original request}
-        ---
-        SINGLE_STEP_MODE: Implement ONLY step {N} of {step_count}.
-        Read the plan step at .vcp/task/plan/steps/{N}.json
-        Read the user story at .vcp/task/user-story/manifest.json
-        {If iteration > 0: "Previous attempt FAILED. Test failures:\n{failure_output}\nFix the issues."}
-        Write implementation result to .vcp/task/impl-steps/impl-step-{N}-v{iteration+1}.json
-
-    3b. Resolve system prompt with stage/role composition for the `implementation` stage:
-        ```bash
-        bun -e "
-        import { loadStageDefinition, getSystemPrompt, composePrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
-        const stage = loadStageDefinition('implementation', '${CLAUDE_PLUGIN_ROOT}/stages');
-        const role = getSystemPrompt('{executor.system_prompt}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
-        if (!stage) { console.error('FATAL: Stage definition not found for implementation'); process.exit(1); }
-        if (!role) { console.error('FATAL: Role prompt not found: {executor.system_prompt}'); process.exit(1); }
-        console.log(composePrompt(stage, role));
-        "
-        ```
-        Dispatch via provider routing using composed prompt:
-        - subscription: Task with composed prompt
-        - api: api-task-runner.ts with --stage-type implementation --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md"
-        - cli: Not supported for implementation stage — CLI executors only support review stages
-
-    3c. Run relevant tests from test-plan.json:
-        - Read test_cases from .vcp/task/plan/test-plan.json
-        - Filter: test_cases where steps[] array includes current step N
-        - For each matching test_case, run its command via Bash:
-          ```
-          Bash(command: test_case.command, timeout: 120000)
-          ```
-        - Check exit code: 0 = pass, non-zero = fail
-        - Also check output against test-plan's success_pattern / failure_pattern if defined
-        - Collect ALL results: { test_id, ac_ids, command, passed: boolean, output: string }
-
-    3d. If ALL tests pass:
-        step_passed = true
-        Log: "Step {N}: all {count} tests passed"
-        Continue to next step
-
-    3e. If ANY test fails:
-        iteration++
-        failure_output = concatenate failed test outputs (first 500 chars each)
-        Log: "Step {N}: {failed_count}/{total_count} tests failed (iteration {iteration}/{max_tdd_iterations})"
-
-        If iteration >= max_tdd_iterations:
-          STOP — escalate to user via AskUserQuestion:
-          "Step {N} failed after {max_tdd_iterations} attempts.
-
-           Failed tests:
-           {for each failed: - {test_case.description} (ACs: {ac_ids})}
-
-           Last failure output:
-           {failure_output}
-
-           How would you like to proceed?"
-
-          Options:
-          1. "Fix manually and re-run /dev-buddy-implement"
-          2. "Adjust the tests and re-run"
-          3. "Skip this step and continue"
-
-          If user picks 3 (skip): mark step as skipped, continue to step N+1
-          If user picks 1 or 2: STOP execution, user handles it
-
-After ALL steps complete:
-  3f. Run full test suite — execute ALL test commands from test-plan.json:
-      ```
-      For each test_case in test_plan.test_cases:
-        Bash(command: test_case.command, timeout: 120000)
-      ```
-      Also run the global test commands from test_plan.commands (e.g., "npm test"):
-      ```
-      For each command in test_plan.commands:
-        Bash(command: command, timeout: 120000)
-      ```
-      Collect results: { total_tests, passed, failed, skipped_steps }
-
-  3g. Write final .vcp/task/impl-result.json:
-      ```json
-      {
-        "status": "complete|partial",
-        "steps_completed": N,
-        "steps_total": step_count,
-        "steps_skipped": [list of skipped step numbers],
-        "files_modified": ["list from git diff --name-only"],
-        "files_created": ["list of new files"],
-        "test_results": {
-          "total": N,
-          "passed": N,
-          "failed": N,
-          "details": [{ "test_id": "...", "ac_ids": [...], "passed": true|false }]
-        }
-      }
-      ```
+  If step has dependencies from the plan (e.g., "Dependencies: Step 1, Step 3"):
+    TaskUpdate(T{N}, addBlockedBy: [T{dep1}, T{dep2}])
+  Else if N > 1 (fallback — linear chain):
+    TaskUpdate(T{N}, addBlockedBy: [T{N-1}])
 ```
 
----
-
-## Step 4: Verify Output
-
-After the loop completes:
-1. `.vcp/task/impl-result.json` exists with `status` field
-2. All planned files were created/modified
-3. Final test suite results
+This creates a visible task list with dependency chaining.
 
 ---
 
-## Step 5: Report Results
+## Step 5: TDD Execution Loop
 
-Present to the user:
-- Steps completed / total
-- Test results (passed / failed)
-- Files modified/created
-- Suggest next step: `/dev-buddy-review --code`
+For each step in order (skip completed/blocked):
+
+### 5a. Claim the step
+```
+TaskUpdate(step_task_id, status: 'in_progress')
+```
+
+### 5b. Run mapped tests FIRST (establish failing baseline)
+
+For each test ID mapped to this step (from TDD Test Plan):
+- Run the test command via Bash
+- Record the baseline result (expected to fail — this IS TDD)
+
+### 5c. Dispatch implementer
+
+Construct the implementation prompt for this specific step:
+
+```
+SINGLE_STEP_MODE: step {N}
+
+STRICT PLAN ADHERENCE: Follow the plan EXACTLY. No deviations.
+
+STEP DETAILS (from plan file):
+Title: {title}
+AC: {ac_ids}
+Tests: {test_ids}
+Files to modify: {files_to_modify}
+Files to create: {files_to_create}
+Existing code to reuse: {existing_code_to_reuse}
+What to do: {description}
+Rollback: {rollback}
+
+TDD CYCLE:
+1. The mapped tests have been run — they should be failing (red)
+2. Implement EXACTLY what the step says — no more, no less
+3. Run the mapped tests again — they must pass (green)
+4. Write your output
+
+Write output to {TMPDIR}/.vcp/oneshot/impl-{RAND}-step{N}.json
+```
+
+**Resolve system prompt and dispatch** (same stage/role composition as other skills).
+
+Route by provider type:
+- **subscription:** `Task(subagent_type: "general-purpose", model, prompt)`
+- **api:** `Bash(run_in_background: true)` → `bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" --type api --output-id impl-{RAND}-step{N} --preset "{PRESET}" --model "{MODEL}" --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin`
+
+### 5d. Collect result and run tests
+
+**For API/CLI executors:** The output file is wrapped in an envelope `{"event":"complete","provider":"...","model":"...","result":"..."}`. Parse the `result` field to get the actual implementer output. For subscription executors, the result is returned directly from the Task tool.
+
+Read the implementer's output. Then run ALL mapped tests for this step:
+- Run each test command from the TDD Test Plan where `test_ids` includes tests mapped to this step
+- Check pass/fail
+
+### 5e. Handle test results
+
+**If all tests pass:**
+1. `TaskUpdate(step_task_id, status: 'completed')`
+2. Update plan file: change step status from `[ ] not started` to `[x] done` via Edit tool
+3. Continue to next step
+
+**If any test fails:**
+1. Increment TDD iteration counter for this step
+2. If iterations < max_tdd_iterations:
+   - Re-dispatch implementer with failure output appended:
+     ```
+     ISSUES FROM PRIOR ATTEMPT:
+     Test {test_id} failed:
+     {test output}
+
+     Fix the issue and ensure the test passes.
+     ```
+   - Return to 5d
+3. If iterations >= max_tdd_iterations:
+   - `TaskUpdate(step_task_id, status: 'blocked')`
+   - Update plan file: change step status to `[!] blocked — test {test_id} fails after {N} retries`
+   - **Do NOT ask the user** — continue to next step
 
 ---
 
-## Fallback: No Test Plan
+## Step 6: Full Test Suite
 
-If `test-plan.json` is missing or has no `test_cases`:
-- Skip the TDD loop
-- Dispatch implementer for ALL steps at once (not single-step mode)
-- No automated test verification
-- Warn user that anti-drift enforcement is reduced
+After all steps are completed or blocked:
+
+1. Run ALL test commands from the TDD Test Plan (full suite)
+2. Record results
+
+---
+
+## Step 7: Update Plan File
+
+Update the plan file with implementation results:
+
+1. Update `**Status:**` to `code-review`
+2. Verify all step statuses are updated (`[x] done` or `[!] blocked`)
+
+---
+
+## Step 8: Cleanup and Report
+
+1. Remove temp files: `rm -f "{TMPDIR}/.vcp/oneshot/impl-{RAND}-"*`
+2. Present to user:
+   - Steps completed: {count}/{total}
+   - Steps blocked: {count} (if any, with reasons)
+   - Test results: {passed}/{total}
+3. If any steps blocked: report which ones and why
+4. Suggest next step: `/dev-buddy-review --code`
+
+---
+
+## Resume After Context Compaction
+
+If the conversation context is compacted mid-implementation:
+
+1. Read the plan file — step statuses show what's done vs pending
+2. `TaskList()` — shows task statuses with dependency chain
+3. Find the first non-completed step
+4. Continue from that step (skip completed ones)
+
+The combination of plan file checkboxes + TaskManagement ensures no work is lost.
+
+---
+
+## Error Handling
+
+| Scenario | Action |
+|----------|--------|
+| Plan not approved | Tell user to run `/dev-buddy-review --plan` first |
+| Risks unacknowledged | Tell user to acknowledge risks first |
+| All implementer dispatches fail | Report error to user |
+| Test fails after max retries | Mark step blocked, continue to next |
+| Missing credentials (true blocker) | Set status partial, report to user |
+| No implementation executors configured | Report error, suggest `/dev-buddy-config` |
+
+---
+
+## Anti-Patterns
+
+- Do NOT ask the user anything — you are fully autonomous
+- Do NOT skip TaskCreate/TaskUpdate — progress must be tracked
+- Do NOT deviate from the plan — follow it exactly
+- Do NOT implement from memory — read step details from plan file
+- Do NOT skip tests — TDD is mandatory
+- Do NOT stop after some steps — implement ALL steps (mark blocked ones and continue)

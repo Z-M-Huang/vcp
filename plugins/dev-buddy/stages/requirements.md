@@ -1,6 +1,6 @@
 ---
 stage: requirements
-description: Gather and document requirements through structured elicitation and user story development
+description: Gather requirements, create TDD test plans, and identify risks through pessimistic-first analysis
 tools: Read, Write, Glob, Grep, AskUserQuestion, WebSearch
 ---
 
@@ -8,17 +8,43 @@ tools: Read, Write, Glob, Grep, AskUserQuestion, WebSearch
 
 ## Output Contract (MANDATORY)
 
-Your output MUST be 4 separate JSON files written in this order. The manifest file MUST be written LAST to signal completion.
+Your output MUST be a single JSON file written using the Write tool to the path specified in your task description.
 
-**Required files:**
-- `.vcp/task/user-story/meta.json` — story metadata
-- `.vcp/task/user-story/acceptance-criteria.json` — testable acceptance criteria
-- `.vcp/task/user-story/scope.json` — scope boundaries and assumptions
-- `.vcp/task/user-story/manifest.json` — manifest (written LAST, signals completion)
+**Required top-level fields:**
+- `user_story` — object with `role`, `want`, `benefit`
+- `acceptance_criteria` — array of AC objects (see below)
+- `scope` — object with `in_scope`, `out_of_scope`, `assumptions`
+- `impact_analysis` — object with `impacts` and `questions` arrays (pessimistic-first)
+- `tdd_test_plan` — object with `unit_tests`, `e2e_tests`, `skill_tests` arrays
+- `risk_registry` — array of risk objects
+- `approved_by` — string or null
+- `approved_at` — ISO8601 or null
+- `needs_clarification` — boolean (default: false). If true, write only this field + `clarification_questions` and stop.
+- `clarification_questions` — array of strings (empty if not clarifying)
 
-**Required fields per file — see Output Format section below.**
+## Pessimistic-First Analysis (CRITICAL)
 
-## Standard Mode (No Specialist Analyses)
+**Before defining what this feature should do, identify what it will BREAK.**
+
+You MUST:
+1. Identify every file and integration point this change touches
+2. For each, state the specific breakage scenario with affected file:line
+3. List all questions the user must answer about failure modes
+4. Generate risks with severity, affected files, and mitigation strategies
+
+**Do NOT assume the feature will "just work."** Start by listing problems, then define the solution.
+
+## TDD Test Plan (CRITICAL — Generated HERE, Before Planning)
+
+**Tests come BEFORE implementation planning.** You MUST generate:
+
+1. **Unit tests** — mapped to specific ACs, with test file paths and run commands
+2. **E2E tests** — end-to-end scenarios mapped to ACs
+3. **Skill tests** — if applicable, skill commands that validate behavior
+
+Each test must reference the AC(s) it validates.
+
+## Systematic Process
 
 ### Phase 1: Discovery
 1. Analyze the initial request for ambiguities and unstated assumptions
@@ -26,126 +52,167 @@ Your output MUST be 4 separate JSON files written in this order. The manifest fi
 3. Identify technical constraints and dependencies
 4. Map stakeholder needs (user, developer, system)
 
-### Phase 2: Elicitation
+### Phase 2: Impact Analysis (Pessimistic-First)
+1. Identify ALL files this change could affect (use Glob/Grep)
+2. For each affected file, describe what could break (cite file:line)
+3. List integration points that could fail
+4. Generate questions for the user about failure mode preferences
+5. Document risks with severity and mitigation
+
+### Phase 3: Elicitation
 1. Ask clarifying questions (ONE topic at a time, max 3 questions per round)
-2. Validate understanding with concrete examples
-3. Explore edge cases and error scenarios
+2. Present impact analysis to user — ask about each risk
+3. Document user responses to risk questions
 4. Confirm acceptance criteria with measurable outcomes
 
-### Phase 3: Documentation
+### Phase 4: TDD Test Plan
+1. For each AC, design unit tests with file paths and commands
+2. Design E2E tests for integration scenarios
+3. Design skill tests if the feature involves skill behavior
+4. Map every test to AC(s) it validates
+
+### Phase 5: Documentation
 1. Structure requirements in user story format
 2. Define clear acceptance criteria (Given/When/Then format)
-3. Document assumptions and decisions made
-4. Identify test scenarios for TDD
+3. Document impact analysis with user responses
+4. Document risk registry with user acknowledgment status
+5. Document TDD test plan
 
 ## Output Format
 
-Write each section as a separate file using the Write tool, in this order:
+**Use the Write tool** to write to the output path specified in your task description.
 
-1. **Write `.vcp/task/user-story/meta.json`**
 ```json
 {
-  "id": "story-YYYYMMDD-HHMMSS",
-  "title": "Concise feature title",
-  "description": "User story in As a/I want/So that format",
-  "questions_resolved": ["List of clarified questions"],
-  "vcp_standards_referenced": []
-}
-```
-
-2. **Write `.vcp/task/user-story/acceptance-criteria.json`**
-
-Each AC MUST include a `source` field for provenance tracking (anti-drift):
-```json
-[
-  {
-    "id": "AC1",
-    "scenario": "Scenario name",
-    "given": "Initial context",
-    "when": "Action taken",
-    "then": "Expected outcome",
-    "source": "original_request|user_answer|specialist_suggestion"
-  }
-]
-```
-
-3. **Write `.vcp/task/user-story/scope.json`**
-
-Suggestions beyond the original request go to `candidate_additions` — NOT into ACs or `in_scope`:
-```json
-{
-  "in_scope": ["Explicitly included items"],
-  "out_of_scope": ["Explicitly excluded items"],
-  "assumptions": ["Documented assumptions"],
-  "candidate_additions": ["Items suggested by analysis that need explicit user approval before becoming ACs"]
-}
-```
-
-4. **Write `.vcp/task/user-story/manifest.json` (LAST — signals completion)**
-```json
-{
-  "artifact": "user-story",
-  "format_version": "3.0",
-  "id": "story-YYYYMMDD-HHMMSS",
-  "title": "Concise feature title",
-  "description": "User story in As a/I want/So that format",
-  "ac_count": 5,
-  "sections": {
-    "meta": "meta.json",
-    "acceptance_criteria": "acceptance-criteria.json",
-    "scope": "scope.json"
+  "user_story": {
+    "role": "developer",
+    "want": "feature description",
+    "benefit": "why this matters"
   },
-  "approved_by": "user",
-  "approved_at": "ISO8601"
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "scenario": "Scenario name",
+      "given": "Initial context",
+      "when": "Action taken",
+      "then": "Expected outcome",
+      "source": "original_request|user_answer|specialist_suggestion"
+    }
+  ],
+  "scope": {
+    "in_scope": ["Explicitly included items"],
+    "out_of_scope": ["Explicitly excluded items"],
+    "assumptions": ["Documented assumptions"]
+  },
+  "impact_analysis": {
+    "impacts": [
+      {
+        "id": "IMP-1",
+        "affected_file": "src/auth/middleware.ts",
+        "affected_line": 45,
+        "description": "Changing auth flow will invalidate existing sessions",
+        "severity": "HIGH",
+        "evidence": "middleware.ts:45 — session token format changes",
+        "mitigation": "Add backwards-compatible token parsing",
+        "decision_required": "Accept session invalidation or add migration?"
+      }
+    ],
+    "questions": [
+      {
+        "id": "Q-1",
+        "question": "What happens if existing sessions are invalidated?",
+        "context": "IMP-1",
+        "user_response": null,
+        "decided_at": null
+      }
+    ]
+  },
+  "tdd_test_plan": {
+    "unit_tests": [
+      {
+        "id": "UT-1",
+        "description": "Test auth middleware rejects expired tokens",
+        "ac_ids": ["AC-1"],
+        "file": "tests/auth/middleware.test.ts",
+        "command": "npm test -- --grep 'auth middleware'"
+      }
+    ],
+    "e2e_tests": [
+      {
+        "id": "E2E-1",
+        "description": "Login flow with valid credentials",
+        "ac_ids": ["AC-2"],
+        "command": "npm run test:e2e -- --grep 'login'"
+      }
+    ],
+    "skill_tests": [
+      {
+        "id": "SK-1",
+        "description": "Verify auth skill responds correctly",
+        "ac_ids": ["AC-1"],
+        "skill_command": "/verify-auth --test"
+      }
+    ]
+  },
+  "risk_registry": [
+    {
+      "id": "R-1",
+      "risk": "Changing auth middleware could break existing sessions",
+      "severity": "HIGH",
+      "affected_files": ["src/auth/middleware.ts", "src/session/store.ts"],
+      "mitigation": "Add backwards-compatible token parsing",
+      "user_acknowledged": false
+    }
+  ],
+  "approved_by": null,
+  "approved_at": null,
+  "needs_clarification": false,
+  "clarification_questions": []
 }
 ```
-
-**IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 
 ## Quality Checklist
 
 Before completing, verify:
+- [ ] Impact analysis lists ALL files that could be affected (with file:line evidence)
+- [ ] Every impact has a severity, evidence, and mitigation
+- [ ] User questions about failure modes are documented (even if unanswered)
 - [ ] All ambiguous terms have been defined
 - [ ] Scope is clearly bounded (in/out documented)
-- [ ] Acceptance criteria are measurable and testable
+- [ ] Acceptance criteria are measurable and testable (Given/When/Then)
 - [ ] Every AC has a `source` field (provenance tracking)
-- [ ] Edge cases and error scenarios are covered
-- [ ] Dependencies on existing code are identified
-- [ ] Suggestions beyond original request are in `candidate_additions`, not ACs
-- [ ] User has explicitly approved the requirements
+- [ ] TDD test plan covers ALL acceptance criteria
+- [ ] Every test maps to at least one AC
+- [ ] Risk registry includes severity and affected files
+- [ ] Edge cases and error scenarios are covered in tests
 
 ## Collaboration Protocol
 
 When you need clarification:
 - If AskUserQuestion tool is available: use it to ask specific questions with context, wait for answers, resume
 - If AskUserQuestion is NOT available (e.g., API executor mode): write a status file instead:
-  Write `.vcp/task/user-story/status.json`:
+  Write to the output path with:
   ```json
   {"status": "needs_clarification", "clarification_questions": ["Q1?", "Q2?"]}
   ```
-  Do NOT write `manifest.json`. Stop and let the orchestrator ask the user on your behalf.
-
-When synthesizing multi-executor results:
-- If prior analyses conflict on scope or acceptance criteria, ask the user (via either method above)
-- If the original request is ambiguous on a key point, ask the user
-- Do NOT assume — the orchestrator will re-run you with answers
+  Do NOT write the full output. Stop and let the orchestrator ask the user on your behalf.
 
 ## Anti-Patterns to Avoid
 
 - Do not assume requirements without confirmation
-- Do not ask multiple unrelated questions at once
+- Do not skip impact analysis — it is the FIRST thing you do
+- Do not generate tests after planning — tests come BEFORE planning
 - Do not leave scope boundaries undefined
 - Do not write vague acceptance criteria ("should work well")
-- Do not skip edge case analysis
-- Do not forget TDD test criteria
+- Do not skip edge case analysis in tests
+- Do not omit risk registry — every change has risks
 
 ## CRITICAL: Completion Requirements
 
-**You MUST write the output files before completing.** Your work is NOT complete until:
+**You MUST write the output file before completing.** Your work is NOT complete until:
 
-1. Files written: `meta.json`, `acceptance-criteria.json`, `scope.json`, `manifest.json` (4 files)
-2. `.vcp/task/user-story/manifest.json` was written LAST (signals completion)
-3. The JSON is valid and contains all required fields
-4. User has approved the requirements (set `approved_by` and `approved_at`)
-
-If you cannot get user approval, write the file with `approved_by: null` and the orchestrator will handle approval.
+1. Output file written with ALL required fields
+2. Impact analysis populated with file:line evidence
+3. TDD test plan covers all ACs
+4. Risk registry populated with severity ratings
+5. All claims cite evidence (not speculation)

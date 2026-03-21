@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { sanitizeForFilename, getOutputFileName, getV3OutputFileName, isValidStageEntry, VALID_STAGE_TYPES, SAFE_PATH_RE } from './stage-definitions.ts';
+import { sanitizeForFilename, getV3OutputFileName, isValidStageEntry, VALID_STAGE_TYPES, SAFE_PATH_RE } from './stage-definitions.ts';
 
 // ─── sanitizeForFilename ─────────────────────────────────────────────────────
 
@@ -62,66 +62,6 @@ describe('sanitizeForFilename', () => {
 
   test('throws when all chars are stripped', () => {
     expect(() => sanitizeForFilename('///???')).toThrow('Cannot sanitize');
-  });
-});
-
-// ─── getOutputFileName ───────────────────────────────────────────────────────
-
-describe('getOutputFileName', () => {
-  test('returns canonical name for singleton stages', () => {
-    expect(getOutputFileName('requirements', 1, 'anthropic', 'opus', 1)).toBe('user-story/manifest.json');
-    expect(getOutputFileName('planning', 1, 'anthropic', 'opus', 1)).toBe('plan/manifest.json');
-    expect(getOutputFileName('implementation', 1, 'anthropic', 'sonnet', 1)).toBe('impl-result.json');
-  });
-
-  test('returns unversioned name for plan-review', () => {
-    expect(getOutputFileName('plan-review', 1, 'anthropic-subscription', 'sonnet', 1))
-      .toBe('plan-review-anthropic-subscription-sonnet-1.json');
-  });
-
-  test('returns unversioned name for code-review', () => {
-    expect(getOutputFileName('code-review', 2, 'anthropic-subscription', 'opus', 1))
-      .toBe('code-review-anthropic-subscription-opus-2.json');
-  });
-
-  test('returns versioned name for rca', () => {
-    expect(getOutputFileName('rca', 1, 'anthropic-subscription', 'sonnet', 1))
-      .toBe('rca-anthropic-subscription-sonnet-1-v1.json');
-  });
-
-  test('increments version for rca re-analysis', () => {
-    expect(getOutputFileName('rca', 1, 'anthropic-subscription', 'sonnet', 2))
-      .toBe('rca-anthropic-subscription-sonnet-1-v2.json');
-    expect(getOutputFileName('rca', 1, 'anthropic-subscription', 'sonnet', 3))
-      .toBe('rca-anthropic-subscription-sonnet-1-v3.json');
-  });
-
-  test('review version param is no-op (pattern has no {version})', () => {
-    expect(getOutputFileName('plan-review', 1, 'anthropic-subscription', 'sonnet', 1))
-      .toBe(getOutputFileName('plan-review', 1, 'anthropic-subscription', 'sonnet', 5));
-  });
-
-  test('sanitizes provider name with spaces', () => {
-    expect(getOutputFileName('plan-review', 1, 'Codex CLI', 'o3', 1))
-      .toBe('plan-review-codex-cli-o3-1.json');
-  });
-
-  test('sanitizes model name with dots', () => {
-    expect(getOutputFileName('code-review', 1, 'codex-cli', 'gpt-5.3-codex', 1))
-      .toBe('code-review-codex-cli-gpt-5.3-codex-1.json');
-  });
-
-  test('different indices produce different filenames for same provider+model', () => {
-    const file1 = getOutputFileName('code-review', 1, 'anthropic-subscription', 'sonnet', 1);
-    const file2 = getOutputFileName('code-review', 2, 'anthropic-subscription', 'sonnet', 1);
-    expect(file1).not.toBe(file2);
-  });
-
-  test('singleton ignores provider/model/version params', () => {
-    const a = getOutputFileName('requirements', 1, 'foo', 'bar', 5);
-    const b = getOutputFileName('requirements', 1, 'baz', 'qux', 1);
-    expect(a).toBe(b);
-    expect(a).toBe('user-story/manifest.json');
   });
 });
 

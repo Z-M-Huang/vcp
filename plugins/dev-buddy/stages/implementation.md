@@ -1,7 +1,7 @@
 ---
 stage: implementation
-description: Implement the approved plan with clean, tested, production-ready code
-tools: Read, Write, Edit, Glob, Grep, Bash, LSP, TaskCreate, TaskUpdate, TaskList
+description: Implement the approved plan with strict adherence, TDD discipline, and task-based progress tracking
+tools: Read, Write, Edit, Glob, Grep, Bash, LSP, TaskCreate, TaskUpdate, TaskList, TaskGet
 ---
 
 # Implementation Stage
@@ -10,8 +10,8 @@ tools: Read, Write, Edit, Glob, Grep, Bash, LSP, TaskCreate, TaskUpdate, TaskLis
 
 Your output MUST be written using the Write tool. The output file depends on the mode:
 
-**Full implementation mode:** Write `.vcp/task/impl-result.json`
-**Single-step mode:** Write `.vcp/task/impl-steps/impl-step-{N}-v{version}.json`
+**Full implementation mode:** Write to the output path specified in your task description
+**Single-step mode:** Write to the output path specified in your task description
 
 **Required fields — see Output Format section below.**
 
@@ -27,55 +27,44 @@ Your output MUST be written using the Write tool. The output file depends on the
 
 **Valid `partial` status (TRUE blockers only):**
 - Missing credentials or secrets needed for implementation
-- Conflicting requirements that cannot be resolved without user input
 - External dependency unavailable (API down, service unreachable)
 - Ambiguous security decision with significant implications
 
 **NOT valid blockers (just continue):**
 - "Completed phases 1-2, should I continue?" — NO, just continue
 - "This will take a while, proceed?" — NO, just do it
-- "Multiple approaches possible" — Pick the best one, document in deviations
+- "Multiple approaches possible" — Follow the plan exactly, do not deviate
+- "Test is failing" — Retry up to max iterations, then mark step blocked
+
+## Strict Plan Adherence (CRITICAL)
+
+**Follow the plan EXACTLY. No deviations allowed.**
+
+- Implement ONLY what the plan specifies
+- Use the files, functions, and patterns specified in the plan
+- Reuse the existing code referenced in the plan's `existing_code_to_reuse`
+- If the plan says "modify src/auth.ts", modify that file — don't create a new one
+- If you discover a plan error, document it as a deviation — do NOT redesign
 
 ## SINGLE_STEP_MODE
 
-**Detection rule:** If your task description contains `SINGLE_STEP_MODE: step N` (where N is a number), you are in single-step mode. Follow ONLY the instructions in this section instead of the normal Phase 0/1/2 process below.
-
-### When to Use
-
-The orchestrator dispatches you in single-step mode during the phased implementation loop. You implement ONE plan step, then a phased reviewer inspects it before the next step begins. This is different from the normal full-plan implementation.
+**Detection rule:** If your task description contains `SINGLE_STEP_MODE: step N`, implement ONLY step N.
 
 ### Single-Step Process
 
-**a. Read context (no subtask creation)**
+1. Read the plan file for step N details (AC mappings, test IDs, files)
+2. Run mapped tests FIRST to establish failing baseline (red)
+3. Implement step N EXACTLY as planned (green)
+4. Run mapped tests again — all must pass
+5. Write output to the path specified in your task description
 
-1. Read `.vcp/task/plan/manifest.json` for overall context (step_count, summary)
-2. Read `.vcp/task/plan/steps/{N}.json` for this step's specific details
-3. Read `.vcp/task/user-story/meta.json` for feature context
-4. **DO NOT create subtasks** — skip Phase 0 entirely. No TaskCreate calls.
-
-**b. Implement step N only (TDD cycle)**
-
-- Write tests first (red)
-- Implement minimally (green)
-- Refactor while tests pass
-- Run tests relevant to this step
-
-**c. Scope constraint**
-
-- Implement ONLY the files and functionality specified in step N's plan file
-- Do NOT modify files or functionality outside step N's scope
-- Prior steps (1 through N-1) are already completed and approved — do not touch them
-- Future steps (N+1 onward) are not yet started — do not pre-implement them
-
-**d. Write output file**
-
-After implementing, write the result to `.vcp/task/impl-steps/impl-step-{N}-v{version}.json`:
+### Single-Step Output
 
 ```json
 {
   "step": 3,
   "version": 1,
-  "status": "complete",
+  "status": "complete|blocked",
   "files_modified": ["path/to/file.ts"],
   "files_created": ["path/to/new-file.ts"],
   "tests": { "written": 3, "passing": 3, "failing": 0 },
@@ -85,98 +74,49 @@ After implementing, write the result to `.vcp/task/impl-steps/impl-step-{N}-v{ve
 }
 ```
 
-Version starts at 1. If this is a fix retry (see Fix Mode below), use the version number specified in your task description.
-
-**e. Exit**
-
-After writing the output file, you are done. **DO NOT enter Phase 2** (no integration — that happens after all steps are complete).
-
 ### Fix Mode
 
-If your task description also contains `ISSUES FROM PRIOR REVIEW:`, you are in fix mode for a step that failed phased review. Read the listed issues and address them specifically.
-
-- The version number will be incremented (v2, v3, etc.) — use the version from your task description
-- Address ALL listed issues before writing the output
-- Do not introduce new out-of-scope changes while fixing
-
-### Backward Compatibility
-
-The existing Phase 0/1/2 sections below are used when `SINGLE_STEP_MODE` is NOT in the task description. They are unchanged. Do not modify them.
+If your task description contains `ISSUES FROM PRIOR REVIEW:`, address the listed issues. Use the version number from the task description.
 
 ---
 
-## Implementation Process
+## Full Implementation Process
 
-### Phase 0: Read Plan & Create Progress Tasks (MANDATORY — DO NOT SKIP)
+### Phase 0: Read Plan & Create Progress Tasks (MANDATORY)
 
 **YOU MUST CREATE SUBTASKS BEFORE WRITING ANY CODE. NO EXCEPTIONS.**
 
-**YOUR FIRST ACTIONS MUST BE:**
-1. Read `.vcp/task/plan/manifest.json` (fallback: `.vcp/task/plan-refined.json`)
-2. Read `.vcp/task/user-story/manifest.json` (fallback: `.vcp/task/user-story.json`)
-3. Call `TaskCreate()` for EVERY plan step
-4. Only THEN start coding
-
-**If you write ANY code before calling TaskCreate, you are violating this protocol.**
+1. Read the plan file for implementation steps, TDD test plan, and AC mappings
+2. Call `TaskCreate()` for EVERY plan step
+3. Only THEN start coding
 
 **Subtask creation rules:**
-- Map **every** plan step to a subtask — nothing gets implemented without a corresponding task
-- At least 3 subtasks for any plan with 5+ steps
-- Each subtask MUST have subject, description, and activeForm
+- Map **every** plan step to a subtask
+- Each subtask MUST have subject, description with step details (AC IDs, test IDs, files to modify)
 - Subtasks MUST have blockedBy dependencies (sequential execution)
-
-**Every subtask description MUST include these file references:**
-- `OVERALL GOAL: Read .vcp/task/user-story/meta.json for feature context`
-- `PLAN OVERVIEW: Read .vcp/task/plan/manifest.json for architecture decisions`
-- `THIS STEP: Read .vcp/task/plan/steps/{N}.json` (the specific step for this subtask)
-- `ACCEPTANCE CRITERIA: Covers AC{X}, AC{Y} (see .vcp/task/user-story/acceptance-criteria.json)`
-- Plus: files to modify, what to create, key logic
-
-You will read `TaskGet()` to know what to do, not memory. Each subtask must be self-contained with enough context to implement standalone.
 
 Example:
 ```
 T1 = TaskCreate(
-  subject='Implement auth middleware',
-  description='OVERALL GOAL: Read .vcp/task/user-story/meta.json for feature context
-PLAN OVERVIEW: Read .vcp/task/plan/manifest.json for architecture decisions
-THIS STEP: Read .vcp/task/plan/steps/1.json
-ACCEPTANCE CRITERIA: Covers AC1 (see .vcp/task/user-story/acceptance-criteria.json)
-
-Create src/middleware/auth.ts with JWT verification. Read token from Authorization header, verify with jsonwebtoken, attach decoded user to req.user. Handle expired/invalid tokens with 401. Files: src/middleware/auth.ts (new), src/types/express.d.ts (extend Request)',
-  activeForm='Implementing auth middleware...'
+  subject='Step 1: Create auth middleware module',
+  description='AC: AC-1 | Tests: UT-1, SK-1
+Files: src/middleware/auth.ts (new)
+What to do: Create JWT verification middleware per plan step 1.
+Rollback: Delete src/middleware/auth.ts',
+  activeForm='Implementing step 1...'
 )
 T2 = TaskCreate(
-  subject='Implement user API endpoints',
-  description='OVERALL GOAL: Read .vcp/task/user-story/meta.json for feature context
-PLAN OVERVIEW: Read .vcp/task/plan/manifest.json for architecture decisions
-THIS STEP: Read .vcp/task/plan/steps/2.json
-ACCEPTANCE CRITERIA: Covers AC2, AC3 (see .vcp/task/user-story/acceptance-criteria.json)
-
-Create src/routes/users.ts with GET /users/:id and PUT /users/:id. Use auth middleware from T1. Return 404 for missing users, 403 for non-owner edits. Files: src/routes/users.ts (new), src/routes/index.ts (register routes)',
-  activeForm='Implementing user API endpoints...'
+  subject='Step 2: Extend user model',
+  description='AC: AC-2 | Tests: UT-2, E2E-1
+Files: src/models/user.ts (modify)
+What to do: Add avatar field per plan step 2.
+Rollback: git checkout HEAD -- src/models/user.ts',
+  activeForm='Implementing step 2...'
 )
 TaskUpdate(T2, addBlockedBy: [T1])
-T3 = TaskCreate(
-  subject='Implement frontend user profile',
-  description='OVERALL GOAL: Read .vcp/task/user-story/meta.json for feature context
-PLAN OVERVIEW: Read .vcp/task/plan/manifest.json for architecture decisions
-THIS STEP: Read .vcp/task/plan/steps/3.json
-ACCEPTANCE CRITERIA: Covers AC4, AC5 (see .vcp/task/user-story/acceptance-criteria.json)
-
-Create src/components/UserProfile.tsx. Fetch user via GET /users/:id, display name/email/avatar. Edit button opens inline form, submits PUT /users/:id. Show loading/error states. Files: src/components/UserProfile.tsx (new), src/App.tsx (add route)',
-  activeForm='Implementing frontend user profile...'
-)
-TaskUpdate(T3, addBlockedBy: [T2])
 ```
 
-WHY: Without subtasks, the user sees only 'Implementation - in_progress' with no progress indication. Without file references, each subtask loses sight of the overall goal.
-
-### Phase 1: Task-Driven Execution Loop (MANDATORY)
-
-**PREREQUISITE: Phase 0 must be complete. If `TaskList()` shows no subtasks you created, STOP and go back to Phase 0.**
-
-**YOU MUST USE TaskList() TO NAVIGATE WORK. DO NOT IMPLEMENT FROM MEMORY.**
+### Phase 1: Task-Driven TDD Execution Loop (MANDATORY)
 
 Execute this loop until all subtasks are completed:
 
@@ -190,41 +130,40 @@ while True:
     # 1. Claim the task
     TaskUpdate(next_task.id, status='in_progress')
 
-    # 2. Read full requirements
+    # 2. Read step details from plan
     task_details = TaskGet(next_task.id)
 
-    # 3. Implement using TDD cycle:
-    #    - Write test first (red)
-    #    - Implement minimally (green)
-    #    - Refactor while tests pass
-    #    - Run full test suite
+    # 3. TDD cycle:
+    #    a. Run mapped tests FIRST (establish failing baseline)
+    #    b. Implement EXACTLY per plan (follow the plan, no deviations)
+    #    c. Run mapped tests again — all must pass
+    #    d. If tests fail: retry (up to max_tdd_iterations)
+    #    e. If max retries exceeded: mark blocked, continue to next
 
-    # 4. Mark completed
+    # 4. Mark completed (only after tests pass)
     TaskUpdate(next_task.id, status='completed')
 
     # 5. Loop back to TaskList() for next task
 ```
 
-**Rules (mandatory, not advisory):**
+**Rules (mandatory):**
 - **ALWAYS** call `TaskList()` before starting the next piece of work
-- **ALWAYS** call `TaskUpdate(status: 'in_progress')` BEFORE writing any code for that subtask
-- **ALWAYS** call `TaskUpdate(status: 'completed')` AFTER the subtask's code and tests pass
-- **NEVER** skip TaskUpdate calls — every subtask must transition through `in_progress` -> `completed`
-- **NEVER** batch multiple subtasks without updating status between them
+- **ALWAYS** call `TaskUpdate(status: 'in_progress')` BEFORE writing any code
+- **ALWAYS** call `TaskUpdate(status: 'completed')` AFTER tests pass
+- **NEVER** skip TaskUpdate calls
 - **NEVER** implement from memory — use `TaskGet()` to read what to do
+- **NEVER** deviate from the plan — follow step instructions exactly
+- On test failure after max retries: `TaskUpdate(status: 'blocked')`, continue to next step
 
 ### Phase 2: Integration & Completion
 
-**Only enter this phase after ALL subtasks show `completed` via `TaskList()`.**
+**Only enter this phase after ALL subtasks are completed or blocked via `TaskList()`.**
 
-1. Ensure all components work together
-2. Run integration/e2e tests
-3. Verify acceptance criteria met
-4. Clean up any temporary code
-5. Run all test commands from `.vcp/task/plan/test-plan.json` (or `plan-refined.json` fallback)
-6. Verify success patterns match
-7. Document any deviations from plan
-8. Write implementation result (`.vcp/task/impl-result.json`)
+1. Run full test suite (all TDD test plan commands)
+2. Verify acceptance criteria met
+3. Clean up any temporary code
+4. Document any deviations from plan
+5. Write implementation result to the output path
 
 ## Code Quality Standards
 
@@ -237,105 +176,61 @@ while True:
 - [ ] Follows existing project patterns
 - [ ] No commented-out code or TODOs
 
-### Should Have
-- [ ] Functions < 50 lines, single responsibility
-- [ ] Complex logic has inline comments
-- [ ] Type safety (if applicable)
-- [ ] Consistent naming conventions
-- [ ] No code duplication
-
 ### Must Not Have
 - Security vulnerabilities (OWASP Top 10)
 - Memory leaks or resource leaks
 - Race conditions in async code
 - Breaking changes to existing APIs
-- Ignoring error conditions
+- Code not specified in the plan
+- Unnecessary abstractions or utilities
 
-## Output Format
+## Full Implementation Output Format
 
-**Use the Write tool** to write to `.vcp/task/impl-result.json`.
-
-**IMPORTANT:** Do NOT use bash/cat/echo for file writing. Use the Write tool directly for cross-platform compatibility.
 ```json
 {
   "id": "impl-YYYYMMDD-HHMMSS",
-  "plan_implemented": "plan-YYYYMMDD-HHMMSS",
   "status": "complete|partial|failed",
   "steps_completed": [1, 2, 3],
-  "steps_remaining": [4, 5],
-  "blocked_reason": "Only if status=partial: explain what decision is needed",
+  "steps_blocked": [4],
+  "blocked_reasons": {"4": "Test UT-4 fails after 5 retries: assertion error on line 42"},
   "files_modified": ["path/to/file.ts"],
   "files_created": ["path/to/new-file.ts"],
   "tests": {
     "written": 5,
-    "passing": 5,
-    "failing": 0,
-    "coverage": "82%"
+    "passing": 4,
+    "failing": 1,
+    "details": ["UT-1: PASS", "UT-2: PASS", "E2E-1: PASS", "UT-4: FAIL"]
   },
   "deviations": [
     {
       "step": 2,
       "planned": "What was planned",
       "actual": "What was done instead",
-      "reason": "Why the deviation"
+      "reason": "Why the deviation was necessary"
     }
   ],
-  "notes": "Additional implementation notes",
   "completed_at": "ISO8601"
 }
 ```
 
-## Test Execution
-
-Run test commands from plan:
-```bash
-# From plan.test_plan.commands
-npm test
-npm run lint
-npm run build
-```
-
-Verify output against patterns:
-- `success_pattern`: Must match for success
-- `failure_pattern`: Must NOT match for success
-
-## Iteration Protocol
-
-When tests or reviews fail:
-1. Read failure feedback from review files or test output
-2. Identify root cause of failure
-3. Update implementation to address issues
-4. Re-run tests to verify fix
-5. Proceed to next review cycle
-
-The hook manages iteration tracking. Max 10 iterations per reviewer before escalating to user.
-
 ## Anti-Patterns to Avoid
 
-- **Do not write code before creating subtasks** — Phase 0 (TaskCreate for every step) comes FIRST, coding comes SECOND
-- **Do not stop after completing some steps** — Implement ALL steps in one execution
-- **Do not ask continuation questions** — "Should I proceed?" is not a valid blocker
-- **Do not present options/menus** — Make decisions, document in deviations
-- **Do not use AskUserQuestion** — You're a worker, not the orchestrator
-- **Do not implement from memory** — Use `TaskList()` to determine what to do next
-- **Do not skip TaskUpdate** — Every subtask must transition through `in_progress` -> `completed`
-- **Do not omit file references in subtask descriptions** — Every subtask needs OVERALL GOAL, PLAN OVERVIEW, THIS STEP, and ACCEPTANCE CRITERIA paths
-- Do not implement without reading the plan first
+- **Do not write code before creating subtasks** — Phase 0 first
+- **Do not stop after some steps** — implement ALL steps
+- **Do not ask continuation questions** — just continue
+- **Do not deviate from the plan** — follow it exactly
+- **Do not implement from memory** — use TaskList/TaskGet
+- **Do not skip TaskUpdate** — every subtask transitions through in_progress → completed|blocked
 - Do not skip tests to "save time"
 - Do not make large commits without incremental testing
-- Do not ignore existing test patterns
 - Do not over-engineer beyond plan scope
-- Do not leave console.log/debug code
 - Do not silently catch and ignore errors
 
 ## CRITICAL: Completion Requirements
 
 **You MUST write the output file before completing.** Your work is NOT complete until:
 
-1. All subtasks have status `completed` (verified via `TaskList()`)
-2. `.vcp/task/impl-result.json` has been written using the Write tool
-3. The JSON is valid and contains all required fields including `status`
-4. All tests have been run and results documented
-5. All acceptance criteria from the plan have been addressed
-
-The orchestrator expects this file to exist before proceeding to code review.
+1. All subtasks have status `completed` or `blocked` (verified via `TaskList()`)
+2. Output file written with ALL required fields
+3. All tests have been run and results documented
+4. All acceptance criteria addressed

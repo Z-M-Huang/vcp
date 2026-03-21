@@ -1,23 +1,21 @@
 ---
 name: dev-buddy-review
-description: Review a plan or implementation. Dispatches review executors, validates outputs, and owns the review→repair→re-review loop. Use --plan for plan review, --code for code review.
+description: Review a plan or implementation. Dispatches review executors, validates outputs, owns the review→repair→re-review loop. Appends Review Record to plan file. Use --plan for plan review, --code for code review.
 user-invocable: true
-allowed-tools: Read, Write, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion, Skill
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion, Skill
 ---
 
 # Review Stage Skill
 
-Review a plan or code implementation. Uses the executor system to dispatch reviewers. Owns the full review→repair→re-review loop — if reviewers find `must_fix` issues, this skill dispatches the repair stage and re-reviews automatically.
+Review a plan or code implementation. Dispatches reviewers, aggregates results, and appends Review Record to the plan file. Owns the review→repair→re-review loop.
 
-**Task directory:** `${CLAUDE_PROJECT_DIR}/.vcp/task/`
 **Usage:** `/dev-buddy-review --plan` or `/dev-buddy-review --code`
 
 ---
 
 ## Step 1: Determine Review Type
 
-Parse the user's invocation for `--plan` or `--code` flag.
-
+Parse the invocation for `--plan` or `--code` flag.
 - `--plan` → plan review (uses `stages['plan-review']` executors)
 - `--code` → code review (uses `stages['code-review']` executors)
 - Neither → ask the user which review to run
@@ -26,20 +24,20 @@ Parse the user's invocation for `--plan` or `--code` flag.
 
 ## Step 2: Validate Inputs
 
+Read the plan file and verify required sections exist:
+
 **For plan review (`--plan`):**
-```
-Required: .vcp/task/user-story/manifest.json
-Required: .vcp/task/plan/manifest.json
-```
+- `## Requirements` section with acceptance criteria
+- `## TDD Test Plan` section
+- `## Risk Registry` section
+- `## Implementation Steps` section
 
 **For code review (`--code`):**
-```
-Required: .vcp/task/user-story/manifest.json
-Required: .vcp/task/plan/manifest.json
-Required: .vcp/task/impl-result.json
-```
+- All of the above, plus:
+- Implementation steps should show some completed status
+- Git diff shows actual code changes
 
-If any required artifact is missing, tell the user which stage to run first.
+If any required section is missing, tell the user which stage to run first.
 
 ---
 
@@ -61,167 +59,250 @@ console.log(JSON.stringify({ executors, max_iterations: config.max_iterations })
 
 ---
 
-## Step 4: Prompt Assembly (Anti-Drift)
+## Step 4: Resolve Session Variables
 
-For each executor, assemble the review prompt:
+Same pattern as other skills — tmpdir, random ID, output directory.
+Output file for executor at index `{i}`: `{TMPDIR}/.vcp/oneshot/review-{RAND}-{i}.json`
+
+---
+
+## Step 5: Extract Context from Plan File
+
+Read the plan file and extract ALL relevant sections for the review prompt:
+- Requirements (ACs, scope)
+- TDD Test Plan (test IDs with AC mappings)
+- Risk Registry
+- Implementation Steps (for plan review)
+- Impact Analysis
+- For code review: also read git diff and implementation status
+
+---
+
+## Step 6: Prompt Assembly
 
 **Plan review prompt:**
 ```
-ORIGINAL REQUEST: {user's original request}
----
-
 You are executing the PLAN REVIEW stage.
 Your system prompt name is: {executor.system_prompt}
 Your model is: {executor.model}
 Set revision_number to: {revision_number}
 
-Read the user story at .vcp/task/user-story/manifest.json (then sections).
-Read the plan at .vcp/task/plan/manifest.json (then step files).
+PESSIMISTIC-FIRST: Assume NOTHING in this plan will work as described.
+For each step:
+1. What specific test would fail if this step has a bug? Reference test IDs from the TDD Test Plan.
+2. Is this step truly one architectural unit? If it touches multiple modules, flag it.
+3. Does it reuse existing code? If it creates new code where existing works, flag it.
+4. Is the rollback specific? "Revert changes" is not acceptable.
 
-Review the plan against the acceptance criteria. For EVERY finding:
-- Include contract_reference (which AC, plan step, or security rule it relates to)
-- Include evidence (specific file:line or plan reference)
-- Set fix_type to must_fix (blocks approval) or advisory (informational)
+REQUIREMENTS:
+{extracted ACs}
 
-IMPORTANT: needs_changes requires at least one must_fix finding with evidence. Advisory-only findings cannot block approval.
+TDD TEST PLAN:
+{extracted test IDs with AC mappings}
 
-Write output to .vcp/task/{output_file}.
+RISK REGISTRY:
+{extracted risks — flag unacknowledged}
+
+IMPLEMENTATION STEPS:
+{extracted steps with AC/test mappings}
+
+Review and write output to {TMPDIR}/.vcp/oneshot/review-{RAND}-{i}.json
 ```
 
 **Code review prompt:**
 ```
-ORIGINAL REQUEST: {user's original request}
----
-
 You are executing the CODE REVIEW stage.
 Your system prompt name is: {executor.system_prompt}
 Your model is: {executor.model}
 Set revision_number to: {revision_number}
 
-Read the user story, plan, and implementation result.
-Review the implementation against acceptance criteria and the plan.
+PESSIMISTIC-FIRST: Assume every line of changed code has a bug. Find them.
+For each AC:
+1. Find the specific code path that implements it — cite file:line
+2. Trace input → processing → output through that path
+3. Identify what would break if any step fails
 
-For EVERY finding:
-- Include contract_reference, evidence, and fix_type
-- needs_changes requires at least one must_fix finding
+REQUIREMENTS:
+{extracted ACs}
 
-Write output to .vcp/task/{output_file}.
+TDD TEST PLAN:
+{extracted tests}
+
+GIT DIFF:
+{actual code changes}
+
+Review and write output to {TMPDIR}/.vcp/oneshot/review-{RAND}-{i}.json
 ```
 
 ---
 
-## Step 5: Dispatch Executors
+## Step 7: Dispatch Executors
 
-Determine the output filename for each executor. If `pipeline-tasks.json` exists with `stages[]` entries, use the stored `output_file` for this executor. Otherwise compute it:
+**Resolve system prompt with stage/role composition** (same pattern as other skills).
 
-```bash
-bun -e "
-import { getV3OutputFileName } from '${CLAUDE_PLUGIN_ROOT}/types/stage-definitions.ts';
-console.log(getV3OutputFileName('{stage-type}', '{executor-name}', {index}, '{preset}', '{model}', 1));
-"
-```
+Route by provider type:
+- **subscription:** `Task(subagent_type: "general-purpose", ...)`
+- **api:** `Bash(run_in_background: true)` → `bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" --type api --output-id review-{RAND}-{i} --preset "{PRESET}" --model "{MODEL}" --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin`
 
-**Resolve system prompt with stage/role composition** for each executor. The stage type depends on the review type: `plan-review` (for `--plan`) or `code-review` (for `--code`).
-
-**For subscription dispatches**, compose the stage definition and role prompt into a single system prompt:
-```bash
-bun -e "
-import { loadStageDefinition, getSystemPrompt, composePrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
-const stage = loadStageDefinition('{plan-review|code-review}', '${CLAUDE_PLUGIN_ROOT}/stages');
-const role = getSystemPrompt('{executor.system_prompt}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
-if (!stage) { console.error('FATAL: Stage definition not found for {plan-review|code-review}'); process.exit(1); }
-if (!role) { console.error('FATAL: Role prompt not found: {executor.system_prompt}'); process.exit(1); }
-console.log(composePrompt(stage, role));
-"
-```
-Use the composed output as the system prompt content in the Task dispatch:
-
-- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed_prompt>\n---\n<assembled review prompt>")`
-- **api:** `Bash(run_in_background: true)` → `api-task-runner.ts` with `--stage-type {plan-review|code-review} --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md"` (stage definition auto-resolved via --stage-type, role prompt via --system-prompt)
-- **cli:** `Task(subagent_type: "general-purpose", prompt: "Run: bun cli-executor.ts --stage-type {plan-review|code-review} ...")` — pass `--changes-summary` with the reviewer identity and revision_number so the CLI prompt includes them
-
-- Group adjacent `parallel: true` executors → dispatch simultaneously, wait for all
-- Sequential executors → dispatch one at a time, wait for each
-
-**CRITICAL: You MUST dispatch ALL configured executors.** Do NOT skip any executor — even if prior reviewers already approved. The last sequential executor (the synthesizer) is configured specifically for cross-model validation. Skipping it defeats the purpose of multi-reviewer pipelines. Every executor in the config exists for a reason.
+Dispatch ALL executors — do NOT skip any. The last executor (synthesizer) does its own review AND reads prior outputs.
 
 ---
 
-## Step 6: Validate and Aggregate Results
+## Step 8: Collect and Aggregate Results
 
-After all executors complete, validate each output file before aggregating:
+Read all review output files from `{TMPDIR}/.vcp/oneshot/review-{RAND}-*.json`.
 
-**Validation (REQUIRED before aggregation):**
-1. **Verify ALL executor outputs exist** — count output files against the executor list. If any executor's output file is missing, that executor was not dispatched. This is a dispatch failure — go back to Step 5 and dispatch the missing executors. Do NOT aggregate partial results.
-2. Parse JSON — if invalid, treat as **stage failure** (do NOT skip)
-3. Verify required fields: `id`, `reviewer`, `model`, `revision_number`, `status`, `summary`, `findings`
-   - Plan review: also require `requirements_coverage`
-   - Code review: also require `acceptance_criteria_verification`, `checklist`
-4. Verify `status` is one of: `approved`, `needs_changes`, `needs_clarification`, `rejected`
-5. Verify any `needs_changes` status has at least one `must_fix` finding with `contract_reference` and `evidence`
-6. **If any reviewer output is malformed or missing → report which executor failed and ask user to re-run. Do NOT proceed with partial results.**
+**For API/CLI executors:** The output file is wrapped in an envelope `{"event":"complete","provider":"...","model":"...","result":"..."}`. Parse the `result` field (which is a JSON string) to get the actual reviewer output. For subscription executors, the result is returned directly from the Task tool.
 
-**Aggregation (only if all outputs are valid):**
+Parse each reviewer's JSON output. Extract:
+- `status` (approved/needs_changes/needs_clarification/rejected)
+- `findings[]` with `fix_type` (must_fix/advisory)
+- `requirements_coverage` (plan review) or `acceptance_criteria_verification` (code review)
+- `revision_number`
 
-When multiple executors are configured, all reviewers (including the synthesizer — the last executor) write individual review files. The synthesizer does its own review AND may deduplicate/summarize findings from prior reviewers, but it CANNOT suppress `must_fix` findings.
-
-1. Collect all findings across all reviewers
-2. Determine overall status:
-   - If ANY reviewer returned `needs_changes` with `must_fix` findings → overall `needs_changes`
-   - If ALL returned `approved` → overall `approved`
-   - If ANY returned `needs_clarification` → overall `needs_clarification`
-   - If ANY returned `rejected` → overall `rejected`
-3. Present aggregated results to user:
-   - Per-reviewer status
-   - Combined must_fix findings
-   - Combined advisory findings
-   - Missing AC coverage
+**Aggregation rules:**
+- If ANY reviewer has `must_fix` findings → aggregate status = `needs_changes`
+- If ALL reviewers approved → aggregate status = `approved`
+- Compile ALL findings from all reviewers (deduplicate by contract_reference)
 
 ---
 
-## Step 7: Review→Repair→Re-Review Loop
+## Step 9: Handle Clarification (Check Plan File First!)
 
-After aggregation, handle the result. `max_iterations` is the per-review-stage budget.
+**CRITICAL RULE: Before asking the user ANY question, search the plan file for existing answers.**
 
-```
-iteration = 0
-WHILE aggregated_status == 'needs_changes' AND iteration < max_iterations:
-  7a. Collect all must_fix findings across reviewers
-  7b. Write .vcp/task/review-findings-to-fix.json:
-      { "findings": [<aggregated must_fix findings>], "review_type": "plan|code" }
-  7c. Present findings summary to user
-  7d. Dispatch repair via Skill tool:
-      - If --plan: Skill(skill: "dev-buddy-plan")
-      - If --code: Skill(skill: "dev-buddy-implement")
-  7e. Delete .vcp/task/review-findings-to-fix.json
-  7f. Prepare for re-dispatch:
-      - Record expected_revision = current revision_number + 1
-      - DELETE all expected review output files (prevents stale files from passing validation)
-  7g. Re-dispatch all reviewers:
-      - Pass expected_revision in the prompt:
-        "This is re-review revision {expected_revision}. Set revision_number to {expected_revision}."
-      - For CLI executors: use --resume flag with --changes-summary
-      - Write to same output files (use stored output_file from pipeline-tasks.json)
-  7h. Re-validate and re-aggregate (repeat Step 6)
-      - ADDITIONALLY verify each output's revision_number === expected_revision (reject stale outputs)
-  7h. iteration++
+Check the Impact Analysis questions, Risk Registry decisions, and user responses from the requirements phase. If the answer already exists in the plan file, do NOT re-ask.
 
-IF aggregated_status == 'needs_clarification':
-  → AskUserQuestion with combined clarification_questions
-  → After user responds, re-dispatch reviewers (does NOT consume iteration budget)
+Only use AskUserQuestion for genuinely new questions that couldn't have been anticipated during planning.
 
-IF aggregated_status == 'rejected':
-  → Present rejection to user, STOP (do not consume iterations)
-
-IF aggregated_status == 'approved':
-  → Report approval to user, suggest next step
-```
+If a reviewer returned `needs_clarification` but the answer is in the plan file:
+- Convert the finding to `must_fix` or resolve it
+- Do NOT ask the user
 
 ---
 
-## Step 8: Report
+## Step 10: Append Review Record to Plan File
 
-Present the final aggregated review to the user and suggest next steps:
-- If approved → `/dev-buddy-implement` (for plan review) or "done" (for code review)
-- If needs_changes after max_iterations → report remaining must_fix findings, suggest manual fixes
-- If rejected → suggest major rework or `/dev-buddy-plan` from scratch
+**Note:** The plan file record is a **consolidated** aggregation of all executor outputs. Single-executor fields (`reviewer`, `model`) from the stage contract are merged into `reviewers: [{name, model}]` for multi-executor traceability.
+
+**For plan review, append `## Plan Review Record`:**
+```markdown
+## Plan Review Record
+
+```json
+{
+  "id": "review-YYYYMMDD-HHMMSS",
+  "reviewer": "synthesizer system_prompt name (or first reviewer if single)",
+  "model": "synthesizer model (or first reviewer model if single)",
+  "revision_number": 1,
+  "reviewers": [{"name": "{system_prompt}", "model": "{model}"}],
+  "status": "approved|needs_changes|needs_clarification|rejected",
+  "summary": "2-3 sentence consolidated summary",
+  "needs_clarification": false,
+  "clarification_questions": [],
+  "findings": [{all must_fix and advisory findings from all reviewers, deduplicated}],
+  "requirements_coverage": {
+    "mapping": [{"ac_id": "AC-1", "steps": ["step 1"], "tests": ["UT-1"]}],
+    "acs_without_steps": [],
+    "acs_without_tests": [],
+    "steps_without_ac": [],
+    "steps_without_tests": [],
+    "risks_unacknowledged": []
+  },
+  "reviewed_at": "{ISO8601}"
+}
+```
+```
+
+**For code review, append `## Code Review Record` and update `## Sign-off`:**
+```markdown
+## Code Review Record
+
+```json
+{
+  "id": "code-review-YYYYMMDD-HHMMSS",
+  "reviewer": "synthesizer system_prompt name",
+  "model": "synthesizer model",
+  "revision_number": 1,
+  "reviewers": [{"name": "{system_prompt}", "model": "{model}"}],
+  "status": "approved|needs_changes|needs_clarification|rejected",
+  "summary": "2-3 sentence consolidated summary",
+  "needs_clarification": false,
+  "clarification_questions": [],
+  "acceptance_criteria_verification": {
+    "total": 6, "verified": 5, "missing": ["AC-3"],
+    "details": [{"ac_id": "AC-1", "status": "IMPLEMENTED", "evidence": "src/auth.ts:42", "notes": ""}]
+  },
+  "findings": [{all must_fix and advisory findings, deduplicated}],
+  "checklist": {
+    "security_owasp": "PASS|WARN|FAIL",
+    "error_handling": "PASS|WARN|FAIL",
+    "resource_management": "PASS|WARN|FAIL",
+    "configuration": "PASS|WARN|FAIL",
+    "code_quality": "PASS|WARN|FAIL",
+    "concurrency": "PASS|WARN|FAIL|N/A",
+    "logging": "PASS|WARN|FAIL",
+    "dependencies": "PASS|WARN|FAIL",
+    "api_design": "PASS|WARN|FAIL|N/A",
+    "backward_compatibility": "PASS|WARN|FAIL|N/A",
+    "testing": "PASS|WARN|FAIL",
+    "over_engineering": "PASS|WARN|FAIL"
+  },
+  "reviewed_at": "{ISO8601}"
+}
+```
+
+## Sign-off
+
+```json
+{
+  "requirements_approved": "{date}",
+  "plan_approved": "{date}",
+  "implementation_complete": "{date}",
+  "code_review_passed": "{date or null}"
+}
+```
+```
+
+**If this is a re-review (revision > 1):** Replace the existing review record section instead of appending a second one.
+
+---
+
+## Step 11: Review → Repair → Re-Review Loop
+
+If aggregate status is `needs_changes` and iterations < max_iterations:
+
+1. Extract `must_fix` findings from the review record
+2. **For plan review:** Dispatch `/dev-buddy-plan` via Skill tool (it will read the review findings from the plan file and re-plan)
+3. **For code review:** Dispatch `/dev-buddy-implement` via Skill tool (it will read the review findings and fix)
+4. After repair completes, increment revision_number
+5. Delete the current review temp files
+6. Re-dispatch ALL reviewers with new revision_number
+7. Return to Step 8
+
+If iterations exhausted → update status to `rejected` in the review record.
+
+---
+
+## Step 12: Cleanup and Report
+
+1. Remove temp files: `rm -f "{TMPDIR}/.vcp/oneshot/review-{RAND}-"*`
+2. Present to user:
+   - Overall status
+   - Number of findings (must_fix vs advisory)
+   - AC coverage / verification status
+3. If approved, suggest next step:
+   - Plan review approved → `/dev-buddy-implement`
+   - Code review approved → done
+
+---
+
+## Error Handling
+
+| Scenario | Action |
+|----------|--------|
+| Required plan file sections missing | Tell user which stage to run first |
+| All reviewers fail | Report error to user |
+| Single reviewer fails | Continue with remaining |
+| Max iterations exceeded | Set status to rejected, report to user |
+| Clarification answer in plan file | Resolve without asking user |

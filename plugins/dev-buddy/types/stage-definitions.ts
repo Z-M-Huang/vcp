@@ -1,7 +1,7 @@
 /**
  * Stage type registry for the configurable pipeline architecture.
  *
- * Defines the 6 fixed stage types, their constraints, and a helper function
+ * Defines the 6 fixed stage types, their constraints, and helper functions
  * for computing output file names. Zero imports from other type modules.
  */
 
@@ -118,34 +118,6 @@ export function sanitizeForFilename(input: string): string {
 // ─── Output File Naming ───────────────────────────────────────────────────────
 
 /**
- * Compute the output file name for a stage entry.
- *
- * @param type - The stage type.
- * @param index - The 1-based index of this stage within its type (ignored for singletons).
- * @param provider - The provider/preset name (required for multi-instance, sanitized for filename safety).
- * @param model - The model name (required for multi-instance, sanitized for filename safety).
- * @param version - The version/round number (required for multi-instance, starts at 1).
- * @returns The output file name (e.g. 'code-review-anthropic-subscription-sonnet-1-v1.json').
- */
-export function getOutputFileName(
-  type: StageType,
-  index: number,
-  provider: string,
-  model: string,
-  version: number,
-): string {
-  const def = STAGE_DEFINITIONS[type];
-  if (def.singleton) {
-    return def.output_file_pattern;
-  }
-  return def.output_file_pattern
-    .replace('{index}', String(index))
-    .replace('{provider}', sanitizeForFilename(provider))
-    .replace('{model}', sanitizeForFilename(model))
-    .replace('{version}', String(version));
-}
-
-/**
  * Compute the output file name for a v3 stage entry (includes executor name).
  * Falls back to v2 pattern if no v3 pattern defined (singletons).
  *
@@ -209,104 +181,3 @@ export function isValidStageEntry(entry: unknown): entry is { type: string; outp
  * Prevents shell metacharacter injection (CWE-78).
  */
 export const MODEL_NAME_REGEX = /^[a-zA-Z0-9._-]+$/;
-
-// ─── Per-Step Artifact Naming ─────────────────────────────────────────────────
-
-/**
- * Compute the output file name for a single-step implementation artifact.
- *
- * @param step - The 1-based plan step number.
- * @param version - The version number (starts at 1, incremented on fix retries).
- * @returns The output file name (e.g. 'impl-step-3-v1.json').
- */
-export function getImplStepFileName(step: number, version: number): string {
-  if (!Number.isInteger(step) || step < 1) throw new Error(`step must be a positive integer, got ${step}`);
-  if (!Number.isInteger(version) || version < 1) throw new Error(`version must be a positive integer, got ${version}`);
-  return `impl-step-${step}-v${version}.json`;
-}
-
-/**
- * Compute the output file name for a phased review artifact.
- *
- * @param step - The 1-based plan step number.
- * @param provider - The provider/preset name (sanitized for filename safety).
- * @param model - The model name (sanitized for filename safety).
- * @param version - The version number (starts at 1, incremented on re-review).
- * @returns The output file name (e.g. 'phased-review-anthropic-claude-sonnet-4-step-3-v1.json').
- */
-export function getPhasedReviewFileName(
-  step: number,
-  provider: string,
-  model: string,
-  version: number,
-): string {
-  if (!Number.isInteger(step) || step < 1) throw new Error(`step must be a positive integer, got ${step}`);
-  if (!Number.isInteger(version) || version < 1) throw new Error(`version must be a positive integer, got ${version}`);
-  return `phased-review-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}-step-${step}-v${version}.json`;
-}
-
-/**
- * Compute the output file name for a batch phased review artifact (review_interval > 1).
- *
- * @param startStep - The 1-based first plan step number in the batch.
- * @param endStep - The 1-based last plan step number in the batch.
- * @param provider - The provider/preset name (sanitized for filename safety).
- * @param model - The model name (sanitized for filename safety).
- * @param version - The version number (starts at 1, incremented on re-review).
- * @returns The output file name (e.g. 'phased-review-anthropic-sonnet-steps-1-3-v1.json').
- */
-export function getPhasedBatchReviewFileName(
-  startStep: number,
-  endStep: number,
-  provider: string,
-  model: string,
-  version: number,
-): string {
-  if (!Number.isInteger(startStep) || startStep < 1) throw new Error(`startStep must be a positive integer, got ${startStep}`);
-  if (!Number.isInteger(endStep) || endStep < 1) throw new Error(`endStep must be a positive integer, got ${endStep}`);
-  if (endStep < startStep) throw new Error(`endStep (${endStep}) must be >= startStep (${startStep})`);
-  if (!Number.isInteger(version) || version < 1) throw new Error(`version must be a positive integer, got ${version}`);
-  return `phased-review-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}-steps-${startStep}-${endStep}-v${version}.json`;
-}
-
-// ─── Analysis & Plan Variant Naming (0-based index) ─────────────────────────
-
-/**
- * Compute the filename for a non-synthesizer analysis output (requirements stage).
- * Uses 0-based indexing to match the SKILL.md convention.
- *
- * @param index - The 0-based executor index.
- * @param systemPromptName - The system prompt name (sanitized for filename).
- * @param provider - The provider/preset name (sanitized for filename).
- * @param model - The model name (sanitized for filename).
- * @returns e.g. 'analysis-0-requirements-gatherer-bailian-qwen3.5-plus.json'
- */
-export function getAnalysisFileName(
-  index: number,
-  systemPromptName: string,
-  provider: string,
-  model: string,
-): string {
-  if (!Number.isInteger(index) || index < 0) throw new Error(`index must be a non-negative integer, got ${index}`);
-  return `analysis-${index}-${sanitizeForFilename(systemPromptName)}-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}.json`;
-}
-
-/**
- * Compute the directory name for a non-synthesizer plan variant (planning stage).
- * Uses 0-based indexing to match the SKILL.md convention.
- *
- * @param index - The 0-based executor index.
- * @param systemPromptName - The system prompt name (sanitized for filename).
- * @param provider - The provider/preset name (sanitized for filename).
- * @param model - The model name (sanitized for filename).
- * @returns e.g. 'plan-0-planner-bailian-qwen3.5-plus'
- */
-export function getPlanVariantDirName(
-  index: number,
-  systemPromptName: string,
-  provider: string,
-  model: string,
-): string {
-  if (!Number.isInteger(index) || index < 0) throw new Error(`index must be a non-negative integer, got ${index}`);
-  return `plan-${index}-${sanitizeForFilename(systemPromptName)}-${sanitizeForFilename(provider)}-${sanitizeForFilename(model)}`;
-}

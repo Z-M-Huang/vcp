@@ -49,29 +49,30 @@ Dev Buddy routes code through **independent AI reviewers** from different provid
 ### Feature Development
 
 ```
-Requirements → Planning → Plan Reviews → Implementation → Code Reviews
+Requirements + TDD → Planning → Plan Reviews → Implementation → Code Reviews
 ```
+
+All phases append to a **single plan file** — no scattered artifact files.
 
 | Stage | What Happens |
 |-------|-------------|
-| **Requirements** | 5 specialist agents explore your codebase in parallel, then a requirements gatherer synthesizes their findings into a complete specification |
-| **Planning** | A planner designs the implementation based on requirements and codebase analysis |
-| **Plan Reviews** | Multiple independent AI models review the plan — each without seeing others' verdicts |
-| **Implementation** | An implementer executes the plan, creating subtasks with task-based dependencies |
-| **Code Reviews** | Multiple independent AI models review the code for security, architecture, and quality |
+| **Requirements + TDD** | Gather requirements with pessimistic-first impact analysis. Generate TDD test plans (unit, e2e, skill tests) BEFORE planning. Build risk registry with user acknowledgment. |
+| **Planning** | Create granular implementation steps mapped to ACs and test IDs. Each step is one architectural unit with rollback. Reuse existing code — KISS architecture. |
+| **Plan Reviews** | Assume nothing works. Verify every AC has steps AND tests. Flag coverage gaps, missing rollbacks, unnecessary code creation. |
+| **Implementation** | TDD loop per step with TaskManagement progress tracking. Run mapped tests before and after each step. Fully autonomous — no user prompts. |
+| **Code Reviews** | Assume every change has a bug. Verify each AC with file:line evidence. Trace input → processing → output. |
 
 ### Bug Fix
 
 ```
-Root Cause Analysis → Validation → Implementation → Code Reviews
+Root Cause Analysis → Requirements + TDD → Planning → Plan Reviews → Implementation → Code Reviews
 ```
 
 | Stage | What Happens |
 |-------|-------------|
-| **Root Cause Analysis** | Multiple independent analyzers investigate the bug, each producing an RCA |
-| **Validation** | A consolidator synthesizes all RCAs and validates the root cause |
-| **Implementation** | A developer applies the minimal fix at the correct level |
-| **Code Reviews** | Multiple independent AI models verify the fix addresses the cause, not the symptom |
+| **Root Cause Analysis** | Multiple independent analyzers investigate the bug with pessimistic tracing (ask "why" five times, cite file:line evidence) |
+| **Requirements + TDD** | Define fix requirements from RCA diagnosis, create TDD test plans, identify fix risks |
+| **Planning → Code Reviews** | Same as feature pipeline |
 
 ---
 
@@ -173,11 +174,11 @@ Use the web portal (`/dev-buddy-config`) or edit JSON directly.
 |-------|---------|-------------|
 | Feature Implement | `/dev-buddy-feature-implement` | Full feature pipeline — chains stage skills per `feature_pipeline` config |
 | Bug Fix | `/dev-buddy-bug-fix` | Bug fix pipeline — chains stage skills per `bugfix_pipeline` config |
-| Plan | `/dev-buddy-plan` | Create implementation plan from user story. TDD test generation + step-to-AC mapping |
-| Review | `/dev-buddy-review` | Review plan (`--plan`) or code (`--code`). Owns review→repair→re-review loop |
-| Implement | `/dev-buddy-implement` | Implement a plan with TDD loop. Runs tests after each step, escalates on failure |
-| Requirements | `/dev-buddy-requirements` | Gather requirements with provenance tracking. Minimal artifact set |
-| RCA | `/dev-buddy-rca` | Root cause analysis. Outputs diagnosis only — chain to plan/implement next |
+| Plan | `/dev-buddy-plan` | Create granular implementation steps from plan file. Each step mapped to ACs and test IDs with KISS architecture |
+| Review | `/dev-buddy-review` | Review plan (`--plan`) or code (`--code`). Pessimistic-first. Owns review→repair→re-review loop |
+| Implement | `/dev-buddy-implement` | TDD implementation with TaskManagement tracking. Fully autonomous — no user prompts |
+| Requirements | `/dev-buddy-requirements` | Requirements + TDD test plans + risk registry. Pessimistic-first impact analysis |
+| RCA | `/dev-buddy-rca` | Root cause analysis with evidence-based diagnosis. Appends to plan file |
 | Once | `/dev-buddy-once` | Run a single task using a specific AI provider and model |
 | Config | `/dev-buddy-config` | Web portal for managing executors, stages, pipelines, system prompts, and settings |
 | Manage Presets | `/dev-buddy-manage-presets` | List, add, update, or remove AI provider presets |

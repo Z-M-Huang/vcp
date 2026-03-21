@@ -1,51 +1,26 @@
 ---
 name: dev-buddy-plan
-description: Create a thorough implementation plan from existing requirements. Reads user-story artifacts, dispatches planning executors, writes plan with test cases and step-to-AC mapping.
+description: Create granular implementation plan from requirements in the plan file. Reads Requirements + TDD Test Plan sections, dispatches planners, appends Implementation Steps to plan file.
 user-invocable: true
-allowed-tools: Read, Write, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion
 ---
 
 # Planning Stage Skill
 
-Create a thorough implementation plan from existing requirements. Uses the executor system to dispatch planning agents.
-
-**Task directory:** `${CLAUDE_PROJECT_DIR}/.vcp/task/`
+Create a granular, TDD-mapped implementation plan from existing requirements. Reads Requirements and TDD Test Plan sections from the plan file, dispatches planning executors, and appends Implementation Steps to the plan file.
 
 ---
 
 ## Step 1: Validate Inputs
 
-Check that required input artifacts exist:
+Read the plan file and verify it contains:
+- `## Requirements` section with acceptance criteria
+- `## TDD Test Plan` section with test IDs mapped to ACs
+- `## Risk Registry` section
 
-```
-Required: .vcp/task/user-story/manifest.json (with format_version and ac_count > 0)
-Optional: .vcp/task/rca-diagnosis.json (provides bug-fix context if present)
-```
+If any section is missing, tell the user to run `/dev-buddy-requirements` first.
 
-If `user-story/manifest.json` is missing, tell the user to run `/dev-buddy-requirements` first.
-
-Read `user-story/manifest.json` and verify `ac_count > 0`. Read `user-story/acceptance-criteria.json` for the full AC list.
-
----
-
-## Step 1a: Stale-State Cleanup
-
-Remove leftover clarification state from prior runs to avoid false positives:
-```bash
-rm -f .vcp/task/plan/status.json
-```
-
-## Step 1b: Check for Review Repair Context
-
-If `.vcp/task/review-findings-to-fix.json` exists, this is a re-plan after review failure. Read the file and inject its `must_fix` findings into every executor prompt as additional context:
-
-```
-REVIEW FINDINGS TO ADDRESS:
-The following must_fix findings were raised by plan reviewers. Address each one in the revised plan:
-{findings from review-findings-to-fix.json}
-```
-
-This file is written by `/dev-buddy-review --plan` when the review loop triggers a re-plan.
+**If this is a re-plan after review failure:** Check if the plan file already has a `## Plan Review Record` section with `"status": "needs_changes"` in its fenced JSON block. If so, read the `must_fix` findings from the review record and inject them into the planning prompt.
 
 ---
 
@@ -60,147 +35,213 @@ const executors = stage.executors.map(exec => ({
   ...exec,
   providerType: getProviderType(exec.preset)
 }));
-console.log(JSON.stringify({ executors, max_tdd_iterations: config.max_tdd_iterations }));
+console.log(JSON.stringify({ executors }));
 "
 ```
 
-Parse the output to get the list of executors with their system prompts, provider types, presets, and models.
+---
+
+## Step 3: Resolve Session Variables
+
+1. Resolve tmpdir and generate unique output ID (same pattern as RCA skill)
+2. Output file for executor at index `{i}`: `{TMPDIR}/.vcp/oneshot/plan-{RAND}-{i}.json`
+3. Ensure output directory exists
 
 ---
 
-## Step 3: Prompt Assembly (Anti-Drift)
+## Step 4: Extract Context from Plan File
 
-For each executor, assemble the prompt:
+Read the plan file and extract:
+1. All acceptance criteria (AC IDs, given/when/then)
+2. All test IDs from TDD Test Plan (unit, e2e, skill tests) with their AC mappings
+3. Impact analysis (what could break)
+4. Risk registry (acknowledged risks)
+5. RCA diagnosis (if bug-fix pipeline)
+6. Review findings to fix (if re-plan after review failure)
+
+---
+
+## Step 5: Prompt Assembly
+
+For each planning executor:
 
 ```
-ORIGINAL REQUEST: {user's original request from conversation context}
----
-
 You are executing the PLANNING stage.
 
-Read the user story at .vcp/task/user-story/manifest.json, then read all section files.
-{If rca-diagnosis.json exists: "Also read .vcp/task/rca-diagnosis.json for root cause context."}
+REQUIREMENTS (from plan file):
+{extracted acceptance criteria}
 
-Create a thorough implementation plan following the planner agent's instructions.
+TDD TEST PLAN (tests already defined — your steps must MAP to these):
+{extracted test IDs with AC mappings}
 
-CRITICAL REQUIREMENTS:
-1. Every plan step MUST include ac_ids[] referencing acceptance criteria
-2. Write test cases in plan/test-plan.json mapped to AC IDs
-3. Steps must be atomic and independently testable
-4. Do NOT add features or steps not justified by the acceptance criteria
+IMPACT ANALYSIS:
+{extracted impacts}
 
-Write output to .vcp/task/plan/ using the multi-file format (meta.json, steps/{N}.json, test-plan.json, risk-assessment.json, dependencies.json, files.json, manifest.json LAST).
-```
+RISK REGISTRY:
+{extracted risks}
+
+{If re-plan: "REVIEW FINDINGS TO ADDRESS:\n{must_fix findings from review record}"}
 
 ---
 
-## Step 4: Dispatch Executors
+PESSIMISTIC-FIRST PLANNING:
+- Assume every feature you design WILL become a maintenance liability
+- For each step: Why could this become technical debt? How do you prevent it?
+- Search the codebase FIRST — reuse existing code, do NOT create new abstractions unless justified
+- Document what you searched and why new code is necessary (if it is)
 
-**Resolve system prompt with stage/role composition.** Compose the `planning` stage definition with the executor's role prompt:
+GRANULAR AGILE UNITS:
+- Each step must be ONE architectural unit (single module/function/component)
+- Each step must map to at least one AC and one test ID
+- Each step must have a specific rollback procedure
+- Each step must be implementable without design decisions from the implementer
+- If a step needs more than ~50 lines of changes, split it
+
+Write output to {TMPDIR}/.vcp/oneshot/plan-{RAND}-{i}.json
+
+Output JSON format — ALL fields required:
+{
+  "id": "plan-YYYYMMDD-HHMMSS",
+  "title": "Implementation plan title",
+  "summary": "2-3 sentence overview",
+  "technical_approach": {
+    "pattern": "...",
+    "rationale": "...",
+    "alternatives_considered": [{"approach": "...", "rejected_because": "..."}],
+    "existing_code_reused": [{"file": "...", "function": "...", "purpose": "..."}]
+  },
+  "steps": [
+    {
+      "id": 1,
+      "title": "Short step title",
+      "description": "Detailed instruction — what to do and why",
+      "ac_ids": ["AC-1"],
+      "test_ids": ["UT-1", "SK-1"],
+      "files_to_modify": ["path/to/file.ts"],
+      "files_to_create": [],
+      "existing_code_to_reuse": ["src/utils/validate.ts:validateInput"],
+      "rollback": "Specific undo procedure",
+      "debt_risk": "Why this step won't become technical debt",
+      "dependencies": []
+    }
+  ],
+  "files_to_modify": ["..."],
+  "files_to_create": ["..."],
+  "needs_clarification": false,
+  "clarification_questions": []
+}
+```
+
+**Multi-executor:** Same pattern as requirements — non-synthesizers write analysis files, synthesizer reads all and writes canonical output.
+
+---
+
+## Step 6: Dispatch Executors
+
+**Resolve system prompt with stage/role composition:**
 ```bash
 bun -e "
 import { loadStageDefinition, getSystemPrompt, composePrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
 const stage = loadStageDefinition('planning', '${CLAUDE_PLUGIN_ROOT}/stages');
 const role = getSystemPrompt('{executor.system_prompt}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
-if (!stage) { console.error('FATAL: Stage definition not found for planning'); process.exit(1); }
-if (!role) { console.error('FATAL: Role prompt not found: {executor.system_prompt}'); process.exit(1); }
+if (!stage) { console.error('FATAL: Stage definition not found'); process.exit(1); }
+if (!role) { console.error('FATAL: Role prompt not found'); process.exit(1); }
 console.log(composePrompt(stage, role));
 "
 ```
 
-Use the composed output as the system prompt content, then route each executor by provider type:
+Route by provider type:
+- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed + task prompt>")`
+- **api:** `Bash(run_in_background: true)` → `bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" --type api --output-id plan-{RAND}-{i} --preset "{PRESET}" --model "{MODEL}" --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin`
 
-- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed_prompt>\n---\n<assembled task prompt>")`
-- **api:** `Bash(run_in_background: true)` → `api-task-runner.ts --preset <preset> --model <model> --stage-type planning --system-prompt "${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in/{executor.system_prompt}.md" --task-stdin` → `TaskOutput(timeout: min(timeout_ms + 120000, 600000))`
-- **cli:** Not supported for planning stage — CLI executors only support review stages (plan/code). If a CLI preset is configured, skip it and report the limitation.
+---
 
-**Single executor (common case):** Route directly — write to `.vcp/task/plan/`. No variant indirection.
+## Step 7: Collect Results and Handle Clarification
 
-**Multiple executors (multi-planner with synthesizer):**
-Non-synthesizer planners (all except last) each write to a separate variant directory:
-- **Compute dirname** via the name-helper (deterministic, no ad-hoc formatting):
-  ```bash
-  bun "${CLAUDE_PLUGIN_ROOT}/scripts/name-helper.ts" --type plan-variant --index {0-based-index} --system-prompt {system_prompt_name} --provider {preset_name} --model {model_name}
-  ```
-- Modify assembled prompt: "Write output to .vcp/task/{computed_dirname}/ using the multi-file format."
+Read executor output from `{TMPDIR}/.vcp/oneshot/plan-{RAND}-*.json`.
 
-Dispatch per parallel/sequential config (group adjacent `parallel: true` → simultaneous).
+**For API/CLI executors:** The output file is wrapped in an envelope `{"event":"complete","provider":"...","model":"...","result":"..."}`. Parse the `result` field (which is a JSON string) to get the actual planner output. For subscription executors, the result is returned directly from the Task tool.
 
-Last executor (synthesizer) runs last with augmented prompt — it does its own planning AND reads all prior variants:
+Check if executor needs clarification (two possible formats):
+- Field-level: executor output has `"needs_clarification": true` with `"clarification_questions": [...]`
+- Status-level: executor output is `{"status": "needs_clarification", "clarification_questions": [...]}` (API executors without AskUserQuestion)
+
+If either form detected:
+1. Present questions to user via AskUserQuestion
+2. Re-dispatch synthesizer with answers (max 3 rounds)
+
+---
+
+## Step 8: Validate Plan Quality
+
+Before appending to plan file, validate:
+1. Every step has `ac_ids[]` — no speculative steps
+2. Every step has `test_ids[]` — no untestable steps
+3. Every step has a specific `rollback` (not "revert changes")
+4. Every step has `debt_risk` explanation
+5. Every AC from requirements is covered by at least one step
+6. Every test ID from TDD Test Plan is covered by at least one step
+
+If validation fails, present the gaps and ask the planner to fix them (re-dispatch with feedback).
+
+---
+
+## Step 9: Append to Plan File
+
+Update the plan file status to `planning`, then append the Implementation Steps section using Edit tool:
+
+```markdown
+## Implementation Steps
+
+**Technical Approach:** {pattern} — {rationale}
+**Alternatives Considered:** {list}
+**Existing Code Reused:** {list}
+
+### Step 1: {title}
+**AC:** {ac_ids} | **Tests:** {test_ids}
+**Files:** {files_to_modify + files_to_create}
+**What to do:** {description}
+**Reuses:** {existing_code_to_reuse}
+**Rollback:** {rollback}
+**Debt Risk:** {debt_risk}
+**Dependencies:** {dependency step numbers, or "none"}
+**Status:** [ ] not started
+
+### Step 2: {title}
+**AC:** {ac_ids} | **Tests:** {test_ids}
+**Files:** {files}
+**What to do:** {description}
+**Reuses:** {existing_code_to_reuse}
+**Rollback:** {rollback}
+**Debt Risk:** {debt_risk}
+**Dependencies:** {dependency step numbers, or "none"}
+**Status:** [ ] not started
+
+{...repeat for all steps...}
 ```
----
-SYNTHESIZER MODE: You are the final planner in a multi-executor planning stage.
 
-Prior plan variants are available at:
-{list of .vcp/task/plan-{index}-*/manifest.json paths}
-
-In addition to creating your own plan, you MUST:
-1. Read all prior plan variants listed above
-2. Merge the best elements from each
-3. Write the FINAL synthesized plan to .vcp/task/plan/ (standard multi-file format)
-4. Note which variant contributed key decisions in meta.json
-
-IMPORTANT: If you are unsure about any architectural decision, step ordering, or scope boundary,
-do NOT assume. Instead:
-1. Write .vcp/task/plan/status.json:
-   {"status": "needs_clarification", "clarification_questions": ["Q1?", "Q2?"]}
-2. Do NOT write manifest.json (that signals completion)
-3. Stop and let the orchestrator handle asking the user
-
-If you have no questions, proceed to write all artifacts including manifest.json.
-```
-
-**Post-synthesis cleanup:** Only after verifying `.vcp/task/plan/manifest.json` exists:
-```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/name-helper.ts" --type plan-variants --list --task-dir .vcp/task | xargs -I{} rm -rf ".vcp/task/{}"
-```
-On synthesis failure, preserve variant directories for manual recovery.
-
-**Failure handling:**
-- Non-synthesizer failure: note, continue with remaining
-- All non-synthesizer fail: synthesizer runs solo
-- Synthesizer failure: do NOT cleanup variants, report error
+**If this is a re-plan (review repair):** Replace the existing `## Implementation Steps` section with the new one instead of appending.
 
 ---
 
-## Step 5: Check for Clarification
+## Step 10: Cleanup and Report
 
-After the synthesizer completes, check for `.vcp/task/plan/status.json`:
-
-1. If it exists and `status == "needs_clarification"`:
-   a. Read the `clarification_questions[]` array
-   b. Present questions to user via AskUserQuestion
-   c. Collect answers
-   d. Delete `status.json` (prevent stale state)
-   e. Re-dispatch ONLY the synthesizer (last executor) with the SAME synthesis augmentation plus:
-      ```
-      CLARIFICATION ANSWERS:
-      - Q1? → A1
-      - Q2? → A2
-      ```
-   f. Return to this step (max 3 rounds — escalate to user if exceeded)
-2. If `status.json` does not exist, proceed to Step 6
+1. Remove temp files: `rm -f "{TMPDIR}/.vcp/oneshot/plan-{RAND}-"*`
+2. Present to user:
+   - Number of steps
+   - AC coverage (which ACs are covered by which steps)
+   - Test coverage (which tests map to which steps)
+   - Existing code being reused
+3. Suggest next step: `/dev-buddy-review --plan`
 
 ---
 
-## Step 6: Verify Output
+## Error Handling
 
-After the executor completes, verify:
-
-1. `.vcp/task/plan/manifest.json` exists and has `step_count > 0`
-2. Each `plan/steps/{N}.json` file exists and contains `ac_ids[]`
-3. `plan/test-plan.json` exists and has `test_cases[]`
-
-If verification fails, report what's missing to the user.
-
----
-
-## Step 7: Report Results
-
-Present a summary to the user:
-- Plan title and summary
-- Number of steps
-- Number of test cases
-- Synthesized from {N} plan variants (if multi-planner was used)
-- Any unmapped ACs (steps without ac_ids)
-- Suggest next step: `/dev-buddy-review --plan` or `/dev-buddy-implement`
+| Scenario | Action |
+|----------|--------|
+| No planners configured | Report error, suggest `/dev-buddy-config` |
+| Requirements section missing | Tell user to run `/dev-buddy-requirements` first |
+| All executors fail | Report error to user |
+| Step has no AC mapping | Validation failure — re-dispatch planner with feedback |
+| Step has no test mapping | Validation failure — re-dispatch planner with feedback |
