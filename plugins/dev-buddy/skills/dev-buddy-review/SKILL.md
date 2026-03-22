@@ -143,6 +143,9 @@ Review and write output to {TMPDIR}/.vcp/oneshot/review-{RAND}-{i}.json
 Route by provider type:
 - **subscription:** `Task(subagent_type: "general-purpose", ...)`
 - **api:** `Bash(run_in_background: true)` → `bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" --type api --output-id review-{RAND}-{i} --preset "{PRESET}" --model "{MODEL}" --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin`
+- **cli:** `Bash(run_in_background: true)` → `bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" --type cli --output-id review-{RAND}-{i} --preset "{PRESET}" --model "{MODEL}" --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin`
+
+**Polling background tasks:** The default TaskOutput timeout is 30s — far too short. Use `TaskOutput(task_id, block: true, timeout: 600000)`. If the task is still running when it returns, repeat with `timeout: 600000` until done. Preset timeout is up to 30 minutes.
 
 Dispatch ALL executors — do NOT skip any. The last executor (synthesizer) does its own review AND reads prior outputs.
 

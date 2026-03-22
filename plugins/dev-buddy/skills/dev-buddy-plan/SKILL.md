@@ -2,12 +2,11 @@
 name: dev-buddy-plan
 description: Create granular implementation plan from requirements in the plan file. Reads Requirements + TDD Test Plan sections, dispatches planners, appends Implementation Steps to plan file.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, TaskOutput, AskUserQuestion
 ---
 
 # Planning Stage Skill
 
-Create a granular, TDD-mapped implementation plan from existing requirements. Reads Requirements and TDD Test Plan sections from the plan file, dispatches planning executors, and appends Implementation Steps to the plan file.
+Create a granular, TDD-mapped implementation plan from existing requirements. Dispatches planning executors to analyze the codebase and requirements, then a synthesizer appends the `## Implementation Steps` section directly to the plan file.
 
 ---
 
@@ -20,7 +19,7 @@ Read the plan file and verify it contains:
 
 If any section is missing, tell the user to run `/dev-buddy-requirements` first.
 
-**If this is a re-plan after review failure:** Check if the plan file already has a `## Plan Review Record` section with `"status": "needs_changes"` in its fenced JSON block. If so, read the `must_fix` findings from the review record and inject them into the planning prompt.
+**If this is a re-plan after review failure:** Check if the plan file already has a `## Plan Review Record` section with `"status": "needs_changes"` in its fenced JSON block. If so, read the `must_fix` findings from the review record — these will be injected into the planning prompt.
 
 ---
 
@@ -43,9 +42,19 @@ console.log(JSON.stringify({ executors }));
 
 ## Step 3: Resolve Session Variables
 
-1. Resolve tmpdir and generate unique output ID (same pattern as RCA skill)
-2. Output file for executor at index `{i}`: `{TMPDIR}/.vcp/oneshot/plan-{RAND}-{i}.json`
-3. Ensure output directory exists
+1. Resolve tmpdir:
+   ```bash
+   bun -e "console.log(require('os').tmpdir())"
+   ```
+2. Generate unique output ID:
+   ```bash
+   bun -e "console.log(require('crypto').randomBytes(4).toString('hex'))"
+   ```
+3. Output file for non-synthesizer executor at index `{i}`: `{TMPDIR}/.vcp/oneshot/plan-{RAND}-{i}.json`
+4. Ensure output directory:
+   ```bash
+   mkdir -p "{TMPDIR}/.vcp/oneshot"
+   ```
 
 ---
 
@@ -63,7 +72,7 @@ Read the plan file and extract:
 
 ## Step 5: Prompt Assembly
 
-For each planning executor:
+For each **non-synthesizer** planning executor, construct the task prompt:
 
 ```
 You are executing the PLANNING stage.
@@ -97,46 +106,20 @@ GRANULAR AGILE UNITS:
 - Each step must be implementable without design decisions from the implementer
 - If a step needs more than ~50 lines of changes, split it
 
-Write output to {TMPDIR}/.vcp/oneshot/plan-{RAND}-{i}.json
+Produce a detailed implementation plan with numbered steps. For each step include:
+- Title and description
+- Which ACs and test IDs it covers
+- Files to modify/create
+- Existing code to reuse
+- Rollback procedure
+- Why this step won't become technical debt
 
-Output JSON format — ALL fields required:
-{
-  "id": "plan-YYYYMMDD-HHMMSS",
-  "title": "Implementation plan title",
-  "summary": "2-3 sentence overview",
-  "technical_approach": {
-    "pattern": "...",
-    "rationale": "...",
-    "alternatives_considered": [{"approach": "...", "rejected_because": "..."}],
-    "existing_code_reused": [{"file": "...", "function": "...", "purpose": "..."}]
-  },
-  "steps": [
-    {
-      "id": 1,
-      "title": "Short step title",
-      "description": "Detailed instruction — what to do and why",
-      "ac_ids": ["AC-1"],
-      "test_ids": ["UT-1", "SK-1"],
-      "files_to_modify": ["path/to/file.ts"],
-      "files_to_create": [],
-      "existing_code_to_reuse": ["src/utils/validate.ts:validateInput"],
-      "rollback": "Specific undo procedure",
-      "debt_risk": "Why this step won't become technical debt",
-      "dependencies": []
-    }
-  ],
-  "files_to_modify": ["..."],
-  "files_to_create": ["..."],
-  "needs_clarification": false,
-  "clarification_questions": []
-}
+Write your analysis to {TMPDIR}/.vcp/oneshot/plan-{RAND}-{i}.json using the Write tool.
 ```
-
-**Multi-executor:** Same pattern as requirements — non-synthesizers write analysis files, synthesizer reads all and writes canonical output.
 
 ---
 
-## Step 6: Dispatch Executors
+## Step 6: Dispatch Non-Synthesizer Executors
 
 **Resolve system prompt with stage/role composition:**
 ```bash
@@ -150,87 +133,103 @@ console.log(composePrompt(stage, role));
 "
 ```
 
+**If single executor:** skip to Step 7 — this executor IS the synthesizer.
+
+**If multiple executors:** dispatch all except the last one in parallel.
+
 Route by provider type:
 - **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<composed + task prompt>")`
 - **api:** `Bash(run_in_background: true)` → `bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" --type api --output-id plan-{RAND}-{i} --preset "{PRESET}" --model "{MODEL}" --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin`
+- **cli:** `Bash(run_in_background: true)` → `bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" --type cli --output-id plan-{RAND}-{i} --preset "{PRESET}" --model "{MODEL}" --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin`
+
+**Polling background tasks:** The default TaskOutput timeout is 30s — far too short. Use `TaskOutput(task_id, block: true, timeout: 600000)`. If the task is still running when it returns, repeat with `timeout: 600000` until done. Preset timeout is up to 30 minutes.
+
+Wait for all non-synthesizer executors to complete.
 
 ---
 
-## Step 7: Collect Results and Handle Clarification
+## Step 7: Dispatch Synthesizer
 
-Read executor output from `{TMPDIR}/.vcp/oneshot/plan-{RAND}-*.json`.
+The synthesizer is either:
+- **Single executor mode:** the only executor
+- **Multi-executor mode:** the last executor in the list
 
-**For API/CLI executors:** The output file is wrapped in an envelope `{"event":"complete","provider":"...","model":"...","result":"..."}`. Parse the `result` field (which is a JSON string) to get the actual planner output. For subscription executors, the result is returned directly from the Task tool.
+The synthesizer's job is to **read all prior analyses and the plan file, then append `## Implementation Steps` directly to the plan file.**
 
-Check if executor needs clarification (two possible formats):
-- Field-level: executor output has `"needs_clarification": true` with `"clarification_questions": [...]`
-- Status-level: executor output is `{"status": "needs_clarification", "clarification_questions": [...]}` (API executors without AskUserQuestion)
+**Construct the synthesizer prompt:**
 
-If either form detected:
-1. Present questions to user via AskUserQuestion
-2. Re-dispatch synthesizer with answers (max 3 rounds)
+For **single executor** (no prior analysis files):
+```
+You are the PLANNER. Read the plan file at {PLAN_FILE_PATH} which contains Requirements, TDD Test Plan, and Risk Registry.
 
----
+{same planning instructions from Step 5}
 
-## Step 8: Validate Plan Quality
+YOUR OUTPUT: Append a new `## Implementation Steps` section to the plan file using the Edit tool. Write in clear markdown — no JSON.
 
-Before appending to plan file, validate:
-1. Every step has `ac_ids[]` — no speculative steps
-2. Every step has `test_ids[]` — no untestable steps
-3. Every step has a specific `rollback` (not "revert changes")
-4. Every step has `debt_risk` explanation
-5. Every AC from requirements is covered by at least one step
-6. Every test ID from TDD Test Plan is covered by at least one step
+The section should include:
+1. A brief technical approach summary (pattern, rationale, alternatives considered, existing code to reuse)
+2. Numbered steps, each with:
+   - Title
+   - Which ACs and test IDs it covers
+   - Files to modify/create
+   - What to do (detailed enough for an implementer to execute without design decisions)
+   - Existing code to reuse
+   - Rollback procedure
+   - Why this won't become technical debt
+   - Dependencies on other steps (if any)
+   - Status checkbox: `[ ] not started`
 
-If validation fails, present the gaps and ask the planner to fix them (re-dispatch with feedback).
+Use whatever markdown structure is clearest for the content. The key requirements are:
+- Every AC must be covered by at least one step
+- Every test ID must be mapped to at least one step
+- Steps must be granular (one architectural unit each, ~50 lines max)
+- Each step must have a rollback procedure
 
----
-
-## Step 9: Append to Plan File
-
-Update the plan file status to `planning`, then append the Implementation Steps section using Edit tool:
-
-```markdown
-## Implementation Steps
-
-**Technical Approach:** {pattern} — {rationale}
-**Alternatives Considered:** {list}
-**Existing Code Reused:** {list}
-
-### Step 1: {title}
-**AC:** {ac_ids} | **Tests:** {test_ids}
-**Files:** {files_to_modify + files_to_create}
-**What to do:** {description}
-**Reuses:** {existing_code_to_reuse}
-**Rollback:** {rollback}
-**Debt Risk:** {debt_risk}
-**Dependencies:** {dependency step numbers, or "none"}
-**Status:** [ ] not started
-
-### Step 2: {title}
-**AC:** {ac_ids} | **Tests:** {test_ids}
-**Files:** {files}
-**What to do:** {description}
-**Reuses:** {existing_code_to_reuse}
-**Rollback:** {rollback}
-**Debt Risk:** {debt_risk}
-**Dependencies:** {dependency step numbers, or "none"}
-**Status:** [ ] not started
-
-{...repeat for all steps...}
+{If re-plan: "REPLACING EXISTING PLAN: Delete the existing ## Implementation Steps section and write a new one."}
 ```
 
-**If this is a re-plan (review repair):** Replace the existing `## Implementation Steps` section with the new one instead of appending.
+For **multi-executor** (has prior analysis files):
+```
+You are the SYNTHESIZER. Read the plan file at {PLAN_FILE_PATH} and all prior planner analyses listed below.
+
+Prior analysis files (read each with the Read tool):
+- {TMPDIR}/.vcp/oneshot/plan-{RAND}-0.json
+- {TMPDIR}/.vcp/oneshot/plan-{RAND}-1.json
+{...list all non-synthesizer output files...}
+
+NOTE: API/CLI executor files are wrapped in {"event":"complete","result":"..."} envelope — parse the "result" field to get the analysis. Subscription executor files contain raw analysis text.
+
+Consolidate the best ideas from all analyses into ONE implementation plan. Then append a `## Implementation Steps` section to the plan file using the Edit tool. Write in clear markdown — no JSON.
+
+{same output format instructions as single executor above}
+```
+
+**Route the synthesizer by provider type:**
+- **subscription:** `Task(subagent_type: "general-purpose", model: "<model>", prompt: "<synthesizer prompt>")`
+- **api:** `Bash(run_in_background: true)` → one-shot-runner with `--type api --output-id plan-{RAND}-synth`
+- **cli:** `Bash(run_in_background: true)` → one-shot-runner with `--type cli --output-id plan-{RAND}-synth`
+
+**Polling:** same timeout guidance as Step 6.
 
 ---
 
-## Step 10: Cleanup and Report
+## Step 8: Verify
+
+After the synthesizer completes:
+
+1. **Read the plan file** and verify it now contains a `## Implementation Steps` section
+2. If the section exists — proceed to Step 9
+3. If the section is missing — report the failure to the user
+
+---
+
+## Step 9: Cleanup and Report
 
 1. Remove temp files: `rm -f "{TMPDIR}/.vcp/oneshot/plan-{RAND}-"*`
 2. Present to user:
    - Number of steps
-   - AC coverage (which ACs are covered by which steps)
-   - Test coverage (which tests map to which steps)
+   - AC coverage summary
+   - Test coverage summary
    - Existing code being reused
 3. Suggest next step: `/dev-buddy-review --plan`
 
@@ -243,5 +242,5 @@ Update the plan file status to `planning`, then append the Implementation Steps 
 | No planners configured | Report error, suggest `/dev-buddy-config` |
 | Requirements section missing | Tell user to run `/dev-buddy-requirements` first |
 | All executors fail | Report error to user |
-| Step has no AC mapping | Validation failure — re-dispatch planner with feedback |
-| Step has no test mapping | Validation failure — re-dispatch planner with feedback |
+| Synthesizer didn't append to plan file | Report failure to user |
+| Re-plan requested | Replace existing `## Implementation Steps` instead of appending |

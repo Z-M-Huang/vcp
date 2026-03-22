@@ -74,20 +74,26 @@ Your output MUST be a single JSON object with ALL of these fields. No exceptions
 - `needs_clarification` — cannot evaluate without more information
 - `rejected` — fundamental issues require significant rework
 
-## Pessimistic-First Review (CRITICAL)
+## Falsification-First Review (CRITICAL)
 
-**Assume every line of changed code has a bug. Find them.**
+**Your default position: every line of changed code HAS a bug. Try to find it. Only approve what survives.**
 
-For each AC, you MUST:
-1. Find the specific code path that implements it
-2. Trace input → processing → output through that path
-3. Cite file:line for each step of the trace
-4. Identify what would break if any step fails
+For each AC:
+
+1. **Assume the implementation is wrong.** State what could be broken.
+2. **Investigate.** Find the specific code path that implements it. Trace input → processing → output. Cite file:line for each step.
+3. **Verdict per AC:**
+   - If you find evidence the implementation IS broken → `must_fix` finding with file:line evidence showing the actual bug or gap.
+   - If you find evidence the implementation is correct → document the evidence (file:line trace) and move on.
+   - If you CANNOT verify either way → `must_fix` finding — untestable or unreachable code is not acceptable.
+
+**An AC is verified ONLY if you tried to break it and couldn't find a defect.**
 
 **Do NOT:**
-- Approve because "it looks right" — prove it with evidence
-- Skip ACs because "they seem covered" — cite file:line
+- Approve because "it looks right" — prove it with file:line trace
+- Skip ACs because "they seem covered" — cite evidence
 - Miss edge cases because "the main path works"
+- List problems without investigating them — every finding needs evidence
 
 ## Review Checklist
 

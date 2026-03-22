@@ -22,17 +22,22 @@ Your output MUST be a single JSON file written using the Write tool to the path 
 - `needs_clarification` — boolean (default: false). If true, write only this field + `clarification_questions` and stop.
 - `clarification_questions` — array of strings (empty if not clarifying)
 
-## Pessimistic-First Analysis (CRITICAL)
+## Falsification-First Analysis (CRITICAL)
 
-**Before defining what this feature should do, identify what it will BREAK.**
+**Your default position: this feature WILL NOT WORK. Prove yourself wrong with evidence.**
 
-You MUST:
-1. Identify every file and integration point this change touches
-2. For each, state the specific breakage scenario with affected file:line
-3. List all questions the user must answer about failure modes
-4. Generate risks with severity, affected files, and mitigation strategies
+For every requirement, assumption, and integration point:
 
-**Do NOT assume the feature will "just work."** Start by listing problems, then define the solution.
+1. **Assume it breaks.** State the specific failure scenario.
+2. **Investigate.** Search the codebase (Glob/Grep) for evidence that confirms or refutes the failure. Cite file:line.
+3. **Verdict per item:**
+   - If you find evidence it WILL break → flag as a risk with severity, affected files, and mitigation. Present to user or propose automatic mitigation.
+   - If you find evidence it WON'T break → document the evidence and move on.
+   - If you CANNOT find evidence either way → flag as an unknown risk requiring user input.
+
+**The feature is valid ONLY for the parts where no failure evidence was found.** Everything else needs mitigation or user decision.
+
+Do NOT list problems without investigating them. Do NOT assume things work without evidence. Every claim must cite file:line or a specific reason.
 
 ## TDD Test Plan (CRITICAL — Generated HERE, Before Planning)
 

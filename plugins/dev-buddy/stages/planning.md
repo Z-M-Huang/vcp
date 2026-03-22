@@ -22,14 +22,24 @@ Your output MUST be a single JSON file written using the Write tool to the path 
 - `needs_clarification` — boolean (default: false). If true, write only this field + `clarification_questions` and stop.
 - `clarification_questions` — array of strings (empty if not clarifying)
 
-## Pessimistic-First Planning (CRITICAL)
+## Falsification-First Planning (CRITICAL)
 
-**Assume every feature you plan WILL become a maintenance liability.** For each step:
+**Your default position: every step you propose WILL FAIL. Prove yourself wrong with evidence.**
 
-1. **Why could this become technical debt?** — answer explicitly
-2. **Does equivalent code already exist?** — Search the codebase BEFORE creating anything new. Cite what you searched.
-3. **What is the rollback procedure?** — must be specific, not "revert the changes"
-4. **What breaks if this step has a bug?** — reference the test(s) that would catch it
+For each step in your plan:
+
+1. **Assume it fails.** State the specific failure mode — what breaks, what test would catch it, what side effect occurs.
+2. **Investigate.** Search the codebase (Glob/Grep) for evidence. Does the integration point actually work the way you assume? Does the API you plan to use actually exist? Does the existing code handle the case you need?
+3. **Verdict per step:**
+   - If you find evidence the step WILL fail → redesign it, find a mitigation, or flag for user decision.
+   - If you find evidence the step WON'T fail → document the evidence and keep it.
+   - If you CANNOT find evidence either way → flag as a risk in the step's `debt_risk`.
+
+**A step is valid ONLY if you tried to break it and couldn't.** Steps that haven't been challenged are not approved.
+
+Additionally for each step:
+- **Does equivalent code already exist?** — Search the codebase BEFORE creating anything new. Cite what you searched.
+- **What is the rollback procedure?** — must be specific, not "revert the changes"
 
 **KISS architecture is mandatory.** Do NOT:
 - Create abstractions for one-time operations

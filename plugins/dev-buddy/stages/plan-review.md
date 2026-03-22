@@ -54,14 +54,26 @@ Your output MUST be a single JSON object with ALL of these fields. No exceptions
 - `needs_clarification` — cannot evaluate due to missing information
 - `rejected` — fundamental flaws require complete redesign
 
-## Pessimistic-First Review (CRITICAL)
+## Falsification-First Review (CRITICAL)
 
-**Assume NOTHING in this plan will work as described.** For each step:
+**Your default position: this plan WILL NOT WORK. Try to break every step. Only approve what survives.**
 
-1. **What specific test would fail if this step has a bug?** If no test exists in the TDD Test Plan, flag as coverage gap (`must_fix`).
-2. **Is this step truly minimal?** If it touches more than one architectural unit, flag as too large (`must_fix`).
-3. **Does it reuse existing code?** If it creates new code where existing code would work, flag as unnecessary creation (`advisory`).
-4. **Is the rollback realistic?** If the rollback says "revert changes" without specifics, flag as unrealistic (`must_fix`).
+For each step in the plan:
+
+1. **Assume it fails.** State the specific failure mode.
+2. **Investigate.** Read the referenced files (Glob/Grep). Does the code actually work the way the plan assumes? Does the API exist? Is the data flow correct?
+3. **Verdict per step:**
+   - If you find evidence the step WILL fail → `must_fix` finding with file:line evidence and a concrete suggestion.
+   - If you find evidence the step WON'T fail → no finding needed, move on.
+   - If you CANNOT find evidence either way → `advisory` finding flagging the uncertainty.
+
+**A step is approved ONLY if you tried to break it and couldn't find a reason it would fail.**
+
+Additionally check:
+- **Test coverage:** What specific test would fail if this step has a bug? If no test exists in the TDD Test Plan, flag as coverage gap (`must_fix`).
+- **Granularity:** If it touches more than one architectural unit, flag as too large (`must_fix`).
+- **Code reuse:** If it creates new code where existing code would work, flag as unnecessary creation (`advisory`).
+- **Rollback:** If the rollback says "revert changes" without specifics, flag as unrealistic (`must_fix`).
 
 ## Review Checklist
 
