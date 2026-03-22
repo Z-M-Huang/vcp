@@ -18,7 +18,7 @@
  */
 
 import { spawn } from 'child_process';
-import { closeSync, constants, mkdirSync, openSync, writeSync } from 'fs';
+import { closeSync, constants, mkdirSync, openSync, unlinkSync, writeSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import {
@@ -84,6 +84,9 @@ function emitAndExit(result: RunResult): never {
       const dir = path.join(os.tmpdir(), '.vcp', 'oneshot');
       mkdirSync(dir, { recursive: true });
       const filePath = path.join(dir, `${outputId}.json`);
+      // Remove stale file from previous run (if any) before creating.
+      // O_EXCL is kept for atomicity and symlink-following prevention (CWE-61).
+      try { unlinkSync(filePath); } catch { /* may not exist */ }
       const fd = openSync(filePath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
       writeSync(fd, JSON.stringify(result.output));
       closeSync(fd);

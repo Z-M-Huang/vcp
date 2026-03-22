@@ -728,8 +728,9 @@ describe('--output-id integration', () => {
     expect(content.phase).toBe('validation');
   });
 
-  test('fails if output file already exists (O_EXCL)', async () => {
+  test('overwrites output file on re-run (unlink + O_EXCL)', async () => {
     const id = testToken + '-dup';
+    const expectedPath = path.join(outputDir, id + '.json');
     const scriptPath = path.resolve(__dirname, '../one-shot-runner.ts');
 
     // First run — creates the file
@@ -744,7 +745,7 @@ describe('--output-id integration', () => {
     ], { stdout: 'pipe', stderr: 'pipe' });
     await proc1.exited;
 
-    // Second run — same ID, should fail with EEXIST
+    // Second run — same ID, should overwrite (not fail)
     const proc2 = Bun.spawn([
       'bun', scriptPath,
       '--type', 'api',
@@ -757,7 +758,10 @@ describe('--output-id integration', () => {
     await proc2.exited;
 
     const stderrText = await new Response(proc2.stderr).text();
-    expect(stderrText).toContain('Failed to write output file');
+    expect(stderrText).not.toContain('Failed to write output file');
+    // File should exist with content from second run
+    const content = JSON.parse(readFileSync(expectedPath, 'utf-8'));
+    expect(content.event).toBe('error'); // validation error from nonexistent preset
   });
 
   test('writes with mode 0o600', async () => {
@@ -783,7 +787,7 @@ describe('--output-id integration', () => {
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
-  test('refuses to write through symlinked final filename', async () => {
+  test('does not write through symlinked final filename (unlink replaces symlink)', async () => {
     const id = testToken + '-sym';
     const symlinkPath = path.join(outputDir, id + '.json');
     const targetPath = path.join(outputDir, id + '-target.json');
@@ -808,9 +812,10 @@ describe('--output-id integration', () => {
 
     await proc.exited;
 
-    const stderrText = await new Response(proc.stderr).text();
-    expect(stderrText).toContain('Failed to write output file');
-    // Target file should NOT have been created
+    // Symlink was removed and replaced with a regular file — target NOT written
     expect(existsSync(targetPath)).toBe(false);
+    // Output was written as a regular file (not through the symlink)
+    const content = JSON.parse(readFileSync(symlinkPath, 'utf-8'));
+    expect(content.event).toBe('error');
   });
 });
