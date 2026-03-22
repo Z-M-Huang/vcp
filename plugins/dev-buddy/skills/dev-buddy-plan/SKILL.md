@@ -19,7 +19,7 @@ Read the plan file and verify it contains:
 
 If any section is missing, tell the user to run `/dev-buddy-requirements` first.
 
-**If this is a re-plan after review failure:** Check if the plan file already has a `## Plan Review Record` section with `"status": "needs_changes"` in its fenced JSON block. If so, read the `must_fix` findings from the review record — these will be injected into the planning prompt.
+**If this is a re-plan after review failure:** Check if the plan file already has a `## Plan Review Record` section with `**Status:** needs_changes`. If so, read the `### Must-Fix Findings` from the review record — these will be injected into the planning prompt.
 
 ---
 

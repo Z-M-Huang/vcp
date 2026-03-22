@@ -186,85 +186,70 @@ If a reviewer returned `needs_clarification` but the answer is in the plan file:
 
 ## Step 10: Append Review Record to Plan File
 
-**Note:** The plan file record is a **consolidated** aggregation of all executor outputs. Single-executor fields (`reviewer`, `model`) from the stage contract are merged into `reviewers: [{name, model}]` for multi-executor traceability.
+Write the review record as **markdown** — no JSON blocks. Use the Edit tool to append to the plan file.
 
 **For plan review, append `## Plan Review Record`:**
+
 ```markdown
 ## Plan Review Record
 
-```json
-{
-  "id": "review-YYYYMMDD-HHMMSS",
-  "reviewer": "synthesizer system_prompt name (or first reviewer if single)",
-  "model": "synthesizer model (or first reviewer model if single)",
-  "revision_number": 1,
-  "reviewers": [{"name": "{system_prompt}", "model": "{model}"}],
-  "status": "approved|needs_changes|needs_clarification|rejected",
-  "summary": "2-3 sentence consolidated summary",
-  "needs_clarification": false,
-  "clarification_questions": [],
-  "findings": [{all must_fix and advisory findings from all reviewers, deduplicated}],
-  "requirements_coverage": {
-    "mapping": [{"ac_id": "AC-1", "steps": ["step 1"], "tests": ["UT-1"]}],
-    "acs_without_steps": [],
-    "acs_without_tests": [],
-    "steps_without_ac": [],
-    "steps_without_tests": [],
-    "risks_unacknowledged": []
-  },
-  "reviewed_at": "{ISO8601}"
-}
-```
+**Reviewers:** {name1} ({model1}), {name2} ({model2})
+**Revision:** {revision_number}
+**Status:** {approved|needs_changes|rejected}
+**Date:** {YYYY-MM-DD}
+
+### Summary
+{2-3 sentence consolidated summary}
+
+### Requirements Coverage
+| AC | Steps | Tests | Status |
+|----|-------|-------|--------|
+| AC-1 | Step 1, Step 3 | UT-1, SK-1 | Covered |
+| AC-3 | — | — | ⚠ Missing |
+
+**Unacknowledged risks:** {list or "none"}
+
+### Must-Fix Findings
+1. **[{severity}] {contract_reference}:** {message}. Evidence: `{file:line}`. Suggestion: {suggestion}.
+2. ...
+
+### Advisory Findings
+1. **[{severity}] {contract_reference}:** {message}. Evidence: `{evidence}`. Suggestion: {suggestion}.
 ```
 
-**For code review, append `## Code Review Record` and update `## Sign-off`:**
+**For code review, append `## Code Review Record`:**
+
 ```markdown
 ## Code Review Record
 
-```json
-{
-  "id": "code-review-YYYYMMDD-HHMMSS",
-  "reviewer": "synthesizer system_prompt name",
-  "model": "synthesizer model",
-  "revision_number": 1,
-  "reviewers": [{"name": "{system_prompt}", "model": "{model}"}],
-  "status": "approved|needs_changes|needs_clarification|rejected",
-  "summary": "2-3 sentence consolidated summary",
-  "needs_clarification": false,
-  "clarification_questions": [],
-  "acceptance_criteria_verification": {
-    "total": 6, "verified": 5, "missing": ["AC-3"],
-    "details": [{"ac_id": "AC-1", "status": "IMPLEMENTED", "evidence": "src/auth.ts:42", "notes": ""}]
-  },
-  "findings": [{all must_fix and advisory findings, deduplicated}],
-  "checklist": {
-    "security_owasp": "PASS|WARN|FAIL",
-    "error_handling": "PASS|WARN|FAIL",
-    "resource_management": "PASS|WARN|FAIL",
-    "configuration": "PASS|WARN|FAIL",
-    "code_quality": "PASS|WARN|FAIL",
-    "concurrency": "PASS|WARN|FAIL|N/A",
-    "logging": "PASS|WARN|FAIL",
-    "dependencies": "PASS|WARN|FAIL",
-    "api_design": "PASS|WARN|FAIL|N/A",
-    "backward_compatibility": "PASS|WARN|FAIL|N/A",
-    "testing": "PASS|WARN|FAIL",
-    "over_engineering": "PASS|WARN|FAIL"
-  },
-  "reviewed_at": "{ISO8601}"
-}
-```
+**Reviewers:** {name1} ({model1}), {name2} ({model2})
+**Revision:** {revision_number}
+**Status:** {approved|needs_changes|rejected}
+**Date:** {YYYY-MM-DD}
 
-## Sign-off
+### Summary
+{2-3 sentence consolidated summary}
 
-```json
-{
-  "requirements_approved": "{date}",
-  "plan_approved": "{date}",
-  "implementation_complete": "{date}",
-  "code_review_passed": "{date or null}"
-}
-```
+### AC Verification ({verified}/{total} verified)
+| AC | Status | Evidence | Notes |
+|----|--------|----------|-------|
+| AC-1 | IMPLEMENTED | `src/auth.ts:42` | |
+| AC-3 | NOT_IMPLEMENTED | | Missing |
+
+### Checklist
+| Area | Result |
+|------|--------|
+| Security (OWASP) | PASS/WARN/FAIL |
+| Error Handling | PASS/WARN/FAIL |
+| Code Quality | PASS/WARN/FAIL |
+| Testing | PASS/WARN/FAIL |
+{...all 12 areas...}
+
+### Must-Fix Findings
+1. **[{severity}] {contract_reference}:** {message}. Evidence: `{file:line}`. Suggestion: {suggestion}.
+
+### Advisory Findings
+1. ...
 ```
 
 **If this is a re-review (revision > 1):** Replace the existing review record section instead of appending a second one.

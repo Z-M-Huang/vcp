@@ -72,7 +72,7 @@ For each stage:
 3. Invoke the corresponding skill (see mapping above)
 4. After skill completes, verify the expected plan file section exists (Read the plan file, check for the section header)
 5. `TaskUpdate(phase_task_id, status: 'completed')`
-6. If a review stage status is `rejected` (check the fenced JSON in the review record section) → **STOP the pipeline**, `TaskUpdate(phase_task_id, status: 'blocked')`, report to user
+6. If a review stage status is `rejected` (check for `**Status:** rejected` in the review record section) → **STOP the pipeline**, `TaskUpdate(phase_task_id, status: 'blocked')`, report to user
 
 **IMPORTANT:** Review stages handle their own repair loops internally. The orchestrator just invokes once and waits.
 

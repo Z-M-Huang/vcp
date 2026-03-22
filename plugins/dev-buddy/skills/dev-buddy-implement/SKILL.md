@@ -19,14 +19,14 @@ Read the plan file and verify required sections exist:
 - `## Requirements` with acceptance criteria
 - `## TDD Test Plan` with test IDs
 - `## Implementation Steps` with step details
-- `## Plan Review Record` with `"status": "approved"` in its fenced JSON block
+- `## Plan Review Record` with `**Status:** approved`
 - `## Risk Registry` with all risks acknowledged
 
 If plan review is not approved, tell the user to run `/dev-buddy-review --plan` first.
 If any risk is unacknowledged, tell the user to acknowledge risks first.
 
-**Code review repair mode:** If `## Code Review Record` exists with `"status": "needs_changes"` in its fenced JSON block, this is a repair invocation:
-1. Read the `must_fix` findings from the code review record's fenced JSON
+**Code review repair mode:** If `## Code Review Record` exists with `**Status:** needs_changes`, this is a repair invocation:
+1. Read the `### Must-Fix Findings` from the code review record
 2. For each finding, identify which implementation step is affected (via `contract_reference` field referencing AC or step)
 3. Reset affected steps' status from `[x] done` back to `[ ] not started` in the plan file
 4. Inject the findings into the implementer prompt for affected steps as:
