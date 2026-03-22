@@ -22,7 +22,7 @@ import fs from 'fs';
 import path from 'path';
 import { readPresets, maskApiKey } from './preset-utils.ts';
 import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
-import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
 import type { ApiPreset } from '../types/presets.ts';
 
@@ -30,9 +30,6 @@ import type { ApiPreset } from '../types/presets.ts';
 
 /** Default per-task timeout: 5 minutes (300s). */
 export const DEFAULT_TASK_TIMEOUT_MS = 300_000;
-
-/** Default warmup timeout: 60 seconds. */
-const WARMUP_TIMEOUT_MS = 60_000;
 
 /** Max iterations for OpenAI agent loop. */
 export const OPENAI_MAX_ITERATIONS = 100;
@@ -406,14 +403,21 @@ export function buildSessionEnv(preset: ApiPreset, modelOverride?: string): Reco
 
 // ================== SESSION RESULT COLLECTION ==================
 
+/** Minimal interface for anything that provides a message stream + close. */
+export interface StreamSource {
+  stream(): AsyncIterable<Record<string, unknown>>;
+  close(): void;
+}
+
 /**
- * Collect the result from a V2 session stream with wall-clock timeout.
+ * Collect the result from a message stream with wall-clock timeout.
+ * Works with both V2 session objects and query() adapters.
  *
  * Uses Promise.race so timeout fires even if stream() yields nothing.
- * On timeout, session.close() kills the orphaned stream consumer.
+ * On timeout, source.close() kills the orphaned stream consumer.
  */
 export async function collectSessionResult(
-  session: any,
+  session: StreamSource,
   timeoutMs: number = DEFAULT_TASK_TIMEOUT_MS,
 ): Promise<{ result: string | null; error: string | null; timedOut?: boolean }> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -453,7 +457,10 @@ export async function collectSessionResult(
 // ================== ANTHROPIC RUNNER ==================
 
 export class AnthropicRunner implements AgentRunner {
-  constructor(private preset: ApiPreset) {}
+  private queryFn: typeof query;
+  constructor(private preset: ApiPreset, queryFn?: typeof query) {
+    this.queryFn = queryFn ?? query;
+  }
 
   async run(task: string, options: AgentRunOptions): Promise<AgentRunResult> {
     const env = buildSessionEnv(this.preset, options.model);
@@ -480,37 +487,28 @@ export class AnthropicRunner implements AgentRunner {
       details: task,
     }, options.debugEnabled);
 
-    let session: any = null;
+    let session: StreamSource | null = null;
     try {
       await vcpLog(options.cwd, {
         source: 'api-task-runner', event: 'session_create', decision: 'info',
         details: `preset=${options.presetName} model=${options.model} key=${maskApiKey(this.preset.api_key)}`,
       }, options.debugEnabled);
 
-      session = unstable_v2_createSession({
-        model: 'sonnet', // Alias — resolved to provider model via ANTHROPIC_DEFAULT_SONNET_MODEL env var
-        env,
-        permissionMode: 'default',
-        allowedTools: [...ANTHROPIC_TOOL_NAMES],
-        ...(options.systemPromptContent && {
-          systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: options.systemPromptContent },
-        }),
+      const q = this.queryFn({
+        prompt: task,
+        options: {
+          model: 'sonnet', // Alias — resolved to provider model via ANTHROPIC_DEFAULT_SONNET_MODEL env var
+          env,
+          permissionMode: 'default',
+          allowedTools: [...ANTHROPIC_TOOL_NAMES],
+          ...(options.systemPromptContent && {
+            systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: options.systemPromptContent },
+          }),
+        },
       });
 
-      // Warmup — blocks until session is live
-      await session.send('Respond with OK');
-      const warmup = await collectSessionResult(session, WARMUP_TIMEOUT_MS);
-      if (warmup.error) {
-        return { result: null, error: `Warmup failed: ${warmup.error}`, timedOut: false };
-      }
-
-      await vcpLog(options.cwd, {
-        source: 'api-task-runner', event: 'session_ready', decision: 'info',
-        details: `preset=${options.presetName} model=${options.model}`,
-      }, options.debugEnabled);
-
-      // Send task
-      await session.send(task);
+      // Wrap Query as session-like object for collectSessionResult compatibility
+      session = { stream: () => q, close: () => q.close() };
       const result = await collectSessionResult(session, options.timeoutMs);
       return {
         result: result.result,

@@ -16,6 +16,7 @@ import {
   executeToolCall,
   AnthropicRunner,
   OpenAIRunner,
+  type StreamSource,
 } from '../api-task-runner.ts';
 import type { AgentRunner, AgentRunOptions } from '../api-task-runner.ts';
 import type { ApiPreset } from '../../types/presets.ts';
@@ -1199,5 +1200,184 @@ describe('OpenAIRunner', () => {
     const runner = new OpenAIRunner(presetWithInvalidTokens);
     await runner.run('test', baseOptions);
     expect(capturedBody.max_tokens).toBe(16384);
+  });
+});
+
+// ================== AnthropicRunner ==================
+
+describe('AnthropicRunner', () => {
+  const baseOptions: AgentRunOptions = {
+    model: 'TestModel',
+    timeoutMs: 30_000,
+    cwd: '/tmp',
+    debugEnabled: false,
+    presetName: 'test-anthropic',
+  };
+
+  /** Create a mock query function that captures args and returns a controllable stream. */
+  function mockQueryFn(messages: Array<Record<string, unknown>>) {
+    let capturedParams: any = null;
+    let closed = false;
+
+    const fn = ((params: any) => {
+      capturedParams = params;
+      const generator = (async function* () {
+        for (const msg of messages) {
+          if (closed) return;
+          yield msg;
+        }
+      })();
+      return Object.assign(generator, {
+        close: () => { closed = true; },
+        // Query interface methods (unused in these tests, but present for type compat)
+        interrupt: async () => {},
+        setPermissionMode: async () => {},
+        setModel: async () => {},
+        setMaxThinkingTokens: async () => {},
+        initializationResult: async () => ({}),
+        supportedCommands: async () => ([]),
+        supportedModels: async () => ([]),
+        accountInfo: async () => ({}),
+        rewindFiles: async () => ({}),
+        mcpServerStatus: async () => ([]),
+        reconnectMcpServer: async () => {},
+        toggleMcpServer: async () => {},
+        setMcpServers: async () => ({}),
+        streamInput: async () => {},
+        stopTask: async () => {},
+        return: generator.return.bind(generator),
+        next: generator.next.bind(generator),
+        throw: generator.throw.bind(generator),
+        [Symbol.asyncIterator]: () => generator,
+      });
+    }) as any;
+
+    return { fn, getParams: () => capturedParams, isClosed: () => closed };
+  }
+
+  test('forwards systemPrompt when systemPromptContent is provided', async () => {
+    const { fn, getParams } = mockQueryFn([
+      { type: 'result', subtype: 'success', result: 'done' },
+    ]);
+    const runner = new AnthropicRunner(mockPreset, fn);
+    await runner.run('test task', { ...baseOptions, systemPromptContent: 'You are a planner.' });
+
+    const params = getParams();
+    expect(params.prompt).toBe('test task');
+    expect(params.options.systemPrompt).toEqual({
+      type: 'preset',
+      preset: 'claude_code',
+      append: 'You are a planner.',
+    });
+  });
+
+  test('omits systemPrompt when systemPromptContent is not provided', async () => {
+    const { fn, getParams } = mockQueryFn([
+      { type: 'result', subtype: 'success', result: 'done' },
+    ]);
+    const runner = new AnthropicRunner(mockPreset, fn);
+    await runner.run('test task', baseOptions);
+
+    const params = getParams();
+    expect(params.options.systemPrompt).toBeUndefined();
+  });
+
+  test('forwards model, env, permissionMode, and allowedTools', async () => {
+    const { fn, getParams } = mockQueryFn([
+      { type: 'result', subtype: 'success', result: 'done' },
+    ]);
+    const runner = new AnthropicRunner(mockPreset, fn);
+    await runner.run('test task', baseOptions);
+
+    const params = getParams();
+    expect(params.options.model).toBe('sonnet');
+    expect(params.options.permissionMode).toBe('default');
+    expect(params.options.allowedTools).toEqual([...ANTHROPIC_TOOL_NAMES]);
+    expect(params.options.env).toBeDefined();
+    // Verify env includes provider credentials
+    expect(params.options.env.ANTHROPIC_API_KEY).toBe(mockPreset.api_key);
+    expect(params.options.env.ANTHROPIC_BASE_URL).toBe(mockPreset.base_url);
+  });
+
+  test('returns result on success', async () => {
+    const { fn } = mockQueryFn([
+      { type: 'assistant', message: 'working...' },
+      { type: 'result', subtype: 'success', result: 'All done!' },
+    ]);
+    const runner = new AnthropicRunner(mockPreset, fn);
+    const result = await runner.run('test task', baseOptions);
+
+    expect(result.result).toBe('All done!');
+    expect(result.error).toBeNull();
+    expect(result.timedOut).toBe(false);
+  });
+
+  test('returns error on failure', async () => {
+    const { fn } = mockQueryFn([
+      { type: 'result', subtype: 'error', errors: ['something broke'] },
+    ]);
+    const runner = new AnthropicRunner(mockPreset, fn);
+    const result = await runner.run('test task', baseOptions);
+
+    expect(result.result).toBeNull();
+    expect(result.error).toContain('error');
+    expect(result.timedOut).toBe(false);
+  });
+
+  test('closes query on timeout', async () => {
+    // Create a stalled query that never yields a result
+    let closed = false;
+    const stalledFn = ((params: any) => {
+      const generator = (async function* () {
+        await new Promise<void>((resolve) => {
+          const check = setInterval(() => {
+            if (closed) { clearInterval(check); resolve(); }
+          }, 10);
+        });
+      })();
+      return Object.assign(generator, {
+        close: () => { closed = true; },
+        interrupt: async () => {},
+        setPermissionMode: async () => {},
+        setModel: async () => {},
+        setMaxThinkingTokens: async () => {},
+        initializationResult: async () => ({}),
+        supportedCommands: async () => ([]),
+        supportedModels: async () => ([]),
+        accountInfo: async () => ({}),
+        rewindFiles: async () => ({}),
+        mcpServerStatus: async () => ([]),
+        reconnectMcpServer: async () => {},
+        toggleMcpServer: async () => {},
+        setMcpServers: async () => ({}),
+        streamInput: async () => {},
+        stopTask: async () => {},
+        return: generator.return.bind(generator),
+        next: generator.next.bind(generator),
+        throw: generator.throw.bind(generator),
+        [Symbol.asyncIterator]: () => generator,
+      });
+    }) as any;
+
+    const runner = new AnthropicRunner(mockPreset, stalledFn);
+    const result = await runner.run('test task', { ...baseOptions, timeoutMs: 100 });
+
+    expect(result.result).toBeNull();
+    expect(result.error).toContain('timed out');
+    expect(result.timedOut).toBe(true);
+    expect(closed).toBe(true); // query was closed
+  });
+
+  test('catches exceptions from query', async () => {
+    const throwingFn = (() => {
+      throw new Error('SDK connection failed');
+    }) as any;
+
+    const runner = new AnthropicRunner(mockPreset, throwingFn);
+    const result = await runner.run('test task', baseOptions);
+
+    expect(result.result).toBeNull();
+    expect(result.error).toBe('SDK connection failed');
+    expect(result.timedOut).toBe(false);
   });
 });
