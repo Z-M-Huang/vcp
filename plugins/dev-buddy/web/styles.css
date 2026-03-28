@@ -616,28 +616,6 @@ input[type="checkbox"] {
 .stage-card:has(.stage-type-ralph_code_review)   { border-left-color: var(--stage-ralph-code-review); }
 .stage-card:has(.stage-type-ralph_uat)           { border-left-color: var(--stage-ralph-uat); }
 
-/* Drag handle */
-.drag-handle {
-  cursor: grab;
-  color: var(--text-muted);
-  padding: 2px 4px;
-  flex-shrink: 0;
-  user-select: none;
-  transition: color 0.15s;
-  opacity: 0.5;
-}
-
-.drag-handle:hover { color: var(--text-secondary); opacity: 1; }
-.drag-handle:active { cursor: grabbing; }
-
-/* Ghost (SortableJS) */
-.ghost, .sortable-ghost {
-  opacity: 0.3;
-  border: 2px dashed var(--accent);
-  background: var(--accent-dim);
-}
-
-.drag-handle.is-synthesizer { visibility: hidden; pointer-events: none; }
 
 /* ─── Import Modal ─────────────────────────────────────────── */
 
@@ -1105,7 +1083,7 @@ input[type="checkbox"] {
 .badge-model { background: var(--badge-model); color: white; }
 .badge-built-in { background: var(--badge-built-in); color: white; }
 .badge-custom { background: var(--badge-custom); color: white; }
-/* badge-synthesizer removed in v0.4.0 — Ralph has no synthesizer concept */
+.badge-synthesizer { background: var(--stage-decomposition-bg, #e8d5f5); color: var(--stage-decomposition-text, #6b21a8); font-weight: 600; }
 
 .text-muted { color: var(--text-muted); }
 .text-secondary { color: var(--text-secondary); }

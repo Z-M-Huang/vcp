@@ -223,6 +223,13 @@ export function validateDevBuddyConfig(config: DevBuddyConfig): void {
     }
   }
 
+  // Enforce synthesizer rule: last executor in multi-executor stages must be non-parallel
+  for (const [, stage] of Object.entries(config.stages)) {
+    if (stage.executors.length > 1 && stage.executors[stage.executors.length - 1].parallel) {
+      stage.executors[stage.executors.length - 1].parallel = false;
+    }
+  }
+
   // Validate numeric fields
   if (!Number.isInteger(config.max_iterations) || config.max_iterations <= 0) {
     throw new Error(`max_iterations must be a positive integer`);

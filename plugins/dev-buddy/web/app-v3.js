@@ -120,20 +120,16 @@ function v3Mixin() {
       await this._fetchModelOptions(exec.preset);
     },
 
-    // SortableJS initialization for executor rows
-    initSortableExecutors(el, stageType) {
-      if (el._sortableInstance) el._sortableInstance.destroy();
-      el._sortableInstance = Sortable.create(el, {
-        animation: 150,
-        handle: '.drag-handle',
-        ghostClass: 'sortable-ghost',
-        onEnd: (evt) => {
-          const execs = [...this.v3Stages[stageType].executors];
-          const moved = execs.splice(evt.oldIndex, 1)[0];
-          execs.splice(evt.newIndex, 0, moved);
-          this.v3Stages[stageType] = { ...this.v3Stages[stageType], executors: execs };
-        },
-      });
+    moveExecutorInStage(stageType, index, direction) {
+      const execs = this.v3Stages[stageType].executors;
+      const newIndex = index + direction;
+      if (newIndex < 0 || newIndex >= execs.length) return;
+      // Don't allow swapping past synthesizer (last position)
+      if (execs.length > 1 && newIndex === execs.length - 1 && direction === 1) return;
+      [execs[index], execs[newIndex]] = [execs[newIndex], execs[index]];
+      // Safety: ensure last executor (synthesizer) is non-parallel
+      if (execs.length > 1) execs[execs.length - 1].parallel = false;
+      this.v3Stages[stageType] = { ...this.v3Stages[stageType], executors: [...execs] };
     },
 
     // ============================================================
