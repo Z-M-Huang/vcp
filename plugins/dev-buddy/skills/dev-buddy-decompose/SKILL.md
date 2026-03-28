@@ -69,7 +69,22 @@ Each executor receives:
 
 **Subscription executors:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + plan_context})`
 
-**API/CLI executors:** `Bash(run_in_background: true)` with one-shot-runner.ts using `--stage-type decomposition`
+**API/CLI executors:** `Bash(run_in_background: true)` with one-shot-runner.ts:
+```bash
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
+  --type {api|cli} --output-id ralph-decomp-p{i} \
+  --preset "{PRESET}" --model "{MODEL}" \
+  --stage-type decomposition --system-prompt {SYSTEM_PROMPT} \
+  --allowed-tools Read,Glob,Grep \
+  --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin <<'{DELIM}'
+IMPORTANT: You are a PARALLEL executor. Return your analysis as text output ONLY.
+Do NOT create, modify, or delete any files. The orchestrator will write the final output.
+
+{plan_context}
+
+Break this feature into small, independently testable units of work. Return your decomposition as text.
+{DELIM}
+```
 
 **Dispatch all parallel executors in a single message.**
 
@@ -103,7 +118,7 @@ Append `## Units of Work` table to master plan using Edit tool:
 
 ### 6b. Create per-unit plan files
 
-For each unit, use Write tool to create `~/.claude/plans/ralph-{SLUG}-unit-{N}.md`:
+For each unit, use Write tool to create `~/.claude/plans/ralph/{SLUG}/unit-{N}.md`:
 
 ```markdown
 # Unit {N}: {Title}
@@ -145,7 +160,11 @@ TaskCreate("Unit 2: {title} — ralph-{SLUG}", status: "pending", blocked_by: [T
 
 Update Code Review task to depend on all unit tasks.
 
-## Step 7: User approval
+## Step 7: Update plan status
+
+Update plan status to `build` using Edit tool: replace `**Status:** decompose` with `**Status:** build`.
+
+## Step 8: User approval
 
 Present the decomposition to the user. Ask: "Does this breakdown look right? Any units that should be split further or reordered?"
 
@@ -158,5 +177,5 @@ If running under the orchestrator, update tasks:
 
 ## Known Constraints
 
-1. **Tool constraints are prompt-level guidance for API/CLI executors.** Only subscription executors get structural tool restriction.
+1. **Tool restriction:** API executors are structurally restricted to `Read,Glob,Grep` via `--allowed-tools`. CLI executors receive a prompt-level instruction. Subscription executors get prompt-level guidance only.
 2. **Sequential TaskOutput polling:** Do NOT issue multiple TaskOutput calls in the same message.

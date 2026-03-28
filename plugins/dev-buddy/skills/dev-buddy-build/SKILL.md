@@ -71,7 +71,7 @@ Read the master plan's "Units of Work" table. Verify all dependency units are `d
 
 ### 3b. Read unit plan
 
-Read `~/.claude/plans/ralph-{SLUG}-unit-{N}.md`.
+Read `~/.claude/plans/ralph/{SLUG}/unit-{N}.md`.
 
 ### 3c. Resolve stage + role prompts
 
@@ -139,6 +139,8 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
 
 ### 3g. After all units complete
 
+Update plan status to `review` using Edit tool: replace `**Status:** build` with `**Status:** review`.
+
 If running under the orchestrator, update tasks:
 - `TaskUpdate(T-review, status: "in_progress")`
 
@@ -148,6 +150,6 @@ If running under the orchestrator, update tasks:
 
 1. **Fresh context is critical.** Each build attempt uses a fresh subagent. Do not accumulate context across iterations — the unit plan file on disk carries all necessary state.
 
-2. **Tool constraints are prompt-level guidance for API/CLI executors.** Only subscription executors get structural tool restriction.
+2. **Tool restriction:** Build executors get all 6 tools (`--allowed-tools` is omitted). This is intentional — build needs Write, Edit, and Bash.
 
 3. **Sequential TaskOutput polling:** Do NOT issue multiple TaskOutput calls in the same message.

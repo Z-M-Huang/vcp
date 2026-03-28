@@ -12,6 +12,8 @@ import {
   ANTHROPIC_TOOL_NAMES,
   OPENAI_TOOLS,
   OPENAI_MAX_ITERATIONS,
+  TOOL_REGISTRY,
+  resolveOpenAIAllowed,
   createRunner,
   executeToolCall,
   AnthropicRunner,
@@ -511,7 +513,12 @@ describe('DEFAULT_TASK_TIMEOUT_MS', () => {
 
 describe('ANTHROPIC_TOOL_NAMES', () => {
   test('contains exactly 6 PascalCase tool names', () => {
-    expect(ANTHROPIC_TOOL_NAMES).toEqual(['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash']);
+    expect(ANTHROPIC_TOOL_NAMES).toHaveLength(6);
+    expect(new Set(ANTHROPIC_TOOL_NAMES)).toEqual(new Set(['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash']));
+  });
+
+  test('is derived from TOOL_REGISTRY', () => {
+    expect(ANTHROPIC_TOOL_NAMES).toEqual(TOOL_REGISTRY.map(t => t.anthropic));
   });
 
   test('has same count as OPENAI_TOOLS', () => {
@@ -581,6 +588,112 @@ describe('OPENAI_TOOLS', () => {
 describe('OPENAI_MAX_ITERATIONS', () => {
   test('is 100', () => {
     expect(OPENAI_MAX_ITERATIONS).toBe(100);
+  });
+});
+
+// ================== TOOL_REGISTRY ==================
+
+describe('TOOL_REGISTRY', () => {
+  test('bijection: every Anthropic name maps to exactly one OpenAI name', () => {
+    const anthropicNames = TOOL_REGISTRY.map(t => t.anthropic);
+    const openaiNames = TOOL_REGISTRY.map(t => t.openai);
+    // No duplicates
+    expect(new Set(anthropicNames).size).toBe(anthropicNames.length);
+    expect(new Set(openaiNames).size).toBe(openaiNames.length);
+  });
+
+  test('OpenAI names match OPENAI_TOOLS function names', () => {
+    const registryOpenAI = new Set(TOOL_REGISTRY.map(t => t.openai));
+    const toolsOpenAI = new Set(OPENAI_TOOLS.map(t => t.function.name));
+    expect(registryOpenAI).toEqual(toolsOpenAI);
+  });
+
+  test('Anthropic names match ANTHROPIC_TOOL_NAMES', () => {
+    const registryAnthropicSet = new Set(TOOL_REGISTRY.map(t => t.anthropic));
+    const toolNamesSet = new Set(ANTHROPIC_TOOL_NAMES);
+    expect(registryAnthropicSet).toEqual(toolNamesSet);
+  });
+});
+
+// ================== resolveOpenAIAllowed ==================
+
+describe('resolveOpenAIAllowed', () => {
+  test('returns all OpenAI names when allowedTools is undefined', () => {
+    const result = resolveOpenAIAllowed(undefined);
+    expect(result.size).toBe(6);
+    expect(result).toContain('read_file');
+    expect(result).toContain('write_file');
+    expect(result).toContain('bash');
+  });
+
+  test('returns all OpenAI names when allowedTools is empty', () => {
+    const result = resolveOpenAIAllowed([]);
+    expect(result.size).toBe(6);
+  });
+
+  test('filters to Read,Glob,Grep → read_file,glob,grep', () => {
+    const result = resolveOpenAIAllowed(['Read', 'Glob', 'Grep']);
+    expect(result.size).toBe(3);
+    expect(result).toContain('read_file');
+    expect(result).toContain('glob');
+    expect(result).toContain('grep');
+    expect(result).not.toContain('write_file');
+    expect(result).not.toContain('edit_file');
+    expect(result).not.toContain('bash');
+  });
+
+  test('ignores unknown PascalCase names', () => {
+    const result = resolveOpenAIAllowed(['Read', 'UnknownTool']);
+    expect(result.size).toBe(1);
+    expect(result).toContain('read_file');
+  });
+});
+
+// ================== parseArgs --allowed-tools ==================
+
+describe('parseArgs --allowed-tools', () => {
+  const base = ['bun', 'api-task-runner.ts'];
+
+  test('parses --allowed-tools as comma-separated list', () => {
+    const result = parseArgs([
+      ...base,
+      '--preset', 'p', '--model', 'm', '--cwd', '/d', '--task', 't',
+      '--allowed-tools', 'Read,Glob,Grep',
+    ]);
+    expect(result.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+  });
+
+  test('trims whitespace from tool names', () => {
+    const result = parseArgs([
+      ...base,
+      '--preset', 'p', '--model', 'm', '--cwd', '/d', '--task', 't',
+      '--allowed-tools', 'Read, Glob, Grep',
+    ]);
+    expect(result.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+  });
+
+  test('omitting --allowed-tools leaves it undefined', () => {
+    const result = parseArgs([
+      ...base,
+      '--preset', 'p', '--model', 'm', '--cwd', '/d', '--task', 't',
+    ]);
+    expect(result.allowedTools).toBeUndefined();
+  });
+
+  test('rejects --allowed-tools without value', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--preset', 'p', '--model', 'm', '--cwd', '/d', '--task', 't',
+      '--allowed-tools',
+    ])).toThrow('--allowed-tools requires a value');
+  });
+
+  test('rejects unknown flags', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--preset', 'p', '--model', 'm', '--cwd', '/d', '--task', 't',
+      '--bogus',
+    ])).toThrow('Unknown flag: --bogus');
   });
 });
 
@@ -1379,5 +1492,132 @@ describe('AnthropicRunner', () => {
     expect(result.result).toBeNull();
     expect(result.error).toBe('SDK connection failed');
     expect(result.timedOut).toBe(false);
+  });
+
+  test('filters allowedTools when provided', async () => {
+    const { fn, getParams } = mockQueryFn([
+      { type: 'result', subtype: 'success', result: 'done' },
+    ]);
+    const runner = new AnthropicRunner(mockPreset, fn);
+    await runner.run('test task', { ...baseOptions, allowedTools: ['Read', 'Glob', 'Grep'] });
+
+    const params = getParams();
+    expect(params.options.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+  });
+
+  test('passes all tools when allowedTools is undefined', async () => {
+    const { fn, getParams } = mockQueryFn([
+      { type: 'result', subtype: 'success', result: 'done' },
+    ]);
+    const runner = new AnthropicRunner(mockPreset, fn);
+    await runner.run('test task', baseOptions);
+
+    const params = getParams();
+    expect(params.options.allowedTools).toEqual([...ANTHROPIC_TOOL_NAMES]);
+  });
+});
+
+// ================== OpenAIRunner --allowed-tools ==================
+
+describe('OpenAIRunner --allowed-tools', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const baseOptions: AgentRunOptions = {
+    model: 'gpt-4o',
+    timeoutMs: 30_000,
+    cwd: '/tmp',
+    debugEnabled: false,
+    presetName: 'test-openai',
+  };
+
+  test('sends only allowed tools in request body', async () => {
+    let capturedBody: any = null;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
+        }),
+        text: async () => '',
+      };
+    }) as typeof fetch;
+
+    const runner = new OpenAIRunner(mockOpenAIPreset);
+    await runner.run('test', { ...baseOptions, allowedTools: ['Read', 'Glob', 'Grep'] });
+
+    const toolNames = capturedBody.tools.map((t: any) => t.function.name);
+    expect(toolNames).toEqual(['read_file', 'glob', 'grep']);
+    expect(toolNames).not.toContain('write_file');
+    expect(toolNames).not.toContain('bash');
+  });
+
+  test('sends all 6 tools when allowedTools is undefined', async () => {
+    let capturedBody: any = null;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
+        }),
+        text: async () => '',
+      };
+    }) as typeof fetch;
+
+    const runner = new OpenAIRunner(mockOpenAIPreset);
+    await runner.run('test', baseOptions);
+
+    expect(capturedBody.tools).toHaveLength(6);
+  });
+
+  test('blocks disallowed tool call with error message', async () => {
+    // First response: model tries to call write_file (disallowed)
+    // Second response: model responds with text
+    let callIndex = 0;
+    let capturedMessages: any[] = [];
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      capturedMessages = body.messages;
+      callIndex++;
+      if (callIndex === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'tc-blocked',
+                  type: 'function',
+                  function: { name: 'write_file', arguments: JSON.stringify({ file_path: '/tmp/x', content: 'bad' }) },
+                }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+          }),
+          text: async () => '',
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'OK understood' }, finish_reason: 'stop' }],
+        }),
+        text: async () => '',
+      };
+    }) as typeof fetch;
+
+    const runner = new OpenAIRunner(mockOpenAIPreset);
+    const result = await runner.run('test', { ...baseOptions, allowedTools: ['Read', 'Glob', 'Grep'] });
+
+    expect(result.result).toBe('OK understood');
+    // Verify the tool error message was sent back
+    const toolMsg = capturedMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === 'tc-blocked');
+    expect(toolMsg?.content).toContain("not allowed");
   });
 });

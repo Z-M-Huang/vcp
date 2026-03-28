@@ -93,7 +93,7 @@ If Playwright tests are defined in the UAT scenarios, run them. If Playwright is
 
 ### If ALL pass
 
-- Update master plan status → `done`
+- Update plan status to `done` using Edit tool: replace `**Status:** uat` with `**Status:** done`.
 - Append UAT results to master plan:
   ```markdown
   ## UAT Results — Iteration {N}
@@ -114,6 +114,7 @@ If Playwright tests are defined in the UAT scenarios, run them. If Playwright is
 2. Identify affected units from the AC→unit mapping in master plan
 3. Append failure context to affected unit plan files using Edit tool
 4. Reset affected unit statuses to `pending` in master plan
+5. Update plan status to `build` using Edit tool: replace `**Status:** uat` with `**Status:** build`.
 
 If running under orchestrator: the orchestrator handles the loop back to build → code review → UAT.
 
@@ -127,6 +128,6 @@ Max outer iterations: `max_outer_iterations` from config. After exhaustion, repo
 
 1. **Playwright/browser tools:** UAT stages require Playwright MCP or Chrome DevTools in the user's environment. If unavailable, fall back to command-line tests and report which scenarios can't be validated.
 
-2. **Tool constraints are prompt-level guidance for API/CLI executors.** Only subscription executors get structural tool restriction.
+2. **Tool restriction:** UAT executors get all 6 tools (`--allowed-tools` is omitted). This is intentional — UAT needs Bash for running tests.
 
 3. **Sequential TaskOutput polling:** Do NOT issue multiple TaskOutput calls in the same message.

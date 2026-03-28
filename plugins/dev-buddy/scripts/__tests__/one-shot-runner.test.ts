@@ -37,6 +37,9 @@ describe('parseArgs', () => {
       task: 'do something',
       taskFromStdin: false,
       outputId: null,
+      stageType: null,
+      systemPrompt: null,
+      allowedTools: null,
     });
   });
 
@@ -111,6 +114,95 @@ describe('parseArgs', () => {
       '--task', 't',
     ]);
     expect(result.model).toBe('MiniMax-M2.5_beta');
+  });
+
+  test('parses --stage-type flag', () => {
+    const result = parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--stage-type', 'discovery',
+    ]);
+    expect(result.stageType).toBe('discovery');
+  });
+
+  test('parses --system-prompt flag', () => {
+    const result = parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--system-prompt', '/path/to/prompt.md',
+    ]);
+    expect(result.systemPrompt).toBe('/path/to/prompt.md');
+  });
+
+  test('parses --allowed-tools flag', () => {
+    const result = parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--allowed-tools', 'Read,Glob,Grep',
+    ]);
+    expect(result.allowedTools).toBe('Read,Glob,Grep');
+  });
+
+  test('defaults new flags to null', () => {
+    const result = parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+    ]);
+    expect(result.stageType).toBeNull();
+    expect(result.systemPrompt).toBeNull();
+    expect(result.allowedTools).toBeNull();
+  });
+
+  test('rejects unknown flags', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--bogus',
+    ])).toThrow('Unknown flag: --bogus');
+  });
+
+  test('rejects --stage-type without value', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--stage-type',
+    ])).toThrow('--stage-type requires a value');
+  });
+
+  test('rejects --allowed-tools without value', () => {
+    expect(() => parseArgs([
+      ...base,
+      '--type', 'api',
+      '--preset', 'p',
+      '--model', 'm',
+      '--cwd', '/d',
+      '--task', 't',
+      '--allowed-tools',
+    ])).toThrow('--allowed-tools requires a value');
   });
 });
 
@@ -290,6 +382,9 @@ const baseApiArgs = {
   task: 'do something',
   taskFromStdin: false,
   outputId: null as string | null,
+  stageType: null as string | null,
+  systemPrompt: null as string | null,
+  allowedTools: null as string | null,
 };
 
 const baseApiPreset: ApiPreset = {
@@ -324,6 +419,26 @@ describe('runApiPath', () => {
     const spawnArgs = calls.spawnCalls[0].args as typeof baseApiArgs;
     expect(spawnArgs.preset).toBe('test-preset');
     expect(spawnArgs.model).toBe('ModelA');
+  });
+
+  test('forwards --stage-type, --system-prompt, --allowed-tools to spawnTaskRunner', async () => {
+    const { deps, calls } = mockApiDeps({
+      stdout: JSON.stringify({ event: 'complete', provider: 'test-preset', model: 'ModelA', result: 'ok' }),
+    });
+
+    const argsWithFlags = {
+      ...baseApiArgs,
+      stageType: 'discovery',
+      systemPrompt: '/path/to/prompt.md',
+      allowedTools: 'Read,Glob,Grep',
+    };
+    await runApiPath(argsWithFlags, baseApiPreset, false, deps);
+
+    expect(calls.spawnCalls.length).toBe(1);
+    const spawnArgs = calls.spawnCalls[0].args as typeof argsWithFlags;
+    expect(spawnArgs.stageType).toBe('discovery');
+    expect(spawnArgs.systemPrompt).toBe('/path/to/prompt.md');
+    expect(spawnArgs.allowedTools).toBe('Read,Glob,Grep');
   });
 
   test('uses preset.timeout_ms for task timeout', async () => {

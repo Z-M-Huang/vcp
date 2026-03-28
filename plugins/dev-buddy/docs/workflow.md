@@ -63,5 +63,5 @@ Multi-executor dispatch:
 No scattered files. Uses Claude Code's native `~/.claude/plans/` infrastructure.
 
 - **Master plan:** `~/.claude/plans/ralph-{slug}.md` — status, discovery, requirements, units table, UAT results
-- **Per-unit plans:** `~/.claude/plans/ralph-{slug}-unit-{N}.md` — implementation spec, attempts, backpressure
+- **Per-unit plans:** `~/.claude/plans/ralph/{slug}/unit-{N}.md` — implementation spec, attempts, backpressure
 - **Progress tracking:** Master plan's "Units of Work" table is the status tracker

@@ -38,12 +38,12 @@ describe('loadStageDefinition', () => {
     expect(stage).toBeNull();
   });
 
-  test('discovery stage has correct tools', () => {
+  test('discovery stage has read-only tools (no Bash)', () => {
     const stage = loadStageDefinition('discovery', STAGES_DIR);
     expect(stage!.tools).toContain('Read');
     expect(stage!.tools).toContain('Glob');
     expect(stage!.tools).toContain('Grep');
-    expect(stage!.tools).toContain('Bash');
+    expect(stage!.tools).not.toContain('Bash');
   });
 
   test('ralph-build stage has all implementation tools', () => {

@@ -112,6 +112,12 @@ interface ParsedArgs {
   taskFromStdin: boolean;
   /** When set, write result JSON to {tmpdir}/.vcp/oneshot/{outputId}.json instead of stdout. */
   outputId: string | null;
+  /** Stage type for auto-resolving stage definition (forwarded to api-task-runner). */
+  stageType: string | null;
+  /** Path to system prompt file (forwarded to api-task-runner). */
+  systemPrompt: string | null;
+  /** Comma-separated PascalCase tool names to restrict available tools (forwarded to api-task-runner). */
+  allowedTools: string | null;
 }
 
 /** Module-level output ID — set from parsed args, read by emitAndExit. */
@@ -169,6 +175,24 @@ function parseArgs(argv: string[]): ParsedArgs {
         outputId = next;
         i++;
         break;
+      case '--stage-type':
+        if (!next) throw new Error('--stage-type requires a value');
+        result.stageType = next;
+        i++;
+        break;
+      case '--system-prompt':
+        if (!next) throw new Error('--system-prompt requires a value');
+        result.systemPrompt = next;
+        i++;
+        break;
+      case '--allowed-tools':
+        if (!next) throw new Error('--allowed-tools requires a value');
+        result.allowedTools = next;
+        i++;
+        break;
+      default:
+        if (arg.startsWith('--')) throw new Error(`Unknown flag: ${arg}`);
+        break;
     }
   }
 
@@ -194,6 +218,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     result.taskFromStdin = false;
   }
   result.outputId = result.outputId ?? null;
+  result.stageType = result.stageType ?? null;
+  result.systemPrompt = result.systemPrompt ?? null;
+  result.allowedTools = result.allowedTools ?? null;
 
   return result as ParsedArgs;
 }
@@ -295,6 +322,9 @@ const defaultApiDeps: ApiPathDeps = {
       '--cwd', args.cwd,
       '--task-timeout', String(taskTimeoutMs),
       ...(useStream ? ['--stream'] : []),
+      ...(args.stageType ? ['--stage-type', args.stageType] : []),
+      ...(args.systemPrompt ? ['--system-prompt', args.systemPrompt] : []),
+      ...(args.allowedTools ? ['--allowed-tools', args.allowedTools] : []),
     ];
     const proc = Bun.spawn(spawnArgs, {
       stdin: 'pipe',
@@ -437,10 +467,17 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
     return makeError('validation', `CLI preset '${args.preset}' has invalid one_shot_args_template: ${templateErr}`, 1);
   }
 
+  // For CLI executors, --allowed-tools is not structurally enforceable.
+  // Append a prompt-level instruction to the task text.
+  let effectiveTask = args.task;
+  if (args.allowedTools) {
+    effectiveTask += `\n\nIMPORTANT: You may ONLY use these tools: ${args.allowedTools}.`;
+  }
+
   // Build placeholders (one-shot only: model, prompt, reasoning_effort)
   const placeholders: Record<string, string> = {
     model: args.model,
-    prompt: args.task,
+    prompt: effectiveTask,
     reasoning_effort: preset.reasoning_effort || 'medium',
   };
 

@@ -72,7 +72,11 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
   --type {api|cli} --output-id ralph-discover-p{i} \
   --preset "{PRESET}" --model "{MODEL}" \
   --stage-type discovery --system-prompt {SYSTEM_PROMPT} \
+  --allowed-tools Read,Glob,Grep \
   --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin <<'{DELIM}'
+IMPORTANT: You are a PARALLEL executor. Return your analysis as text output ONLY.
+Do NOT create, modify, or delete any files. The orchestrator will write the final output.
+
 {feature_description}
 
 Explore the codebase and running app. Report your findings with file:line references.
@@ -107,6 +111,6 @@ If running under the orchestrator, update tasks:
 
 1. **Playwright/browser tools:** If the user's environment has Playwright MCP or Chrome DevTools, use them to explore the running app (screenshots, UI interactions). If unavailable, fall back to code-only analysis and ask the user for screenshots.
 
-2. **Tool constraints are prompt-level guidance for API/CLI executors.** Only subscription executors get structural tool restriction via `allowed-tools`. API executors always get their fixed 6 tools.
+2. **Tool restriction:** API executors are structurally restricted to `Read,Glob,Grep` via `--allowed-tools`. CLI executors receive a prompt-level instruction. Subscription executors get prompt-level guidance only.
 
 3. **Sequential TaskOutput polling:** Do NOT issue multiple TaskOutput calls in the same message — this causes cascade failures. Poll one at a time.

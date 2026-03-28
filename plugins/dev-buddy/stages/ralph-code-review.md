@@ -1,7 +1,7 @@
 ---
 stage: ralph-code-review
 description: Review all implemented units for semantic drift, integration gaps, and missed intent
-tools: Read, Glob, Grep, Bash
+tools: Read, Glob, Grep
 disallowedTools: Edit
 ---
 

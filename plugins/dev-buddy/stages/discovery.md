@@ -1,7 +1,7 @@
 ---
 stage: discovery
 description: Explore the codebase and running application to build deep understanding before any changes
-tools: Read, Glob, Grep, Bash
+tools: Read, Glob, Grep
 ---
 
 # Discovery Stage
