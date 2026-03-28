@@ -127,24 +127,10 @@ function v3Mixin() {
         animation: 150,
         handle: '.drag-handle',
         ghostClass: 'sortable-ghost',
-        filter: '.is-synthesizer',
-        onMove: (evt) => {
-          const execs = this.v3Stages[stageType].executors;
-          if (execs.length <= 1) return true;
-          // Block drops AFTER the last row (synthesizer)
-          const children = [...evt.to.children].filter(c => c.classList.contains('executor-row'));
-          const relatedIdx = children.indexOf(evt.related);
-          if (relatedIdx === children.length - 1 && evt.willInsertAfter) return false;
-          return true;
-        },
         onEnd: (evt) => {
           const execs = [...this.v3Stages[stageType].executors];
           const moved = execs.splice(evt.oldIndex, 1)[0];
           execs.splice(evt.newIndex, 0, moved);
-          // Safety: ensure last executor is non-parallel when multi-executor
-          if (execs.length > 1 && execs[execs.length - 1].parallel === true) {
-            execs[execs.length - 1].parallel = false;
-          }
           this.v3Stages[stageType] = { ...this.v3Stages[stageType], executors: execs };
         },
       });
@@ -178,7 +164,7 @@ function v3Mixin() {
       } catch (e) { this.showError('Network error'); }
     },
 
-    addStageToPipeline(pipelineKey) { this.v3Pipelines[pipelineKey].push('plan-review'); },
+    addStageToPipeline(pipelineKey) { this.v3Pipelines[pipelineKey].push('discovery'); },
     removeStageFromPipeline(pipelineKey, index) { this.v3Pipelines[pipelineKey].splice(index, 1); },
 
     moveStageInPipeline(pipelineKey, index, direction) {
@@ -246,7 +232,7 @@ function v3Mixin() {
     // Settings
     // ============================================================
 
-    v3Settings: { max_iterations: 10, max_tdd_iterations: 5 },
+    v3Settings: { max_iterations: 10, max_build_attempts: 3, max_outer_iterations: 3 },
     loadingSettings: false,
 
     async loadSettings() {

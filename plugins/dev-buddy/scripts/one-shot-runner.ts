@@ -421,7 +421,7 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
       'validation',
       `CLI preset '${args.preset}' does not have a 'one_shot_args_template' configured. ` +
       'This template is required for /dev-buddy-once. ' +
-      'Add it via /dev-buddy-config or /dev-buddy-manage-presets. ' +
+      'Add it via /dev-buddy-config. ' +
       'Example: "exec --full-auto -m {model} \\"{prompt}\\""',
       1,
     );

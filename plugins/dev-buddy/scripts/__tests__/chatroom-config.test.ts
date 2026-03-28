@@ -201,7 +201,7 @@ describe('validateChatroomConfig', () => {
 
   test('accepts participant with valid system_prompt', () => {
     const config = {
-      participants: [{ system_prompt: 'planner', preset: 'anthropic-subscription', model: 'sonnet' }],
+      participants: [{ system_prompt: 'discoverer', preset: 'anthropic-subscription', model: 'sonnet' }],
       max_rounds: 3,
     };
     const err = validateChatroomConfig(config, presets);

@@ -1,28 +1,26 @@
 import { describe, test, expect } from 'bun:test';
 import {
   DEFAULT_CONFIG,
-  DEFAULT_V3_CONFIG,
   validateDevBuddyConfig,
-  migrateV2ToV3,
   validatePipelineName,
 } from '../pipeline-config.ts';
-import type { PipelineConfig, DevBuddyConfig } from '../../types/pipeline.ts';
+import type { DevBuddyConfig } from '../../types/pipeline.ts';
 
-// ─── DEFAULT_CONFIG (v4) ────────────────────────────────────────────────────
+// ─── DEFAULT_CONFIG (v5 Ralph) ──────────────────────────────────────────────
 
 describe('DEFAULT_CONFIG', () => {
-  test('has version 4.0', () => {
-    expect(DEFAULT_CONFIG.version).toBe('4.0');
+  test('has version 5.0', () => {
+    expect(DEFAULT_CONFIG.version).toBe('5.0');
   });
 
-  test('has all 6 stage types', () => {
+  test('has all 6 Ralph stage types', () => {
     const stages = Object.keys(DEFAULT_CONFIG.stages);
-    expect(stages).toContain('requirements');
-    expect(stages).toContain('planning');
-    expect(stages).toContain('plan-review');
-    expect(stages).toContain('implementation');
-    expect(stages).toContain('code-review');
-    expect(stages).toContain('rca');
+    expect(stages).toContain('discovery');
+    expect(stages).toContain('ralph-requirements');
+    expect(stages).toContain('decomposition');
+    expect(stages).toContain('ralph-build');
+    expect(stages).toContain('ralph-code-review');
+    expect(stages).toContain('ralph-uat');
   });
 
   test('each stage has inline executors with system_prompt, preset, model', () => {
@@ -40,26 +38,26 @@ describe('DEFAULT_CONFIG', () => {
     expect((DEFAULT_CONFIG as Record<string, unknown>).executors).toBeUndefined();
   });
 
-  test('has max_tdd_iterations', () => {
-    expect(DEFAULT_CONFIG.max_tdd_iterations).toBe(5);
+  test('has max_build_attempts', () => {
+    expect(DEFAULT_CONFIG.max_build_attempts).toBe(3);
   });
 
-  test('rca last executor is non-parallel (synthesizer)', () => {
-    const rcaExecutors = DEFAULT_CONFIG.stages.rca.executors;
-    expect(rcaExecutors.length).toBeGreaterThan(1);
-    const last = rcaExecutors[rcaExecutors.length - 1];
-    expect(last.parallel).not.toBe(true);
+  test('has max_outer_iterations', () => {
+    expect(DEFAULT_CONFIG.max_outer_iterations).toBe(3);
   });
 
-  test('has default pipelines: feature and bug-fix', () => {
-    expect(DEFAULT_CONFIG.pipelines).toHaveProperty('feature');
-    expect(DEFAULT_CONFIG.pipelines).toHaveProperty('bug-fix');
-    expect(DEFAULT_CONFIG.pipelines['feature']).toContain('requirements');
-    expect(DEFAULT_CONFIG.pipelines['bug-fix']).toContain('rca');
+  test('has ralph pipeline', () => {
+    expect(DEFAULT_CONFIG.pipelines).toHaveProperty('ralph');
+    expect(DEFAULT_CONFIG.pipelines['ralph']).toContain('discovery');
+    expect(DEFAULT_CONFIG.pipelines['ralph']).toContain('ralph-uat');
   });
 
-  test('DEFAULT_V3_CONFIG alias points to same object', () => {
-    expect(DEFAULT_V3_CONFIG).toBe(DEFAULT_CONFIG);
+  test('ralph pipeline has correct order', () => {
+    const pipeline = DEFAULT_CONFIG.pipelines['ralph'];
+    expect(pipeline).toEqual([
+      'discovery', 'ralph-requirements', 'decomposition',
+      'ralph-build', 'ralph-code-review', 'ralph-uat',
+    ]);
   });
 });
 
@@ -67,6 +65,7 @@ describe('DEFAULT_CONFIG', () => {
 
 describe('validatePipelineName', () => {
   test('accepts valid names', () => {
+    expect(() => validatePipelineName('ralph')).not.toThrow();
     expect(() => validatePipelineName('feature')).not.toThrow();
     expect(() => validatePipelineName('bug-fix')).not.toThrow();
     expect(() => validatePipelineName('hotfix-2')).not.toThrow();
@@ -104,20 +103,20 @@ describe('validateDevBuddyConfig', () => {
   });
 
   test('rejects wrong version', () => {
-    const config = { ...DEFAULT_CONFIG, version: '3.0' as '4.0' };
+    const config = { ...DEFAULT_CONFIG, version: '4.0' as '5.0' };
     expect(() => validateDevBuddyConfig(config)).toThrow(/version/);
   });
 
   test('rejects missing stage', () => {
     const stages = { ...DEFAULT_CONFIG.stages };
-    delete (stages as Record<string, unknown>)['requirements'];
+    delete (stages as Record<string, unknown>)['discovery'];
     const config = { ...DEFAULT_CONFIG, stages };
     expect(() => validateDevBuddyConfig(config)).toThrow(/Missing stage/);
   });
 
   test('rejects executor without system_prompt', () => {
     const config = structuredClone(DEFAULT_CONFIG);
-    config.stages.planning.executors = [{ system_prompt: '', preset: 'x', model: 'y' }];
+    config.stages.decomposition.executors = [{ system_prompt: '', preset: 'x', model: 'y' }];
     expect(() => validateDevBuddyConfig(config)).toThrow(/system_prompt/);
   });
 
@@ -127,7 +126,7 @@ describe('validateDevBuddyConfig', () => {
   });
 
   test('rejects invalid pipeline name', () => {
-    const config = { ...DEFAULT_CONFIG, pipelines: { 'Bad Name': ['requirements'] as any } };
+    const config = { ...DEFAULT_CONFIG, pipelines: { 'Bad Name': ['discovery'] as any } };
     expect(() => validateDevBuddyConfig(config)).toThrow(/invalid/);
   });
 
@@ -137,83 +136,47 @@ describe('validateDevBuddyConfig', () => {
     expect(() => validateDevBuddyConfig(config)).toThrow(/invalid stage type/);
   });
 
-  test('rejects implementation stage with more than 1 executor', () => {
+  test('rejects ralph-build with more than 1 executor', () => {
     const config = structuredClone(DEFAULT_CONFIG);
-    config.stages.implementation.executors = [
-      { system_prompt: 'implementer', preset: 'anthropic-subscription', model: 'sonnet' },
-      { system_prompt: 'implementer', preset: 'anthropic-subscription', model: 'opus' },
+    config.stages['ralph-build'].executors = [
+      { system_prompt: 'unit-builder', preset: 'anthropic-subscription', model: 'sonnet' },
+      { system_prompt: 'unit-builder', preset: 'anthropic-subscription', model: 'opus' },
     ];
-    expect(() => validateDevBuddyConfig(config)).toThrow(/implementation.*maximum 1/);
+    expect(() => validateDevBuddyConfig(config)).toThrow(/ralph-build.*maximum 1/);
   });
 
-  test('rejects last executor as parallel when multiple executors (synthesizer rule)', () => {
+  test('rejects ralph-uat with more than 1 executor', () => {
     const config = structuredClone(DEFAULT_CONFIG);
-    config.stages.planning.executors = [
-      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'sonnet', parallel: true },
-      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'opus', parallel: true },
+    config.stages['ralph-uat'].executors = [
+      { system_prompt: 'uat-evaluator', preset: 'anthropic-subscription', model: 'sonnet' },
+      { system_prompt: 'uat-evaluator', preset: 'anthropic-subscription', model: 'opus' },
     ];
-    expect(() => validateDevBuddyConfig(config)).toThrow(/last executor must be non-parallel/);
-  });
-
-  test('accepts multiple executors when last is non-parallel', () => {
-    const config = structuredClone(DEFAULT_CONFIG);
-    config.stages.planning.executors = [
-      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'sonnet', parallel: true },
-      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'opus' },
-    ];
-    expect(() => validateDevBuddyConfig(config)).not.toThrow();
+    expect(() => validateDevBuddyConfig(config)).toThrow(/ralph-uat.*maximum 1/);
   });
 
   test('rejects non-boolean parallel value', () => {
     const config = structuredClone(DEFAULT_CONFIG);
-    config.stages.planning.executors = [
-      { system_prompt: 'planner', preset: 'anthropic-subscription', model: 'opus', parallel: 'yes' as unknown as boolean },
+    config.stages.decomposition.executors = [
+      { system_prompt: 'decomposer', preset: 'anthropic-subscription', model: 'opus', parallel: 'yes' as unknown as boolean },
     ];
     expect(() => validateDevBuddyConfig(config)).toThrow(/parallel must be a boolean/);
   });
 
   test('rejects zero executors in active pipeline stage', () => {
     const config = structuredClone(DEFAULT_CONFIG);
-    config.stages.planning.executors = [];
+    config.stages.decomposition.executors = [];
     expect(() => validateDevBuddyConfig(config)).toThrow(/must have at least 1 executor/);
   });
 
-  test('accepts any stage in any pipeline (no allowed_pipelines constraint)', () => {
+  test('rejects negative max_build_attempts', () => {
     const config = structuredClone(DEFAULT_CONFIG);
-    config.pipelines['test'] = ['rca', 'requirements', 'planning'];
-    expect(() => validateDevBuddyConfig(config)).not.toThrow();
+    config.max_build_attempts = -1;
+    expect(() => validateDevBuddyConfig(config)).toThrow(/max_build_attempts/);
   });
-});
 
-// ─── migrateV2ToV3 ──────────────────────────────────────────────────────────
-
-describe('migrateV2ToV3', () => {
-  test('converts v2 StageEntry arrays to inline executors', () => {
-    const v2: PipelineConfig = {
-      feature_pipeline: [
-        { type: 'requirements', provider: 'anthropic-subscription', model: 'opus' },
-        { type: 'planning', provider: 'anthropic-subscription', model: 'opus' },
-        { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
-      ],
-      bugfix_pipeline: [
-        { type: 'rca', provider: 'anthropic-subscription', model: 'sonnet' },
-        { type: 'implementation', provider: 'anthropic-subscription', model: 'sonnet' },
-      ],
-      max_iterations: 10,
-      team_name_pattern: 'test-{BASENAME}-{HASH}',
-    };
-
-    const v3 = migrateV2ToV3(v2);
-    expect(v3.version).toBe('3.0');
-    expect((v3 as Record<string, unknown>).executors).toBeUndefined();
-
-    // Check inline executors
-    expect(v3.stages.planning.executors[0].system_prompt).toBe('planner');
-    expect(v3.stages.planning.executors[0].preset).toBe('anthropic-subscription');
-    expect(v3.stages.planning.executors[0].model).toBe('opus');
-
-    // Check v3 format has feature_pipeline/bugfix_pipeline
-    expect(v3.feature_pipeline).toContain('requirements');
-    expect(v3.bugfix_pipeline).toContain('rca');
+  test('rejects negative max_outer_iterations', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.max_outer_iterations = 0;
+    expect(() => validateDevBuddyConfig(config)).toThrow(/max_outer_iterations/);
   });
 });
