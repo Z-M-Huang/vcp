@@ -147,12 +147,23 @@ When a single AI family writes and reviews code, it shares the same training bia
 
 One AI writing and reviewing its own code is like grading your own homework. Dev Buddy orchestrates **multiple AI models** through structured development pipelines — with task-based dependencies that literally prevent skipping stages.
 
-### Two Pipelines
+### User-Defined Pipelines
 
-| Pipeline | Command | Phases |
-|----------|---------|--------|
-| **Feature Development** | `/dev-buddy-feature-implement` | Requirements → Planning → Plan Review → Implementation → Code Review |
-| **Bug Fix** | `/dev-buddy-bug-fix` | Root Cause Analysis → Requirements → Planning → Plan Review → Implementation → Code Review |
+Define any number of pipelines in `~/.vcp/dev-buddy.json` under `pipelines`:
+
+```json
+{
+  "pipelines": {
+    "feature": ["requirements", "planning", "plan-review", "implementation", "code-review"],
+    "bug-fix": ["rca", "requirements", "planning", "plan-review", "implementation", "code-review"],
+    "quick-fix": ["planning", "implementation", "code-review"]
+  }
+}
+```
+
+Run any pipeline with `/dev-buddy-run <pipeline-name>`.
+
+> **Deprecated:** `/dev-buddy-feature-implement` and `/dev-buddy-bug-fix` will be removed in a future release. Use `/dev-buddy-run feature` and `/dev-buddy-run bug-fix` instead.
 
 ### Cross-AI Review Gates
 
@@ -204,7 +215,11 @@ Each executor combines a **stage definition** (output format, process rules — 
 
 ```json
 {
-  "feature_pipeline": [
+  "pipelines": {
+    "feature": ["requirements", "planning", "plan-review", "implementation", "code-review"],
+    "bug-fix": ["rca", "requirements", "planning", "plan-review", "implementation", "code-review"]
+  },
+  "stages": [
     { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
     { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
     { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
@@ -220,17 +235,19 @@ Each executor combines a **stage definition** (output format, process rules — 
 
 </details>
 
+### Review Harness
+
+Review stages include a **false-positive analysis** step: each finding is evaluated for potential misinterpretation before being surfaced. Reviewers populate a `misinterpretation` field explaining why a finding might be wrong. User confirmation checkpoints pause the pipeline at review boundaries so you can accept, reject, or refine findings before proceeding.
+
 ### Quick Start
 
 ```bash
 # Install dev-buddy alongside VCP
 /plugin install vcp@dev-buddy
 
-# Feature development pipeline
-/dev-buddy-feature-implement Add user authentication with JWT
-
-# Bug fix pipeline
-/dev-buddy-bug-fix Login fails when email contains a plus sign
+# Run any pipeline by name
+/dev-buddy-run feature Add user authentication with JWT
+/dev-buddy-run bug-fix Login fails when email contains a plus sign
 
 # Configure pipeline stages and providers via web portal
 /dev-buddy-config

@@ -161,12 +161,15 @@ Parse each reviewer's JSON output. Extract:
 - `status` (approved/needs_changes/needs_clarification/rejected)
 - `findings[]` with `fix_type` (must_fix/advisory)
 - `requirements_coverage` (plan review) or `acceptance_criteria_verification` (code review)
+- `false_positive_analysis[]` with `id`, `ac_id`, `scenario`, `verdict`
 - `revision_number`
 
 **Aggregation rules:**
 - If ANY reviewer has `must_fix` findings → aggregate status = `needs_changes`
-- If ALL reviewers approved → aggregate status = `approved`
+- If ANY reviewer has `risk_confirmed` FP verdict → aggregate status = `needs_changes`
+- If ALL reviewers approved AND no `risk_confirmed` FP verdicts → aggregate status = `approved`
 - Compile ALL findings from all reviewers (deduplicate by contract_reference)
+- Compile ALL FP scenarios from all reviewers (deduplicate by `ac_id`; if same AC has conflicting verdicts, keep the most severe: `risk_confirmed` > `unverifiable` > `mitigated` > `not_applicable`)
 
 ---
 
@@ -215,6 +218,13 @@ Write the review record as **markdown** — no JSON blocks. Use the Edit tool to
 
 ### Advisory Findings
 1. **[{severity}] {contract_reference}:** {message}. Evidence: `{evidence}`. Suggestion: {suggestion}.
+
+### False-Positive Analysis
+| ID | AC | Scenario | Verdict |
+|----|-----|----------|---------|
+| FP-1 | AC-1 | {scenario} | mitigated |
+
+**User checkpoint:** {approved / guard added / rejected}
 ```
 
 **For code review, append `## Code Review Record`:**
@@ -250,9 +260,57 @@ Write the review record as **markdown** — no JSON blocks. Use the Edit tool to
 
 ### Advisory Findings
 1. ...
+
+### False-Positive Analysis
+| ID | AC | Scenario | Verdict |
+|----|-----|----------|---------|
+| FP-1 | AC-1 | {scenario} | mitigated |
+
+**User checkpoint:** {approved / guard added / rejected}
 ```
 
 **If this is a re-review (revision > 1):** Replace the existing review record section instead of appending a second one.
+
+---
+
+## Step 10.5: User Confirmation Checkpoint (MANDATORY)
+
+**This checkpoint fires for BOTH plan review and code review. No auto-approve.**
+
+After appending the review record (Step 10), present the review summary and false-positive analysis to the user via AskUserQuestion.
+
+**Present to user:**
+```
+{Plan|Code} review complete. Status: {status}
+
+{For plan review:}
+False-positive scenarios checked ({total}):
+  {count} mitigated/not applicable
+  {count} unverifiable (need your judgment)
+  {count} confirmed risks (blocked)
+
+{If unverifiable > 0:}
+Scenarios I could not fully verify:
+- FP-{N} (AC-{M}): {scenario}
+
+{For code review:}
+AC Verification: {verified}/{total} verified
+Must-Fix Findings: {count}
+Advisory Findings: {count}
+
+Options:
+1. Approve — proceed as-is
+2. Add guard — tighten an AC or add a test
+3. Reject — send back for re-{planning|implementation}
+```
+
+**Branching logic for user response:**
+
+1. **Approve** → Continue to Step 11 (if `needs_changes`) or Step 12 (if `approved`). User confirmation does NOT override the review status — if status is `needs_changes`, the repair loop still runs.
+
+2. **Add guard** → Edit the plan file to tighten the specified AC or add a test. Do NOT count this as a repair iteration. Re-dispatch ALL reviewers with the same `revision_number` (return to Step 6). This is a tighter-criteria re-review, not a repair.
+
+3. **Reject** → Update status to `rejected` in the review record. Update the **User checkpoint** line to `rejected`. **Halt the pipeline** — do NOT enter the repair loop. Report to user that the pipeline is stopped.
 
 ---
 

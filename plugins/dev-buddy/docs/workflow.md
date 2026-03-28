@@ -52,19 +52,21 @@ Each stage reads input artifacts from `.vcp/task/` and writes output artifacts. 
 4. **Evidence-bound reviews** — blocking findings require `contract_reference` + `evidence`
 5. **Requirements provenance** — ACs track their source (original_request, user_answer, specialist_suggestion)
 
-### Config Format (v3)
+### Config Format (v4)
 
-File: `~/.vcp/dev-buddy.json` with `"version": "3.0"`
+File: `~/.vcp/dev-buddy.json` with `"version": "4.0"`
 
 ```json
 {
-  "version": "3.0",
+  "version": "4.0",
   "stages": {
     "planning": { "executors": [{ "system_prompt": "planner", "preset": "anthropic-subscription", "model": "opus" }] },
     "plan-review": { "executors": [{ "system_prompt": "plan-reviewer", "preset": "anthropic-subscription", "model": "sonnet" }] }
   },
-  "feature_pipeline": ["requirements", "planning", "plan-review", "implementation", "code-review"],
-  "bugfix_pipeline": ["rca", "requirements", "planning", "plan-review", "implementation", "code-review"],
+  "pipelines": {
+    "feature": ["requirements", "planning", "plan-review", "implementation", "code-review"],
+    "bug-fix": ["rca", "requirements", "planning", "plan-review", "implementation", "code-review"]
+  },
   "max_iterations": 10,
   "max_tdd_iterations": 5
 }

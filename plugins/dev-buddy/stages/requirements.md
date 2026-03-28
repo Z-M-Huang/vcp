@@ -101,7 +101,8 @@ Each test must reference the AC(s) it validates.
       "given": "Initial context",
       "when": "Action taken",
       "then": "Expected outcome",
-      "source": "original_request|user_answer|specialist_suggestion"
+      "source": "original_request|user_answer|specialist_suggestion",
+      "misinterpretation": "A concrete wrong implementation that technically satisfies the Given/When/Then but misses the user's intent. E.g., 'Logging the token instead of validating it would satisfy Then: token is processed but miss the security intent.'"
     }
   ],
   "scope": {
@@ -186,6 +187,7 @@ Before completing, verify:
 - [ ] Scope is clearly bounded (in/out documented)
 - [ ] Acceptance criteria are measurable and testable (Given/When/Then)
 - [ ] Every AC has a `source` field (provenance tracking)
+- [ ] Every AC has a `misinterpretation` field describing a wrong-but-technically-passing implementation
 - [ ] TDD test plan covers ALL acceptance criteria
 - [ ] Every test maps to at least one AC
 - [ ] Risk registry includes severity and affected files

@@ -4,7 +4,7 @@
 
 **打破 AI 回音壁。交付安全代码。**
 
-![Skills-6](https://img.shields.io/badge/Skills-6-blue?style=flat-square)
+![Skills-12](https://img.shields.io/badge/Skills-12-blue?style=flat-square)
 ![Agents-8](https://img.shields.io/badge/Agents-8-green?style=flat-square)
 ![Hooks-2](https://img.shields.io/badge/Hooks-2-orange?style=flat-square)
 
@@ -44,35 +44,40 @@ Dev Buddy 将代码路由到来自不同 provider 的**独立 AI 评审者**—�
 
 ---
 
-## 两种 Pipeline
+## Pipeline
 
-### 功能开发
+Pipeline 是用户自定义的阶段序列。可根据需要创建任意 pipeline —— 两个默认 pipeline 开箱即用，也可通过 Web 门户（`/dev-buddy-config`）或 JSON 配置自定义。
+
+### 默认 Pipeline
+
+**`feature`** —— 功能开发
 
 ```
 需求 + TDD → 规划 → 计划评审 → 实现 → 代码评审
 ```
 
-所有阶段写入**单一计划文件** —— 无散落的产物文件。
-
-| 阶段 | 执行内容 |
-|------|----------|
-| **需求 + TDD** | 收集需求，悲观优先影响分析。在规划前生成 TDD 测试计划（单元测试、端到端测试、技能测试）。构建用户确认的风险注册表。 |
-| **规划** | 创建粒度化实现步骤，每步映射 AC 和测试 ID。每步是一个架构单元，带回滚方案。复用现有代码 —— KISS 架构。 |
-| **计划评审** | 假设一切都不能工作。验证每个 AC 有步骤和测试。标记覆盖空白、缺失回滚、不必要的新代码。 |
-| **实现** | 每步 TDD 循环，TaskManagement 进度跟踪。运行映射测试。完全自动化 —— 无用户提示。 |
-| **代码评审** | 假设每个变更都有 bug。用 file:line 证据验证每个 AC。追踪输入 → 处理 → 输出。 |
-
-### Bug 修复
+**`bug-fix`** —— Bug 修复
 
 ```
 根因分析 → 需求 + TDD → 规划 → 计划评审 → 实现 → 代码评审
 ```
 
+所有阶段写入**单一计划文件** —— 无散落的产物文件。
+
+### 阶段类型
+
 | 阶段 | 执行内容 |
 |------|----------|
+| **需求 + TDD** | 收集需求，悲观优先影响分析。在规划前生成 TDD 测试计划（单元测试、端到端测试、技能测试）。构建用户确认的风险注册表。 |
+| **规划** | 创建粒度化实现步骤，每步映射 AC 和测试 ID。每步是一个架构单元，带回滚方案。复用现有代码 —— KISS 架构。 |
+| **计划评审** | 假设一切都不能工作。验证每个 AC 有步骤和测试。标记覆盖空白、缺失回滚、不必要的新代码。包含误报分析和用户确认检查点。 |
+| **实现** | 每步 TDD 循环，TaskManagement 进度跟踪。运行映射测试。完全自动化 —— 无用户提示。 |
+| **代码评审** | 假设每个变更都有 bug。用 file:line 证据验证每个 AC。追踪输入 → 处理 → 输出。包含误报分析和用户确认检查点。 |
 | **根因分析** | 多个独立分析者悲观追踪调查 bug（追问五次"为什么"，引用 file:line 证据） |
-| **需求 + TDD** | 从 RCA 诊断定义修复需求，创建 TDD 测试计划，识别修复风险 |
-| **规划 → 代码评审** | 与功能开发 Pipeline 相同 |
+
+### 自定义 Pipeline
+
+将任意 pipeline 定义为阶段类型的有序数组。Pipeline 名称必须匹配 `/^[a-z0-9][a-z0-9-]*$/`（最长 50 个字符）。通过 Web 门户管理 pipeline —— 支持创建、重命名和删除的完整 CRUD 操作。
 
 ---
 
@@ -123,26 +128,37 @@ Claude Opus 规划 ──→ Claude Sonnet 评审 ──→ Claude Opus 评审 �
 <img src="../../assets/dev-buddy-pipeline.png" alt="可配置 Pipeline" width="800">
 </div>
 
-Pipeline 在 `~/.vcp/dev-buddy.json` 中定义为有序的阶段数组。每个阶段指定类型、provider 和模型。添加、删除或重新排序阶段。按阶段切换 AI provider —— API preset 通过 `protocol` 字段支持 **Anthropic 兼容**和 **OpenAI 兼容**端点。
+配置文件（`~/.vcp/dev-buddy.json`，版本 `4.0`）将 pipeline 存储在 `pipelines` 映射下 —— 每个键是 pipeline 名称，每个值是有序的阶段数组。每个阶段指定类型、provider 和模型。添加、删除或重新排序阶段。按阶段切换 AI provider —— API preset 通过 `protocol` 字段支持 **Anthropic 兼容**和 **OpenAI 兼容**端点。
 
-使用 Web 门户（`/dev-buddy-config`）或直接编辑 JSON。
+使用 Web 门户（`/dev-buddy-config`）或直接编辑 JSON。门户支持 pipeline 的完整 CRUD 操作 —— 创建、重命名和删除。
 
 <details>
-<summary><strong>示例：带有 Codex 终审门控的功能 pipeline</strong></summary>
+<summary><strong>示例：v4.0 配置，包含自定义 pipeline</strong></summary>
 
 ```json
 {
-  "feature_pipeline": [
-    { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "plan-review", "provider": "my-codex-preset", "model": "o3" },
-    { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "code-review", "provider": "my-codex-preset", "model": "o3" }
-  ]
+  "version": "4.0",
+  "pipelines": {
+    "feature": [
+      { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
+      { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
+      { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
+      { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus" },
+      { "type": "plan-review", "provider": "my-codex-preset", "model": "o3" },
+      { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
+      { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" },
+      { "type": "code-review", "provider": "anthropic-subscription", "model": "opus" },
+      { "type": "code-review", "provider": "my-codex-preset", "model": "o3" }
+    ],
+    "bug-fix": [
+      { "type": "rca", "provider": "anthropic-subscription", "model": "opus" },
+      { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
+      { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
+      { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
+      { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
+      { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" }
+    ]
+  }
 }
 ```
 
@@ -156,11 +172,12 @@ Pipeline 在 `~/.vcp/dev-buddy.json` 中定义为有序的阶段数组。每个�
 # 安装 Dev Buddy
 /plugin install vcp@dev-buddy
 
-# 功能开发 pipeline
-/dev-buddy-feature-implement 添加基于 JWT 的用户认证
+# 运行任意 pipeline
+/dev-buddy-run feature 添加基于 JWT 的用户认证
 
-# Bug 修复 pipeline
-/dev-buddy-bug-fix 邮箱包含加号时登录失败
+# 已弃用的别名（将在未来版本中移除）：
+# /dev-buddy-feature-implement → 请使用 /dev-buddy-run feature
+# /dev-buddy-bug-fix → 请使用 /dev-buddy-run bug-fix
 
 # 通过 Web 门户配置 pipeline 阶段和 provider
 /dev-buddy-config
@@ -172,10 +189,11 @@ Pipeline 在 `~/.vcp/dev-buddy.json` 中定义为有序的阶段数组。每个�
 
 | Skill | 命令 | 描述 |
 |-------|------|------|
-| 功能实现 | `/dev-buddy-feature-implement` | 完整功能 pipeline —— 按 `feature_pipeline` 配置链接各阶段 skill |
-| Bug 修复 | `/dev-buddy-bug-fix` | Bug 修复 pipeline —— 按 `bugfix_pipeline` 配置链接各阶段 skill |
+| 运行 Pipeline | `/dev-buddy-run <pipeline-name>` | 运行任意用户定义的 pipeline |
+| 功能实现 | `/dev-buddy-feature-implement` | **已弃用** — 请使用 `/dev-buddy-run feature` |
+| Bug 修复 | `/dev-buddy-bug-fix` | **已弃用** — 请使用 `/dev-buddy-run bug-fix` |
 | 规划 | `/dev-buddy-plan` | 从用户故事创建实现计划，TDD 测试生成 + 步骤到 AC 映射 |
-| 评审 | `/dev-buddy-review` | 评审计划（`--plan`）或代码（`--code`），包含评审→修复→重新评审循环 |
+| 评审 | `/dev-buddy-review` | 评审计划（`--plan`）或代码（`--code`），包含误报分析和用户确认检查点 |
 | 实现 | `/dev-buddy-implement` | 使用 TDD 循环实现计划，每步后运行测试 |
 | 需求 | `/dev-buddy-requirements` | 收集需求，带来源追踪 |
 | 根因分析 | `/dev-buddy-rca` | 根因分析，仅输出诊断结果 |

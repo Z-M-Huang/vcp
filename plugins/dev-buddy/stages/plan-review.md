@@ -22,6 +22,7 @@ Your output MUST be a single JSON object with ALL of these fields. No exceptions
 - `clarification_questions` — array of strings (empty if not clarifying)
 - `requirements_coverage` — object (see below)
 - `findings` — array of finding objects (see below)
+- `false_positive_analysis` — array of FP scenario objects (see below)
 - `reviewed_at` — ISO8601 timestamp string
 
 **`requirements_coverage` object:**
@@ -48,9 +49,21 @@ Your output MUST be a single JSON object with ALL of these fields. No exceptions
 - `evidence` — string, e.g. `"file:line"` or specific reference
 - `fix_type` — EXACTLY one of: `must_fix`, `advisory`
 
+**`false_positive_analysis` array — each object MUST have ALL 4 fields:**
+- `id` — string, format: `"FP-N"`
+- `ac_id` — string, the AC this scenario targets (e.g., `"AC-1"`)
+- `scenario` — string, a concrete description of the weakest passing implementation
+- `verdict` — EXACTLY one of: `mitigated`, `not_applicable`, `unverifiable`, `risk_confirmed`
+
+Verdict meanings:
+- `mitigated` — plan already handles this
+- `not_applicable` — scenario doesn't apply after investigation
+- `unverifiable` — couldn't confirm either way → must surface to user
+- `risk_confirmed` — real false-positive risk → corresponding `must_fix` finding required
+
 **Status determination rules:**
-- `approved` — no `must_fix` findings, all risks acknowledged
-- `needs_changes` — at least one `must_fix` finding with `contract_reference` AND `evidence`
+- `approved` — no `must_fix` findings, all risks acknowledged, no `risk_confirmed` FP verdicts
+- `needs_changes` — at least one `must_fix` finding with `contract_reference` AND `evidence`, OR any FP verdict is `risk_confirmed`
 - `needs_clarification` — cannot evaluate due to missing information
 - `rejected` — fundamental flaws require complete redesign
 
@@ -74,6 +87,16 @@ Additionally check:
 - **Granularity:** If it touches more than one architectural unit, flag as too large (`must_fix`).
 - **Code reuse:** If it creates new code where existing code would work, flag as unnecessary creation (`advisory`).
 - **Rollback:** If the rollback says "revert changes" without specifics, flag as unrealistic (`must_fix`).
+
+## False-Positive Analysis (Do Before Final Judgment)
+
+For each AC:
+1. **Read the AC literally** — what's the weakest passing implementation?
+2. **If AC has a `misinterpretation` field**, check the plan avoids it.
+3. **Think:** "If I approve, what's the most likely way the user will be disappointed?"
+4. **Document** as `FP-{N}` in the `false_positive_analysis` array.
+
+**Minimum:** 1 FP scenario per AC. If ANY verdict is `risk_confirmed`, status CANNOT be `approved`.
 
 ## Review Checklist
 

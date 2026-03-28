@@ -151,11 +151,13 @@ function v3Mixin() {
     },
 
     // ============================================================
-    // Pipelines (v3)
+    // Pipelines (v4 custom pipelines)
     // ============================================================
 
-    v3Pipelines: { feature_pipeline: [], bugfix_pipeline: [] },
+    v3Pipelines: {},
     loadingPipelines: false,
+    renamingPipeline: null,
+    renameNewName: '',
 
     async loadPipelines() {
       this.loadingPipelines = true;
@@ -163,14 +165,14 @@ function v3Mixin() {
         const resp = await fetch('/api/pipelines');
         if (!resp.ok) { this.showError('Failed to load pipelines'); return; }
         const data = await resp.json();
-        this.v3Pipelines = { feature_pipeline: data.feature_pipeline || [], bugfix_pipeline: data.bugfix_pipeline || [] };
+        this.v3Pipelines = data.pipelines || {};
       } catch (e) { this.showError('Network error loading pipelines'); }
       finally { this.loadingPipelines = false; }
     },
 
     async savePipelines() {
       try {
-        const resp = await fetch('/api/pipelines', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.v3Pipelines) });
+        const resp = await fetch('/api/pipelines', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pipelines: this.v3Pipelines }) });
         if (!resp.ok) { const err = await resp.json().catch(() => ({})); this.showError(err.error?.message || 'Failed to save'); return; }
         this.showSuccess('Pipelines saved');
       } catch (e) { this.showError('Network error'); }
@@ -184,6 +186,60 @@ function v3Mixin() {
       const newIndex = index + direction;
       if (newIndex < 0 || newIndex >= arr.length) return;
       [arr[index], arr[newIndex]] = [arr[newIndex], arr[index]];
+    },
+
+    addPipeline() {
+      const name = prompt('Pipeline name (lowercase, alphanumeric, hyphens):');
+      if (!name) return;
+      const clean = name.trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(clean) || clean.length > 50) {
+        this.showError('Invalid name. Use lowercase letters, numbers, hyphens. Must start with a letter/number.');
+        return;
+      }
+      if (this.v3Pipelines[clean]) {
+        this.showError('Pipeline "' + clean + '" already exists');
+        return;
+      }
+      this.v3Pipelines = { ...this.v3Pipelines, [clean]: [] };
+    },
+
+    deletePipeline(name) {
+      if (Object.keys(this.v3Pipelines).length <= 1) {
+        this.showError('Cannot delete the last pipeline');
+        return;
+      }
+      if (!confirm('Delete pipeline "' + name + '"?')) return;
+      const p = { ...this.v3Pipelines };
+      delete p[name];
+      this.v3Pipelines = p;
+    },
+
+    startRenamePipeline(name) {
+      this.renamingPipeline = name;
+      this.renameNewName = name;
+    },
+
+    cancelRenamePipeline() {
+      this.renamingPipeline = null;
+      this.renameNewName = '';
+    },
+
+    confirmRenamePipeline(oldName) {
+      const newName = this.renameNewName.trim().toLowerCase();
+      if (!newName || newName === oldName) { this.cancelRenamePipeline(); return; }
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(newName) || newName.length > 50) {
+        this.showError('Invalid name');
+        return;
+      }
+      if (this.v3Pipelines[newName]) {
+        this.showError('Pipeline "' + newName + '" already exists');
+        return;
+      }
+      const p = { ...this.v3Pipelines };
+      p[newName] = p[oldName];
+      delete p[oldName];
+      this.v3Pipelines = p;
+      this.cancelRenamePipeline();
     },
 
     // ============================================================

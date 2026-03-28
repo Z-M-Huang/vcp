@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { readPresets } from './preset-utils.ts';
-import type { PipelineConfig, StageEntry, DevBuddyConfig, StageExecutor, StageConfig } from '../types/pipeline.ts';
+import type { PipelineConfig, StageEntry, DevBuddyConfig, DevBuddyConfigV3, StageExecutor, StageConfig } from '../types/pipeline.ts';
 import { STAGE_DEFINITIONS, MODEL_NAME_REGEX, VALID_STAGE_TYPES, getV3OutputFileName } from '../types/stage-definitions.ts';
 import type { StageType } from '../types/stage-definitions.ts';
 import { discoverSystemPrompts } from './system-prompts.ts';
@@ -74,10 +74,10 @@ export async function fetchWithTimeout(
   }
 }
 
-// ─── Default v3 Config (inline executors) ────────────────────────────────────
+// ─── Default Config (v4 custom pipelines) ────────────────────────────────────
 
-export const DEFAULT_V3_CONFIG: DevBuddyConfig = {
-  version: '3.0',
+export const DEFAULT_CONFIG: DevBuddyConfig = {
+  version: '4.0',
   stages: {
     'requirements': { executors: [{ system_prompt: 'requirements-gatherer', preset: 'anthropic-subscription', model: 'opus' }] },
     'planning': { executors: [{ system_prompt: 'planner', preset: 'anthropic-subscription', model: 'opus' }] },
@@ -89,18 +89,24 @@ export const DEFAULT_V3_CONFIG: DevBuddyConfig = {
       { system_prompt: 'root-cause-analyst', preset: 'anthropic-subscription', model: 'opus' },
     ] },
   },
-  feature_pipeline: ['requirements', 'planning', 'plan-review', 'implementation', 'code-review'],
-  bugfix_pipeline: ['rca', 'requirements', 'planning', 'plan-review', 'implementation', 'code-review'],
+  pipelines: {
+    'feature': ['requirements', 'planning', 'plan-review', 'implementation', 'code-review'],
+    'bug-fix': ['rca', 'requirements', 'planning', 'plan-review', 'implementation', 'code-review'],
+  },
   max_iterations: 10,
   max_tdd_iterations: 5,
 };
 
+/** @deprecated Alias for backward compatibility in imports. */
+export const DEFAULT_V3_CONFIG = DEFAULT_CONFIG;
+
 // ─── v2 → v3-inline Migration ───────────────────────────────────────────────
 
 /**
- * Migrate a v2 PipelineConfig (StageEntry arrays) to v3 inline format.
+ * Migrate a v2 PipelineConfig (StageEntry arrays) to v3-inline format.
+ * Output feeds into migrateV3InlineToV4().
  */
-export function migrateV2ToV3(v2: PipelineConfig): DevBuddyConfig {
+export function migrateV2ToV3(v2: PipelineConfig): DevBuddyConfigV3 {
   const stages: Record<string, StageConfig> = {};
 
   for (const pipeline of [v2.feature_pipeline, v2.bugfix_pipeline]) {
@@ -133,7 +139,7 @@ export function migrateV2ToV3(v2: PipelineConfig): DevBuddyConfig {
   // Ensure all 6 stage types exist
   for (const stageType of VALID_STAGE_TYPES) {
     if (!stages[stageType]) {
-      const defaultStage = DEFAULT_V3_CONFIG.stages[stageType as StageType];
+      const defaultStage = DEFAULT_CONFIG.stages[stageType as StageType];
       stages[stageType] = defaultStage ? { executors: [...defaultStage.executors] } : { executors: [] };
     }
   }
@@ -154,10 +160,11 @@ export function migrateV2ToV3(v2: PipelineConfig): DevBuddyConfig {
 // ─── v3-named → v3-inline Migration ─────────────────────────────────────────
 
 /**
- * Migrate a v3 config with top-level named executors to v3 inline format.
+ * Migrate a v3 config with top-level named executors to v3-inline format.
  * Detects old format by presence of top-level 'executors' key.
+ * Output feeds into migrateV3InlineToV4().
  */
-function migrateV3NamedToInline(config: Record<string, unknown>): DevBuddyConfig {
+function migrateV3NamedToInline(config: Record<string, unknown>): DevBuddyConfigV3 {
   const namedExecutors = config.executors as Record<string, { system_prompt: string; preset: string; model: string }>;
   const oldStages = config.stages as Record<string, { executors: Array<{ name: string; parallel?: boolean }> }>;
   const newStages: Record<string, StageConfig> = {};
@@ -183,29 +190,75 @@ function migrateV3NamedToInline(config: Record<string, unknown>): DevBuddyConfig
   // Ensure all 6 stage types exist
   for (const stageType of VALID_STAGE_TYPES) {
     if (!newStages[stageType]) {
-      const defaultStage = DEFAULT_V3_CONFIG.stages[stageType as StageType];
+      const defaultStage = DEFAULT_CONFIG.stages[stageType as StageType];
       newStages[stageType] = defaultStage ? { executors: [...defaultStage.executors] } : { executors: [] };
     }
   }
 
+  const defaultPipelines = DEFAULT_CONFIG.pipelines;
   return {
     version: '3.0',
     stages: newStages as Record<StageType, StageConfig>,
-    feature_pipeline: (config.feature_pipeline || DEFAULT_V3_CONFIG.feature_pipeline) as StageType[],
-    bugfix_pipeline: (config.bugfix_pipeline || DEFAULT_V3_CONFIG.bugfix_pipeline) as StageType[],
+    feature_pipeline: (config.feature_pipeline || defaultPipelines['feature']) as StageType[],
+    bugfix_pipeline: (config.bugfix_pipeline || defaultPipelines['bug-fix']) as StageType[],
     max_iterations: (config.max_iterations as number) ?? 10,
     max_tdd_iterations: (config.max_tdd_iterations as number) ?? 5,
   };
 }
 
-// ─── v3 Validation ──────────────────────────────────────────────────────────
+// ─── v3-inline → v4 Migration ────────────────────────────────────────────────
 
 /**
- * Validate a v3 DevBuddyConfig (inline executor format).
+ * Migrate a v3-inline config to v4 format.
+ * Converts feature_pipeline/bugfix_pipeline → pipelines: { feature: [...], "bug-fix": [...] }.
+ * Preserves the user's existing stage orderings.
+ */
+function migrateV3InlineToV4(v3: DevBuddyConfigV3): DevBuddyConfig {
+  return {
+    version: '4.0',
+    stages: v3.stages,
+    pipelines: {
+      'feature': v3.feature_pipeline,
+      'bug-fix': v3.bugfix_pipeline,
+    },
+    max_iterations: v3.max_iterations,
+    max_tdd_iterations: v3.max_tdd_iterations,
+    ...(v3.theme !== undefined ? { theme: v3.theme } : {}),
+  };
+}
+
+// ─── Pipeline Name Validation ────────────────────────────────────────────────
+
+/** Valid pipeline name: lowercase alphanumeric + hyphens, starts with alphanumeric, max 50 chars. */
+const PIPELINE_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/** Names that would cause prototype pollution if used as object keys. */
+const FORBIDDEN_PIPELINE_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Validate a pipeline name.
+ * @throws Error if invalid.
+ */
+export function validatePipelineName(name: string): void {
+  if (!name || name.length > 50) {
+    throw new Error(`Pipeline name must be 1-50 characters, got ${name.length}`);
+  }
+  if (FORBIDDEN_PIPELINE_NAMES.has(name)) {
+    throw new Error(`Pipeline name '${name}' is forbidden (prototype pollution risk)`);
+  }
+  if (!PIPELINE_NAME_RE.test(name)) {
+    throw new Error(`Pipeline name '${name}' is invalid. Must match /^[a-z0-9][a-z0-9-]*$/`);
+  }
+}
+
+// ─── v4 Validation ──────────────────────────────────────────────────────────
+
+/**
+ * Validate a v4 DevBuddyConfig (custom pipelines format).
  */
 export function validateDevBuddyConfig(config: DevBuddyConfig): void {
-  if (config.version !== '3.0') {
-    throw new Error(`Invalid config version: '${config.version}'. Expected '3.0'.`);
+  if (config.version !== '4.0') {
+    throw new Error(`Invalid config version: '${config.version}'. Expected '4.0'.`);
   }
 
   // Discover available system prompts for name validation
@@ -274,28 +327,36 @@ export function validateDevBuddyConfig(config: DevBuddyConfig): void {
     }
   }
 
-  // Stages in active pipelines must have at least 1 executor
-  for (const stageType of VALID_STAGE_TYPES) {
-    const stage = config.stages[stageType as StageType];
-    const inFeature = config.feature_pipeline.includes(stageType as StageType);
-    const inBugfix = config.bugfix_pipeline.includes(stageType as StageType);
-    if ((inFeature || inBugfix) && stage.executors.length === 0) {
-      throw new Error(`Stage '${stageType}': must have at least 1 executor (used in active pipeline)`);
-    }
+  // Validate pipelines object
+  if (!config.pipelines || typeof config.pipelines !== 'object' || Array.isArray(config.pipelines)) {
+    throw new Error('pipelines must be an object');
+  }
+  const pipelineNames = Object.keys(config.pipelines);
+  if (pipelineNames.length === 0) {
+    throw new Error('At least 1 pipeline is required');
   }
 
-  // Validate pipelines
-  for (const [key, pipeline] of [['feature_pipeline', config.feature_pipeline], ['bugfix_pipeline', config.bugfix_pipeline]] as const) {
+  // Collect all stages used in any pipeline for executor-count check
+  const stagesInAnyPipeline = new Set<string>();
+
+  for (const [name, pipeline] of Object.entries(config.pipelines)) {
+    validatePipelineName(name);
     if (!Array.isArray(pipeline)) {
-      throw new Error(`${key} must be an array`);
+      throw new Error(`Pipeline '${name}' must be an array`);
     }
     for (let i = 0; i < pipeline.length; i++) {
       if (!VALID_STAGE_TYPES.has(pipeline[i])) {
-        throw new Error(`${key}[${i}]: invalid stage type '${pipeline[i]}'`);
+        throw new Error(`Pipeline '${name}'[${i}]: invalid stage type '${pipeline[i]}'`);
       }
-      if (pipeline[i] === 'rca' && key === 'feature_pipeline') {
-        throw new Error(`${key}[${i}]: 'rca' is only allowed in bugfix_pipeline`);
-      }
+      stagesInAnyPipeline.add(pipeline[i]);
+    }
+  }
+
+  // Stages in active pipelines must have at least 1 executor
+  for (const stageType of stagesInAnyPipeline) {
+    const stage = config.stages[stageType as StageType];
+    if (stage.executors.length === 0) {
+      throw new Error(`Stage '${stageType}': must have at least 1 executor (used in active pipeline)`);
     }
   }
 
@@ -315,6 +376,10 @@ export function validateDevBuddyConfig(config: DevBuddyConfig): void {
 
 // ─── Config Format Detection ────────────────────────────────────────────────
 
+function isV4(parsed: Record<string, unknown>): boolean {
+  return parsed.version === '4.0' && !!parsed.pipelines;
+}
+
 function isV3Inline(parsed: Record<string, unknown>): boolean {
   if (parsed.version !== '3.0') return false;
   // v3-inline: no top-level 'executors' key, stages have inline executor defs
@@ -330,12 +395,28 @@ function isV3Named(parsed: Record<string, unknown>): boolean {
 // ─── Config Loading ─────────────────────────────────────────────────────────
 
 /**
- * Load the dev-buddy config as v3-inline.
- * Auto-migrates from v2 or v3-named format and persists with backup.
+ * Auto-fix synthesizer rule on a config's stages (in-place).
+ * Returns true if any fix was applied.
+ */
+function autoFixSynthesizerRule(stages: Record<string, StageConfig>): boolean {
+  let fixed = false;
+  for (const stage of Object.values(stages)) {
+    if (stage.executors.length > 1 && stage.executors[stage.executors.length - 1].parallel === true) {
+      stage.executors[stage.executors.length - 1].parallel = false;
+      fixed = true;
+    }
+  }
+  return fixed;
+}
+
+/**
+ * Load the dev-buddy config as v4.
+ * Auto-migrates from v2, v3-named, and v3-inline formats.
+ * Migration chain: v2 → v3-inline → v4, v3-named → v3-inline → v4.
  */
 export function loadDevBuddyConfig(): DevBuddyConfig {
   if (!fs.existsSync(CONFIG_PATH)) {
-    return DEFAULT_V3_CONFIG;
+    return DEFAULT_CONFIG;
   }
 
   const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
@@ -346,51 +427,63 @@ export function loadDevBuddyConfig(): DevBuddyConfig {
     throw new Error(`Config at ${CONFIG_PATH} is not valid JSON`);
   }
 
-  // Already v3-inline — auto-fix synthesizer rule, then validate and return
-  if (isV3Inline(parsed)) {
+  // Already v4 — auto-fix synthesizer rule, then validate and return
+  if (isV4(parsed)) {
     const config = parsed as unknown as DevBuddyConfig;
-    // Auto-fix: last executor in multi-executor stage must be non-parallel (synthesizer)
-    let synthMigrated = false;
-    for (const stage of Object.values(config.stages)) {
-      if (stage.executors.length > 1 && stage.executors[stage.executors.length - 1].parallel === true) {
-        stage.executors[stage.executors.length - 1].parallel = false;
-        synthMigrated = true;
-      }
-    }
-    if (synthMigrated) {
+    const synthFixed = autoFixSynthesizerRule(config.stages);
+    if (synthFixed) {
       const backupPath = `${CONFIG_PATH}.backup-synth-${Date.now()}`;
       fs.copyFileSync(CONFIG_PATH, backupPath);
       atomicWriteFile(CONFIG_PATH, config);
-      console.error(`[Pipeline] Auto-migrated synthesizer rule (last executor non-parallel). Backup at ${backupPath}`);
+      console.error(`[Pipeline] Auto-fixed synthesizer rule. Backup at ${backupPath}`);
     }
     validateDevBuddyConfig(config);
     return config;
   }
 
-  // v3-named — migrate to v3-inline
+  // v3-inline — migrate to v4
+  if (isV3Inline(parsed)) {
+    const v3 = parsed as unknown as DevBuddyConfigV3;
+    autoFixSynthesizerRule(v3.stages);
+    const v4 = migrateV3InlineToV4(v3);
+    validateDevBuddyConfig(v4);
+    const backupPath = `${CONFIG_PATH}.v3-inline.backup`;
+    if (!fs.existsSync(backupPath)) {
+      fs.copyFileSync(CONFIG_PATH, backupPath);
+    }
+    atomicWriteFile(CONFIG_PATH, v4);
+    console.error(`[Pipeline] Auto-migrated config from v3-inline to v4. Backup at ${backupPath}`);
+    return v4;
+  }
+
+  // v3-named — migrate to v3-inline → v4
   if (isV3Named(parsed)) {
     const v3 = migrateV3NamedToInline(parsed);
-    validateDevBuddyConfig(v3);
+    autoFixSynthesizerRule(v3.stages);
+    const v4 = migrateV3InlineToV4(v3);
+    validateDevBuddyConfig(v4);
     const backupPath = `${CONFIG_PATH}.v3-named.backup`;
     if (!fs.existsSync(backupPath)) {
       fs.copyFileSync(CONFIG_PATH, backupPath);
     }
-    atomicWriteFile(CONFIG_PATH, v3);
-    console.error(`[Pipeline] Auto-migrated config from v3-named to v3-inline. Backup at ${backupPath}`);
-    return v3;
+    atomicWriteFile(CONFIG_PATH, v4);
+    console.error(`[Pipeline] Auto-migrated config from v3-named to v4. Backup at ${backupPath}`);
+    return v4;
   }
 
-  // v2 format — migrate to v3-inline
+  // v2 format — migrate to v3-inline → v4
   const v2 = parsed as unknown as PipelineConfig;
   const v3 = migrateV2ToV3(v2);
-  validateDevBuddyConfig(v3);
+  autoFixSynthesizerRule(v3.stages);
+  const v4 = migrateV3InlineToV4(v3);
+  validateDevBuddyConfig(v4);
   const backupPath = `${CONFIG_PATH}.v2.backup`;
   if (!fs.existsSync(backupPath)) {
     fs.copyFileSync(CONFIG_PATH, backupPath);
   }
-  atomicWriteFile(CONFIG_PATH, v3);
-  console.error(`[Pipeline] Auto-migrated config from v2 to v3-inline. Backup at ${backupPath}`);
-  return v3;
+  atomicWriteFile(CONFIG_PATH, v4);
+  console.error(`[Pipeline] Auto-migrated config from v2 to v4. Backup at ${backupPath}`);
+  return v4;
 }
 
 // ─── Pipeline Expansion ─────────────────────────────────────────────────────
@@ -409,14 +502,17 @@ export interface ExpandedStageEntry {
 }
 
 /**
- * Expand a v3 pipeline config into task entries.
+ * Expand a named pipeline into task entries.
  * Each inline executor becomes one entry.
  */
 export function expandPipelineToEntries(
   config: DevBuddyConfig,
-  pipelineKey: 'feature_pipeline' | 'bugfix_pipeline',
+  pipelineName: string,
 ): ExpandedStageEntry[] {
-  const pipeline = config[pipelineKey];
+  const pipeline = config.pipelines[pipelineName];
+  if (!pipeline) {
+    throw new Error(`Pipeline '${pipelineName}' not found. Available: ${Object.keys(config.pipelines).join(', ')}`);
+  }
   const entries: ExpandedStageEntry[] = [];
   const typeCounters: Record<string, number> = {};
   let parallelGroupCounter = 0;
@@ -469,18 +565,20 @@ if (import.meta.main) {
 
   try {
     switch (command) {
+      case 'validate':
       case 'validate-v3': {
         const config = loadDevBuddyConfig();
         const stageCount = Object.values(config.stages).reduce((n, s) => n + s.executors.length, 0);
-        console.log(`[Pipeline] v3 config valid. ${stageCount} total executors, ${config.feature_pipeline.length} feature stages, ${config.bugfix_pipeline.length} bugfix stages`);
+        const pipelineCount = Object.keys(config.pipelines).length;
+        console.log(`[Pipeline] v4 config valid. ${stageCount} total executors, ${pipelineCount} pipeline(s): ${Object.keys(config.pipelines).join(', ')}`);
         break;
       }
 
       case 'migrate': {
-        const v3 = loadDevBuddyConfig();
-        atomicWriteFile(CONFIG_PATH, v3);
-        const stageCount = Object.values(v3.stages).reduce((n, s) => n + s.executors.length, 0);
-        console.log(`[Pipeline] Config migrated to v3-inline. ${stageCount} total executors.`);
+        const config = loadDevBuddyConfig();
+        atomicWriteFile(CONFIG_PATH, config);
+        const stageCount = Object.values(config.stages).reduce((n, s) => n + s.executors.length, 0);
+        console.log(`[Pipeline] Config migrated to v4. ${stageCount} total executors, ${Object.keys(config.pipelines).length} pipeline(s).`);
         break;
       }
 

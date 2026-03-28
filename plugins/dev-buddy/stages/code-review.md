@@ -22,6 +22,7 @@ Your output MUST be a single JSON object with ALL of these fields. No exceptions
 - `clarification_questions` — array of strings (empty if not clarifying)
 - `acceptance_criteria_verification` — object (see below)
 - `findings` — array of finding objects (see below)
+- `false_positive_analysis` — array of FP scenario objects (see below)
 - `checklist` — object with 12 required fields (see below)
 - `reviewed_at` — ISO8601 timestamp string
 
@@ -68,9 +69,21 @@ Your output MUST be a single JSON object with ALL of these fields. No exceptions
 }
 ```
 
+**`false_positive_analysis` array — each object MUST have ALL 4 fields:**
+- `id` — string, format: `"FP-N"`
+- `ac_id` — string, the AC this scenario targets (e.g., `"AC-1"`)
+- `scenario` — string, a concrete description of how the implementation could pass all tests but still not deliver the user's intent
+- `verdict` — EXACTLY one of: `mitigated`, `not_applicable`, `unverifiable`, `risk_confirmed`
+
+Verdict meanings:
+- `mitigated` — implementation correctly handles this
+- `not_applicable` — scenario doesn't apply after investigation
+- `unverifiable` — couldn't confirm either way → must surface to user
+- `risk_confirmed` — real false-positive risk → corresponding `must_fix` finding required
+
 **Status determination rules:**
-- `approved` — no `must_fix` findings
-- `needs_changes` — at least one `must_fix` finding with `contract_reference` AND `evidence`
+- `approved` — no `must_fix` findings, no `risk_confirmed` FP verdicts
+- `needs_changes` — at least one `must_fix` finding with `contract_reference` AND `evidence`, OR any FP verdict is `risk_confirmed`
 - `needs_clarification` — cannot evaluate without more information
 - `rejected` — fundamental issues require significant rework
 
@@ -94,6 +107,16 @@ For each AC:
 - Skip ACs because "they seem covered" — cite evidence
 - Miss edge cases because "the main path works"
 - List problems without investigating them — every finding needs evidence
+
+## False-Positive Analysis (Do Before Final Judgment)
+
+For each AC:
+1. **Read the AC literally** — what implementation could pass all tests but still not deliver the user's intent?
+2. **If AC has a `misinterpretation` field**, check the implementation avoids it.
+3. **Think:** "If I approve, what's the most likely way the user will be disappointed?"
+4. **Document** as `FP-{N}` in the `false_positive_analysis` array.
+
+**Minimum:** 1 FP scenario per AC. If ANY verdict is `risk_confirmed`, status CANNOT be `approved`.
 
 ## Review Checklist
 

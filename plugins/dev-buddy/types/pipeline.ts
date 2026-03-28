@@ -1,5 +1,5 @@
 /**
- * Pipeline configuration types for dev-buddy (v3 inline executor format).
+ * Pipeline configuration types for dev-buddy (v4 custom pipelines format).
  *
  * Import StageType from './stage-definitions.ts' — no circular dependency
  * because stage-definitions.ts has zero imports from pipeline.ts.
@@ -7,7 +7,7 @@
 
 import type { StageType } from './stage-definitions.ts';
 
-// ─── v3 Config Types (inline executors) ─────────────────────────────────────
+// ─── v4 Config Types (custom pipelines) ──────────────────────────────────────
 
 /**
  * An inline executor within a stage.
@@ -33,23 +33,35 @@ export interface StageConfig {
 }
 
 /**
- * v3 configuration format for dev-buddy (inline executor variant).
+ * v4 configuration format for dev-buddy (custom pipelines).
  * No top-level "executors" key — executor definitions are inline in each stage.
+ * Pipelines are user-defined with arbitrary names (replaces fixed feature_pipeline/bugfix_pipeline).
  */
 export interface DevBuddyConfig {
-  /** Config format version. Must be '3.0'. */
-  version: '3.0';
+  /** Config format version. Must be '4.0'. */
+  version: '4.0';
   /** Per-stage executor assignments. All 6 StageType keys required. */
   stages: Record<StageType, StageConfig>;
-  /** User-configurable ordered list of stages for the feature pipeline. */
-  feature_pipeline: StageType[];
-  /** User-configurable ordered list of stages for the bugfix pipeline. */
-  bugfix_pipeline: StageType[];
+  /** User-defined pipelines. Keys are pipeline names, values are ordered stage lists. */
+  pipelines: Record<string, StageType[]>;
   /** Maximum fix/re-review iterations per review stage (plan-review, code-review). Each stage gets its own budget. Default: 10. */
   max_iterations: number;
   /** Maximum TDD loop iterations per implementation step. Default: 5. */
   max_tdd_iterations: number;
   /** UI theme preference. Saved in config for persistence across browsers. */
+  theme?: 'light' | 'dark';
+}
+
+// ─── Legacy v3 types (kept only for migration) ──────────────────────────────
+
+/** @deprecated v3 config — only used by migration code. */
+export interface DevBuddyConfigV3 {
+  version: '3.0';
+  stages: Record<StageType, StageConfig>;
+  feature_pipeline: StageType[];
+  bugfix_pipeline: StageType[];
+  max_iterations: number;
+  max_tdd_iterations: number;
   theme?: 'light' | 'dark';
 }
 

@@ -22,8 +22,6 @@ export type StageType =
 export interface StageDefinition {
   /** If true, the stage may appear at most once per pipeline. */
   singleton: boolean;
-  /** Which pipeline types this stage type is allowed in. */
-  allowed_pipelines: ('feature' | 'bugfix')[];
   /** The agent type key used to spawn this stage. */
   agent_type: string;
   /**
@@ -54,19 +52,16 @@ export interface StageDefinition {
 export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
   requirements: {
     singleton: true,
-    allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'requirements-gatherer',
     output_file_pattern: 'user-story/manifest.json',
   },
   planning: {
     singleton: true,
-    allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'planner',
     output_file_pattern: 'plan/manifest.json',
   },
   'plan-review': {
     singleton: false,
-    allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'plan-reviewer',
     output_file_pattern: 'plan-review-{provider}-{model}-{index}.json',
     /** v3 output pattern includes system prompt name for traceability. */
@@ -74,21 +69,18 @@ export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
   },
   implementation: {
     singleton: true,
-    allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'implementer',
     output_file_pattern: 'impl-result.json',
     max_executors: 1,
   },
   'code-review': {
     singleton: false,
-    allowed_pipelines: ['feature', 'bugfix'],
     agent_type: 'code-reviewer',
     output_file_pattern: 'code-review-{provider}-{model}-{index}.json',
     v3_output_file_pattern: 'code-review-{system_prompt}-{provider}-{model}-{index}.json',
   },
   rca: {
     singleton: false,
-    allowed_pipelines: ['bugfix'],
     agent_type: 'root-cause-analyst',
     output_file_pattern: 'rca-{provider}-{model}-{index}-v{version}.json',
     v3_output_file_pattern: 'rca-{system_prompt}-{provider}-{model}-{index}-v{version}.json',
