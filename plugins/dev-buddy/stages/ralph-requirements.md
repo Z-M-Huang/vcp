@@ -64,6 +64,17 @@ Structure your output as:
 - R-1: {risk} — Severity: {HIGH|MEDIUM|LOW} — Mitigation: {mitigation}
 ```
 
+## User Confirmation
+
+Executor output is a DRAFT. The orchestrator confirms each item with the user individually before writing to the plan file:
+
+1. Each AC is presented one at a time — user approves or requests changes
+2. User is asked if additional ACs are needed — loop if yes
+3. Each UAT scenario is presented one at a time — user approves or requests changes
+4. User is asked if additional scenarios are needed — loop if yes
+
+Only confirmed ACs and UAT scenarios are written to the plan. The user never needs to open the plan file — all interaction flows through AskUserQuestion.
+
 ## Anti-Patterns
 
 - Do NOT write vague ACs ("should work well")

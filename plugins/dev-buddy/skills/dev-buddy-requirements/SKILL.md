@@ -87,25 +87,82 @@ Define acceptance criteria (Given/When/Then + misinterpretation), UAT scenarios,
 
 **Dispatch all parallel executors in a single message.** Sequential executors wait for prior ones.
 
-## Step 5: Collect and synthesize
+## Step 5: Collect and synthesize (draft)
 
 Collect all responses (sequential TaskOutput polling — one at a time, never multiple in same message).
 
-Synthesize into a `## Requirements` section containing:
+Synthesize into a draft containing:
 - **Acceptance Criteria** (Given/When/Then + misinterpretation for each)
 - **UAT Scenarios** (Playwright test descriptions mapped to ACs)
 - **Backpressure Commands** (test, typecheck, lint, build, uat commands)
 - **Risk Registry** (identified risks with mitigations)
 
-Update the master plan using Edit tool: replace `## Requirements\n(pending)` with the synthesis.
+**Do NOT write to the plan file yet.** Hold the draft in context for interactive confirmation.
+
+## Step 6: Interactive AC confirmation
+
+Present each AC to the user **one at a time** via AskUserQuestion. The user should not need to open the plan file — all information flows through the conversation.
+
+For each AC:
+```
+AskUserQuestion: "AC-{N}: {title}
+
+Given {context}
+When {action}
+Then {outcome}
+
+Misinterpretation: {wrong implementation that technically passes}
+
+Approve this AC? Or describe what needs to change."
+```
+
+- If the user **approves** — mark this AC as confirmed, proceed to the next.
+- If the user **requests changes** — revise the AC based on feedback, then present the revised version for re-confirmation. Repeat until approved.
+
+After all ACs are confirmed:
+```
+AskUserQuestion: "All {N} acceptance criteria are confirmed. Are there any additional acceptance criteria we should add? If yes, describe what's missing. If no, say 'done'."
+```
+
+- If the user adds new ACs — draft them, confirm each one individually (same loop as above), then ask again if more are needed.
+- If the user says done — proceed to UAT confirmation.
+
+## Step 7: Interactive UAT scenario confirmation
+
+Present each UAT scenario to the user **one at a time** via AskUserQuestion:
+
+```
+AskUserQuestion: "UAT-{N}: {scenario description}
+
+Test file: {file path}
+Steps:
+1. {step}
+2. {step}
+...
+Assertions: {what gets checked}
+Validates: AC-{X}, AC-{Y}
+
+Is this scenario sufficient? Or describe changes or additions needed."
+```
+
+- If the user **approves** — mark confirmed, proceed to next.
+- If the user **requests changes** — revise and re-confirm.
+
+After all UAT scenarios confirmed:
+```
+AskUserQuestion: "All {N} UAT scenarios are confirmed. Are there any additional scenarios we should add? If yes, describe what's missing. If no, say 'done'."
+```
+
+- If the user adds new scenarios — draft, confirm each, ask again.
+- If done — proceed to write.
+
+## Step 8: Write confirmed requirements to plan file
+
+Now that all ACs and UAT scenarios are user-confirmed, write the final `## Requirements` section to the master plan:
+
+Update the master plan using Edit tool: replace `## Requirements\n(pending)` with the confirmed synthesis.
 
 Update plan status to `decompose`.
-
-## Step 6: User approval
-
-Present the requirements to the user. Ask: "Do these acceptance criteria and UAT scenarios cover the feature? Any additions or changes?"
-
-Wait for user confirmation via AskUserQuestion.
 
 If running under the orchestrator, update tasks:
 - `TaskUpdate(T-requirements, status: "completed")`
