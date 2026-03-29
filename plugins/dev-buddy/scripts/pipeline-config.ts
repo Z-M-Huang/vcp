@@ -112,7 +112,7 @@ const FORBIDDEN_PIPELINE_NAMES = new Set(['__proto__', 'constructor', 'prototype
  * Validate a pipeline name.
  * @throws Error if invalid.
  */
-export function validatePipelineName(name: string): void {
+function validatePipelineName(name: string): void {
   if (!name || name.length > 50) {
     throw new Error(`Pipeline name must be 1-50 characters, got ${name.length}`);
   }

@@ -2,7 +2,6 @@ import { describe, test, expect } from 'bun:test';
 import {
   DEFAULT_CONFIG,
   validateDevBuddyConfig,
-  validatePipelineName,
 } from '../pipeline-config.ts';
 import type { DevBuddyConfig } from '../../types/pipeline.ts';
 
@@ -58,40 +57,6 @@ describe('DEFAULT_CONFIG', () => {
       'discovery', 'ralph-requirements', 'decomposition',
       'ralph-build', 'ralph-code-review', 'ralph-uat',
     ]);
-  });
-});
-
-// ─── validatePipelineName ────────────────────────────────────────────────────
-
-describe('validatePipelineName', () => {
-  test('accepts valid names', () => {
-    expect(() => validatePipelineName('ralph')).not.toThrow();
-    expect(() => validatePipelineName('feature')).not.toThrow();
-    expect(() => validatePipelineName('bug-fix')).not.toThrow();
-    expect(() => validatePipelineName('hotfix-2')).not.toThrow();
-    expect(() => validatePipelineName('a')).not.toThrow();
-  });
-
-  test('rejects empty name', () => {
-    expect(() => validatePipelineName('')).toThrow(/1-50 characters/);
-  });
-
-  test('rejects names over 50 chars', () => {
-    expect(() => validatePipelineName('a'.repeat(51))).toThrow(/1-50 characters/);
-  });
-
-  test('rejects names starting with hyphen', () => {
-    expect(() => validatePipelineName('-feature')).toThrow(/invalid/);
-  });
-
-  test('rejects uppercase', () => {
-    expect(() => validatePipelineName('Feature')).toThrow(/invalid/);
-  });
-
-  test('rejects prototype pollution names', () => {
-    expect(() => validatePipelineName('__proto__')).toThrow(/forbidden/);
-    expect(() => validatePipelineName('constructor')).toThrow(/forbidden/);
-    expect(() => validatePipelineName('prototype')).toThrow(/forbidden/);
   });
 });
 

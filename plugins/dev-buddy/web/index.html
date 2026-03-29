@@ -50,10 +50,6 @@
       x-on:click="tab = 'stages'; loadStages()"
     >Stages</button>
     <button
-      x-bind:class="{ active: tab === 'v3pipelines' }"
-      x-on:click="tab = 'v3pipelines'; loadPipelines()"
-    >Pipelines</button>
-    <button
       x-bind:class="{ active: tab === 'settings' }"
       x-on:click="tab = 'settings'; loadSettings()"
     >Settings</button>
@@ -662,67 +658,6 @@
               x-bind:disabled="stageDefinitions[stageType]?.max_executors !== undefined && stageConfig.executors.length >= stageDefinitions[stageType].max_executors">+ Add Executor</button>
           </div>
         </template>
-      </div>
-    </template>
-  </section>
-
-  <!-- ============ Pipelines Tab (v4 custom) ============ -->
-  <section x-show="tab === 'v3pipelines'" class="tab-content">
-    <h2>Pipelines</h2>
-    <p class="section-description">Create, rename, delete, and reorder stages in pipelines. Run with <code>/dev-buddy-ralph</code>.</p>
-
-    <template x-if="loadingPipelines">
-      <p>Loading pipelines...</p>
-    </template>
-
-    <template x-if="!loadingPipelines">
-      <div>
-        <template x-for="pKey in Object.keys(v3Pipelines)" x-bind:key="pKey">
-          <div class="card" style="margin-bottom: 16px;">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-              <template x-if="renamingPipeline !== pKey">
-                <h3 style="margin: 0;" x-text="pKey"></h3>
-              </template>
-              <template x-if="renamingPipeline === pKey">
-                <input type="text" x-model="renameNewName" x-on:keydown.enter="confirmRenamePipeline(pKey)" x-on:keydown.escape="cancelRenamePipeline()" style="font-size: 1rem; font-weight: 600; padding: 2px 6px;">
-              </template>
-              <template x-if="renamingPipeline !== pKey">
-                <button x-on:click="startRenamePipeline(pKey)" style="font-size: 0.75rem; padding: 2px 8px;" title="Rename">Rename</button>
-              </template>
-              <template x-if="renamingPipeline === pKey">
-                <span>
-                  <button x-on:click="confirmRenamePipeline(pKey)" style="font-size: 0.75rem; padding: 2px 8px;">OK</button>
-                  <button x-on:click="cancelRenamePipeline()" style="font-size: 0.75rem; padding: 2px 8px;">Cancel</button>
-                </span>
-              </template>
-              <button x-on:click="deletePipeline(pKey)" class="btn-danger" style="font-size: 0.75rem; margin-left: auto;" title="Delete pipeline">Delete</button>
-            </div>
-
-            <template x-for="(stage, idx) in v3Pipelines[pKey]" x-bind:key="idx">
-              <div class="executor-row">
-                <span style="font-weight: 500; min-width: 24px;" x-text="(idx + 1) + '.'"></span>
-                <select x-model="v3Pipelines[pKey][idx]" style="flex: 1;">
-                  <option value="discovery">discovery</option>
-                  <option value="ralph-requirements">ralph-requirements</option>
-                  <option value="decomposition">decomposition</option>
-                  <option value="ralph-build">ralph-build</option>
-                  <option value="ralph-code-review">ralph-code-review</option>
-                  <option value="ralph-uat">ralph-uat</option>
-                </select>
-                <button x-on:click="moveStageInPipeline(pKey, idx, -1)" x-bind:disabled="idx === 0" title="Move up" style="padding: 2px 8px;">&#9650;</button>
-                <button x-on:click="moveStageInPipeline(pKey, idx, 1)" x-bind:disabled="idx === v3Pipelines[pKey].length - 1" title="Move down" style="padding: 2px 8px;">&#9660;</button>
-                <button x-on:click="removeStageFromPipeline(pKey, idx)" class="btn-danger" style="font-size: 0.75rem;">Remove</button>
-              </div>
-            </template>
-
-            <button x-on:click="addStageToPipeline(pKey)" style="margin-top: 8px; font-size: 0.85rem;" class="btn-secondary">+ Add Stage</button>
-          </div>
-        </template>
-
-        <div style="display: flex; gap: 8px; margin-top: 12px;">
-          <button x-on:click="addPipeline()" class="btn-secondary">+ New Pipeline</button>
-          <button x-on:click="savePipelines()" class="btn-primary">Save Pipelines</button>
-        </div>
       </div>
     </template>
   </section>
