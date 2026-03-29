@@ -50,10 +50,6 @@
       x-on:click="tab = 'stages'; loadStages()"
     >Stages</button>
     <button
-      x-bind:class="{ active: tab === 'v3pipelines' }"
-      x-on:click="tab = 'v3pipelines'; loadPipelines()"
-    >Pipelines</button>
-    <button
       x-bind:class="{ active: tab === 'settings' }"
       x-on:click="tab = 'settings'; loadSettings()"
     >Settings</button>
@@ -569,7 +565,7 @@
     <div class="section-header">
       <div>
         <h2>System Prompts</h2>
-        <p class="section-description">Built-in prompts are read-only. Create custom prompts via <code>/dev-buddy-create-prompt</code> or import from gallery.</p>
+        <p class="section-description">Built-in prompts are read-only. Create custom prompts via <code>/dev-buddy-config</code> or import from gallery.</p>
       </div>
       <button class="btn-secondary" x-on:click="openImportDialog()">Import from Gallery</button>
     </div>
@@ -616,11 +612,18 @@
               <button x-on:click="saveStage(stageType)" class="btn-primary" style="font-size: 0.8rem;">Save</button>
             </div>
 
-            <!-- Inline executor list (SortableJS enabled) -->
-            <div style="margin-top: 8px;" x-init="$nextTick(() => initSortableExecutors($el, stageType))">
+            <!-- Inline executor list -->
+            <div style="margin-top: 8px;">
               <template x-for="(exec, idx) in stageConfig.executors" x-bind:key="exec._id">
                 <div class="executor-row">
-                  <span class="drag-handle" x-bind:class="{ 'is-synthesizer': stageConfig.executors.length > 1 && idx === stageConfig.executors.length - 1 }">&#9776;</span>
+                  <button x-on:click="moveExecutorInStage(stageType, idx, -1)"
+                    x-bind:disabled="idx === 0"
+                    x-show="!(stageConfig.executors.length > 1 && idx === stageConfig.executors.length - 1)"
+                    title="Move up" style="padding: 2px 8px;">&#9650;</button>
+                  <button x-on:click="moveExecutorInStage(stageType, idx, 1)"
+                    x-bind:disabled="idx >= stageConfig.executors.length - 2 || stageConfig.executors.length <= 1"
+                    x-show="!(stageConfig.executors.length > 1 && idx === stageConfig.executors.length - 1)"
+                    title="Move down" style="padding: 2px 8px;">&#9660;</button>
                   <select x-model="exec.system_prompt" x-init="$nextTick(() => $el.value = exec.system_prompt || '')" style="flex: 1; min-width: 120px;">
                     <option value="">-- System Prompt --</option>
                     <template x-for="p in systemPrompts" x-bind:key="p.name">
@@ -659,67 +662,6 @@
     </template>
   </section>
 
-  <!-- ============ Pipelines Tab (v4 custom) ============ -->
-  <section x-show="tab === 'v3pipelines'" class="tab-content">
-    <h2>Pipelines</h2>
-    <p class="section-description">Create, rename, delete, and reorder stages in custom pipelines. Run with <code>/dev-buddy-run &lt;name&gt;</code>.</p>
-
-    <template x-if="loadingPipelines">
-      <p>Loading pipelines...</p>
-    </template>
-
-    <template x-if="!loadingPipelines">
-      <div>
-        <template x-for="pKey in Object.keys(v3Pipelines)" x-bind:key="pKey">
-          <div class="card" style="margin-bottom: 16px;">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-              <template x-if="renamingPipeline !== pKey">
-                <h3 style="margin: 0;" x-text="pKey"></h3>
-              </template>
-              <template x-if="renamingPipeline === pKey">
-                <input type="text" x-model="renameNewName" x-on:keydown.enter="confirmRenamePipeline(pKey)" x-on:keydown.escape="cancelRenamePipeline()" style="font-size: 1rem; font-weight: 600; padding: 2px 6px;">
-              </template>
-              <template x-if="renamingPipeline !== pKey">
-                <button x-on:click="startRenamePipeline(pKey)" style="font-size: 0.75rem; padding: 2px 8px;" title="Rename">Rename</button>
-              </template>
-              <template x-if="renamingPipeline === pKey">
-                <span>
-                  <button x-on:click="confirmRenamePipeline(pKey)" style="font-size: 0.75rem; padding: 2px 8px;">OK</button>
-                  <button x-on:click="cancelRenamePipeline()" style="font-size: 0.75rem; padding: 2px 8px;">Cancel</button>
-                </span>
-              </template>
-              <button x-on:click="deletePipeline(pKey)" class="btn-danger" style="font-size: 0.75rem; margin-left: auto;" title="Delete pipeline">Delete</button>
-            </div>
-
-            <template x-for="(stage, idx) in v3Pipelines[pKey]" x-bind:key="idx">
-              <div class="executor-row">
-                <span style="font-weight: 500; min-width: 24px;" x-text="(idx + 1) + '.'"></span>
-                <select x-model="v3Pipelines[pKey][idx]" style="flex: 1;">
-                  <option value="requirements">requirements</option>
-                  <option value="planning">planning</option>
-                  <option value="plan-review">plan-review</option>
-                  <option value="implementation">implementation</option>
-                  <option value="code-review">code-review</option>
-                  <option value="rca">rca</option>
-                </select>
-                <button x-on:click="moveStageInPipeline(pKey, idx, -1)" x-bind:disabled="idx === 0" title="Move up" style="padding: 2px 8px;">&#9650;</button>
-                <button x-on:click="moveStageInPipeline(pKey, idx, 1)" x-bind:disabled="idx === v3Pipelines[pKey].length - 1" title="Move down" style="padding: 2px 8px;">&#9660;</button>
-                <button x-on:click="removeStageFromPipeline(pKey, idx)" class="btn-danger" style="font-size: 0.75rem;">Remove</button>
-              </div>
-            </template>
-
-            <button x-on:click="addStageToPipeline(pKey)" style="margin-top: 8px; font-size: 0.85rem;" class="btn-secondary">+ Add Stage</button>
-          </div>
-        </template>
-
-        <div style="display: flex; gap: 8px; margin-top: 12px;">
-          <button x-on:click="addPipeline()" class="btn-secondary">+ New Pipeline</button>
-          <button x-on:click="savePipelines()" class="btn-primary">Save Pipelines</button>
-        </div>
-      </div>
-    </template>
-  </section>
-
   <!-- ============ Settings Tab (v3) ============ -->
   <section x-show="tab === 'settings'" class="tab-content">
     <h2>Settings</h2>
@@ -735,12 +677,17 @@
           <label>
             <span class="form-label">Max Iterations</span>
             <input type="number" x-model.number="v3Settings.max_iterations" min="1" max="50">
-            <span class="form-hint">Maximum fix/re-review iterations per pipeline run</span>
+            <span class="form-hint">Maximum fix/re-review iterations per code review stage</span>
           </label>
           <label>
-            <span class="form-label">Max TDD Iterations</span>
-            <input type="number" x-model.number="v3Settings.max_tdd_iterations" min="1" max="20">
-            <span class="form-hint">Maximum test-fail retries per implementation step</span>
+            <span class="form-label">Max Build Attempts</span>
+            <input type="number" x-model.number="v3Settings.max_build_attempts" min="1" max="20">
+            <span class="form-hint">Maximum build attempts per unit of work</span>
+          </label>
+          <label>
+            <span class="form-label">Max Outer Iterations</span>
+            <input type="number" x-model.number="v3Settings.max_outer_iterations" min="1" max="10">
+            <span class="form-hint">Maximum UAT → build → review → UAT loop iterations</span>
           </label>
         </div>
         <div class="form-actions" style="margin-top: 16px;">

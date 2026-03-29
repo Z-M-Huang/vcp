@@ -120,133 +120,23 @@ function v3Mixin() {
       await this._fetchModelOptions(exec.preset);
     },
 
-    // SortableJS initialization for executor rows
-    initSortableExecutors(el, stageType) {
-      if (el._sortableInstance) el._sortableInstance.destroy();
-      el._sortableInstance = Sortable.create(el, {
-        animation: 150,
-        handle: '.drag-handle',
-        ghostClass: 'sortable-ghost',
-        filter: '.is-synthesizer',
-        onMove: (evt) => {
-          const execs = this.v3Stages[stageType].executors;
-          if (execs.length <= 1) return true;
-          // Block drops AFTER the last row (synthesizer)
-          const children = [...evt.to.children].filter(c => c.classList.contains('executor-row'));
-          const relatedIdx = children.indexOf(evt.related);
-          if (relatedIdx === children.length - 1 && evt.willInsertAfter) return false;
-          return true;
-        },
-        onEnd: (evt) => {
-          const execs = [...this.v3Stages[stageType].executors];
-          const moved = execs.splice(evt.oldIndex, 1)[0];
-          execs.splice(evt.newIndex, 0, moved);
-          // Safety: ensure last executor is non-parallel when multi-executor
-          if (execs.length > 1 && execs[execs.length - 1].parallel === true) {
-            execs[execs.length - 1].parallel = false;
-          }
-          this.v3Stages[stageType] = { ...this.v3Stages[stageType], executors: execs };
-        },
-      });
-    },
-
-    // ============================================================
-    // Pipelines (v4 custom pipelines)
-    // ============================================================
-
-    v3Pipelines: {},
-    loadingPipelines: false,
-    renamingPipeline: null,
-    renameNewName: '',
-
-    async loadPipelines() {
-      this.loadingPipelines = true;
-      try {
-        const resp = await fetch('/api/pipelines');
-        if (!resp.ok) { this.showError('Failed to load pipelines'); return; }
-        const data = await resp.json();
-        this.v3Pipelines = data.pipelines || {};
-      } catch (e) { this.showError('Network error loading pipelines'); }
-      finally { this.loadingPipelines = false; }
-    },
-
-    async savePipelines() {
-      try {
-        const resp = await fetch('/api/pipelines', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pipelines: this.v3Pipelines }) });
-        if (!resp.ok) { const err = await resp.json().catch(() => ({})); this.showError(err.error?.message || 'Failed to save'); return; }
-        this.showSuccess('Pipelines saved');
-      } catch (e) { this.showError('Network error'); }
-    },
-
-    addStageToPipeline(pipelineKey) { this.v3Pipelines[pipelineKey].push('plan-review'); },
-    removeStageFromPipeline(pipelineKey, index) { this.v3Pipelines[pipelineKey].splice(index, 1); },
-
-    moveStageInPipeline(pipelineKey, index, direction) {
-      const arr = this.v3Pipelines[pipelineKey];
+    moveExecutorInStage(stageType, index, direction) {
+      const execs = this.v3Stages[stageType].executors;
       const newIndex = index + direction;
-      if (newIndex < 0 || newIndex >= arr.length) return;
-      [arr[index], arr[newIndex]] = [arr[newIndex], arr[index]];
-    },
-
-    addPipeline() {
-      const name = prompt('Pipeline name (lowercase, alphanumeric, hyphens):');
-      if (!name) return;
-      const clean = name.trim().toLowerCase();
-      if (!/^[a-z0-9][a-z0-9-]*$/.test(clean) || clean.length > 50) {
-        this.showError('Invalid name. Use lowercase letters, numbers, hyphens. Must start with a letter/number.');
-        return;
-      }
-      if (this.v3Pipelines[clean]) {
-        this.showError('Pipeline "' + clean + '" already exists');
-        return;
-      }
-      this.v3Pipelines = { ...this.v3Pipelines, [clean]: [] };
-    },
-
-    deletePipeline(name) {
-      if (Object.keys(this.v3Pipelines).length <= 1) {
-        this.showError('Cannot delete the last pipeline');
-        return;
-      }
-      if (!confirm('Delete pipeline "' + name + '"?')) return;
-      const p = { ...this.v3Pipelines };
-      delete p[name];
-      this.v3Pipelines = p;
-    },
-
-    startRenamePipeline(name) {
-      this.renamingPipeline = name;
-      this.renameNewName = name;
-    },
-
-    cancelRenamePipeline() {
-      this.renamingPipeline = null;
-      this.renameNewName = '';
-    },
-
-    confirmRenamePipeline(oldName) {
-      const newName = this.renameNewName.trim().toLowerCase();
-      if (!newName || newName === oldName) { this.cancelRenamePipeline(); return; }
-      if (!/^[a-z0-9][a-z0-9-]*$/.test(newName) || newName.length > 50) {
-        this.showError('Invalid name');
-        return;
-      }
-      if (this.v3Pipelines[newName]) {
-        this.showError('Pipeline "' + newName + '" already exists');
-        return;
-      }
-      const p = { ...this.v3Pipelines };
-      p[newName] = p[oldName];
-      delete p[oldName];
-      this.v3Pipelines = p;
-      this.cancelRenamePipeline();
+      if (newIndex < 0 || newIndex >= execs.length) return;
+      // Don't allow swapping past synthesizer (last position)
+      if (execs.length > 1 && newIndex === execs.length - 1 && direction === 1) return;
+      [execs[index], execs[newIndex]] = [execs[newIndex], execs[index]];
+      // Safety: ensure last executor (synthesizer) is non-parallel
+      if (execs.length > 1) execs[execs.length - 1].parallel = false;
+      this.v3Stages[stageType] = { ...this.v3Stages[stageType], executors: [...execs] };
     },
 
     // ============================================================
     // Settings
     // ============================================================
 
-    v3Settings: { max_iterations: 10, max_tdd_iterations: 5 },
+    v3Settings: { max_iterations: 10, max_build_attempts: 3, max_outer_iterations: 3 },
     loadingSettings: false,
 
     async loadSettings() {

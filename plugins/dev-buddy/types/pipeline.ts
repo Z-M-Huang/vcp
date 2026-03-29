@@ -1,5 +1,5 @@
 /**
- * Pipeline configuration types for dev-buddy (v4 custom pipelines format).
+ * Pipeline configuration types for dev-buddy (v5 Ralph loop format).
  *
  * Import StageType from './stage-definitions.ts' — no circular dependency
  * because stage-definitions.ts has zero imports from pipeline.ts.
@@ -7,7 +7,7 @@
 
 import type { StageType } from './stage-definitions.ts';
 
-// ─── v4 Config Types (custom pipelines) ──────────────────────────────────────
+// ─── v5 Config Types (Ralph loop) ───────────────────────────────────────────
 
 /**
  * An inline executor within a stage.
@@ -33,21 +33,22 @@ export interface StageConfig {
 }
 
 /**
- * v4 configuration format for dev-buddy (custom pipelines).
- * No top-level "executors" key — executor definitions are inline in each stage.
- * Pipelines are user-defined with arbitrary names (replaces fixed feature_pipeline/bugfix_pipeline).
+ * v5 configuration format for dev-buddy (Ralph loop).
+ * Single 'ralph' pipeline. Stages are the 6 Ralph stage types.
  */
 export interface DevBuddyConfig {
-  /** Config format version. Must be '4.0'. */
-  version: '4.0';
+  /** Config format version. Must be '5.0'. */
+  version: '5.0';
   /** Per-stage executor assignments. All 6 StageType keys required. */
   stages: Record<StageType, StageConfig>;
-  /** User-defined pipelines. Keys are pipeline names, values are ordered stage lists. */
+  /** Pipeline definition. Only 'ralph' pipeline supported. */
   pipelines: Record<string, StageType[]>;
-  /** Maximum fix/re-review iterations per review stage (plan-review, code-review). Each stage gets its own budget. Default: 10. */
+  /** Maximum fix/re-review iterations per code review stage. Default: 10. */
   max_iterations: number;
-  /** Maximum TDD loop iterations per implementation step. Default: 5. */
-  max_tdd_iterations: number;
+  /** Maximum build attempts per unit of work. Default: 3. */
+  max_build_attempts: number;
+  /** Maximum outer (UAT → build → review → UAT) loop iterations. Default: 3. */
+  max_outer_iterations: number;
   /** UI theme preference. Saved in config for persistence across browsers. */
   theme?: 'light' | 'dark';
 }
@@ -57,9 +58,9 @@ export interface DevBuddyConfig {
 /** @deprecated v3 config — only used by migration code. */
 export interface DevBuddyConfigV3 {
   version: '3.0';
-  stages: Record<StageType, StageConfig>;
-  feature_pipeline: StageType[];
-  bugfix_pipeline: StageType[];
+  stages: Record<string, StageConfig>;
+  feature_pipeline: string[];
+  bugfix_pipeline: string[];
   max_iterations: number;
   max_tdd_iterations: number;
   theme?: 'light' | 'dark';
@@ -69,7 +70,7 @@ export interface DevBuddyConfigV3 {
 
 /** @deprecated v2 stage entry — only used by migration code. */
 export interface StageEntry {
-  type: StageType;
+  type: string;
   provider: string;
   model: string;
   parallel?: boolean;

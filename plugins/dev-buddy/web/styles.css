@@ -30,21 +30,21 @@
   --border-subtle: #e8e9ed;
   --border-focus: #d97706;
 
-  /* Stage colors */
-  --stage-requirements: #9333ea;
-  --stage-planning: #0891b2;
-  --stage-plan-review: #ea580c;
-  --stage-implementation: #16a34a;
-  --stage-code-review: #2563eb;
-  --stage-rca: #dc2626;
+  /* Stage colors (Ralph loop) */
+  --stage-discovery: #9333ea;
+  --stage-ralph-requirements: #0891b2;
+  --stage-decomposition: #ea580c;
+  --stage-ralph-build: #16a34a;
+  --stage-ralph-code-review: #2563eb;
+  --stage-ralph-uat: #dc2626;
 
   /* Stage badge backgrounds (light theme: subtle tints) */
-  --stage-requirements-bg: rgba(147, 51, 234, 0.08);
-  --stage-planning-bg: rgba(8, 145, 178, 0.08);
-  --stage-plan-review-bg: rgba(234, 88, 12, 0.08);
-  --stage-implementation-bg: rgba(22, 163, 74, 0.08);
-  --stage-code-review-bg: rgba(37, 99, 235, 0.08);
-  --stage-rca-bg: rgba(220, 38, 38, 0.08);
+  --stage-discovery-bg: rgba(147, 51, 234, 0.08);
+  --stage-ralph-requirements-bg: rgba(8, 145, 178, 0.08);
+  --stage-decomposition-bg: rgba(234, 88, 12, 0.08);
+  --stage-ralph-build-bg: rgba(22, 163, 74, 0.08);
+  --stage-ralph-code-review-bg: rgba(37, 99, 235, 0.08);
+  --stage-ralph-uat-bg: rgba(220, 38, 38, 0.08);
 
   /* Semantics */
   --success: #16a34a;
@@ -85,19 +85,19 @@
   --border-subtle: #222230;
   --border-focus: #e5a54b;
 
-  --stage-requirements: #c084fc;
-  --stage-planning: #22d3ee;
-  --stage-plan-review: #fb923c;
-  --stage-implementation: #4ade80;
-  --stage-code-review: #60a5fa;
-  --stage-rca: #f87171;
+  --stage-discovery: #c084fc;
+  --stage-ralph-requirements: #22d3ee;
+  --stage-decomposition: #fb923c;
+  --stage-ralph-build: #4ade80;
+  --stage-ralph-code-review: #60a5fa;
+  --stage-ralph-uat: #f87171;
 
-  --stage-requirements-bg: rgba(192, 132, 252, 0.12);
-  --stage-planning-bg: rgba(34, 211, 238, 0.12);
-  --stage-plan-review-bg: rgba(251, 146, 60, 0.12);
-  --stage-implementation-bg: rgba(74, 222, 128, 0.12);
-  --stage-code-review-bg: rgba(96, 165, 250, 0.12);
-  --stage-rca-bg: rgba(248, 113, 113, 0.12);
+  --stage-discovery-bg: rgba(192, 132, 252, 0.12);
+  --stage-ralph-requirements-bg: rgba(34, 211, 238, 0.12);
+  --stage-decomposition-bg: rgba(234, 88, 12, 0.12);
+  --stage-ralph-build-bg: rgba(74, 222, 128, 0.12);
+  --stage-ralph-code-review-bg: rgba(96, 165, 250, 0.12);
+  --stage-ralph-uat-bg: rgba(248, 113, 113, 0.12);
 
   --success: #4ade80;
   --success-bg: rgba(74, 222, 128, 0.1);
@@ -609,35 +609,13 @@ input[type="checkbox"] {
 }
 
 /* Stage type accent — left border glow */
-.stage-card:has(.stage-type-requirements)  { border-left-color: var(--stage-requirements); }
-.stage-card:has(.stage-type-planning)       { border-left-color: var(--stage-planning); }
-.stage-card:has(.stage-type-plan_review)    { border-left-color: var(--stage-plan-review); }
-.stage-card:has(.stage-type-implementation) { border-left-color: var(--stage-implementation); }
-.stage-card:has(.stage-type-code_review)    { border-left-color: var(--stage-code-review); }
-.stage-card:has(.stage-type-rca)            { border-left-color: var(--stage-rca); }
+.stage-card:has(.stage-type-discovery)           { border-left-color: var(--stage-discovery); }
+.stage-card:has(.stage-type-ralph_requirements)  { border-left-color: var(--stage-ralph-requirements); }
+.stage-card:has(.stage-type-decomposition)       { border-left-color: var(--stage-decomposition); }
+.stage-card:has(.stage-type-ralph_build)         { border-left-color: var(--stage-ralph-build); }
+.stage-card:has(.stage-type-ralph_code_review)   { border-left-color: var(--stage-ralph-code-review); }
+.stage-card:has(.stage-type-ralph_uat)           { border-left-color: var(--stage-ralph-uat); }
 
-/* Drag handle */
-.drag-handle {
-  cursor: grab;
-  color: var(--text-muted);
-  padding: 2px 4px;
-  flex-shrink: 0;
-  user-select: none;
-  transition: color 0.15s;
-  opacity: 0.5;
-}
-
-.drag-handle:hover { color: var(--text-secondary); opacity: 1; }
-.drag-handle:active { cursor: grabbing; }
-
-/* Ghost (SortableJS) */
-.ghost, .sortable-ghost {
-  opacity: 0.3;
-  border: 2px dashed var(--accent);
-  background: var(--accent-dim);
-}
-
-.drag-handle.is-synthesizer { visibility: hidden; pointer-events: none; }
 
 /* ─── Import Modal ─────────────────────────────────────────── */
 
@@ -738,12 +716,12 @@ input[type="checkbox"] {
   color: var(--text-secondary);
 }
 
-.stage-type-requirements  { background: var(--stage-requirements-bg); color: var(--stage-requirements); }
-.stage-type-planning       { background: var(--stage-planning-bg); color: var(--stage-planning); }
-.stage-type-plan_review    { background: var(--stage-plan-review-bg); color: var(--stage-plan-review); }
-.stage-type-implementation { background: var(--stage-implementation-bg); color: var(--stage-implementation); }
-.stage-type-code_review    { background: var(--stage-code-review-bg); color: var(--stage-code-review); }
-.stage-type-rca            { background: var(--stage-rca-bg); color: var(--stage-rca); }
+.stage-type-discovery           { background: var(--stage-discovery-bg); color: var(--stage-discovery); }
+.stage-type-ralph_requirements  { background: var(--stage-ralph-requirements-bg); color: var(--stage-ralph-requirements); }
+.stage-type-decomposition       { background: var(--stage-decomposition-bg); color: var(--stage-decomposition); }
+.stage-type-ralph_build         { background: var(--stage-ralph-build-bg); color: var(--stage-ralph-build); }
+.stage-type-ralph_code_review   { background: var(--stage-ralph-code-review-bg); color: var(--stage-ralph-code-review); }
+.stage-type-ralph_uat           { background: var(--stage-ralph-uat-bg); color: var(--stage-ralph-uat); }
 
 /* ─── Stage Controls ───────────────────────────────────────── */
 .stage-controls {
@@ -846,7 +824,7 @@ input[type="checkbox"] {
   font-family: 'JetBrains Mono', monospace;
   font-weight: 600;
   font-size: 0.78rem;
-  color: var(--stage-rca);
+  color: var(--stage-discovery);
 }
 
 .rca-group-body { padding: 8px 10px 0; }
@@ -875,7 +853,7 @@ input[type="checkbox"] {
 }
 
 .phased-reviews-toggle:hover { color: var(--text-secondary); }
-.phased-reviews-badge { font-size: 0.72rem; font-weight: 600; color: var(--stage-implementation); }
+.phased-reviews-badge { font-size: 0.72rem; font-weight: 600; color: var(--stage-ralph-build); }
 .phased-reviews-badge-muted { color: var(--text-muted); }
 
 .phased-reviews-list {
@@ -1105,7 +1083,7 @@ input[type="checkbox"] {
 .badge-model { background: var(--badge-model); color: white; }
 .badge-built-in { background: var(--badge-built-in); color: white; }
 .badge-custom { background: var(--badge-custom); color: white; }
-.badge-synthesizer { background: var(--stage-planning-bg, #e8d5f5); color: var(--stage-planning-text, #6b21a8); font-weight: 600; }
+.badge-synthesizer { background: var(--stage-decomposition-bg, #e8d5f5); color: var(--stage-decomposition-text, #6b21a8); font-weight: 600; }
 
 .text-muted { color: var(--text-muted); }
 .text-secondary { color: var(--text-secondary); }

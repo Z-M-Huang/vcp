@@ -1,7 +1,7 @@
 {
   "name": "dev-buddy",
-  "version": "0.3.7",
-  "description": "Modular multi-AI stage orchestration with executor-based architecture, TDD enforcement, and configurable system prompts",
+  "version": "0.4.0",
+  "description": "Ralph loop architecture — multi-AI feature development with discovery, requirements, decomposition, build, code review, and UAT stages",
   "author": {
     "name": "Z-M-Huang"
   },
@@ -10,14 +10,14 @@
   "keywords": [
     "dev buddy",
     "dev-buddy",
+    "ralph",
     "orchestration",
+    "multi-ai",
     "executor",
     "system-prompts",
-    "tdd",
-    "code-review",
-    "planning",
-    "requirements",
-    "rca"
+    "discovery",
+    "uat",
+    "backpressure"
   ],
   "skills": "./skills/"
 }

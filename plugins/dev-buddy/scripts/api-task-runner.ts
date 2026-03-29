@@ -74,6 +74,8 @@ export interface AgentRunOptions {
   cwd: string;
   debugEnabled: boolean;
   presetName: string;
+  /** PascalCase tool names to restrict available tools. Empty/undefined = all tools. */
+  allowedTools?: string[];
 }
 
 export interface AgentRunResult {
@@ -88,12 +90,33 @@ export interface AgentRunner {
 
 // ================== TOOL DEFINITIONS ==================
 
+/** Canonical tool registry — single source of truth for Anthropic↔OpenAI name mapping. */
+export const TOOL_REGISTRY: ReadonlyArray<{ anthropic: string; openai: string }> = [
+  { anthropic: 'Read',  openai: 'read_file' },
+  { anthropic: 'Write', openai: 'write_file' },
+  { anthropic: 'Edit',  openai: 'edit_file' },
+  { anthropic: 'Bash',  openai: 'bash' },
+  { anthropic: 'Glob',  openai: 'glob' },
+  { anthropic: 'Grep',  openai: 'grep' },
+];
+
 /**
  * Tool names for the Anthropic Claude Agent SDK (PascalCase).
- * The OpenAI runner uses OPENAI_TOOLS (snake_case function names) for the same 6 capabilities.
- * Both arrays must track the same set of capabilities.
+ * Derived from TOOL_REGISTRY — do not modify directly.
  */
-export const ANTHROPIC_TOOL_NAMES = ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'] as const;
+export const ANTHROPIC_TOOL_NAMES = TOOL_REGISTRY.map(t => t.anthropic);
+
+/**
+ * Resolve allowed OpenAI tool names from --allowed-tools (PascalCase).
+ * Returns all OpenAI names when allowedTools is empty/undefined.
+ */
+export function resolveOpenAIAllowed(allowedTools?: string[]): Set<string> {
+  if (!allowedTools?.length) return new Set(TOOL_REGISTRY.map(t => t.openai));
+  const allowed = new Set(allowedTools);
+  return new Set(
+    TOOL_REGISTRY.filter(t => allowed.has(t.anthropic)).map(t => t.openai)
+  );
+}
 
 /** OpenAI function calling types. */
 export interface OpenAIMessage {
@@ -494,13 +517,18 @@ export class AnthropicRunner implements AgentRunner {
         details: `preset=${options.presetName} model=${options.model} key=${maskApiKey(this.preset.api_key)}`,
       }, options.debugEnabled);
 
+      // Filter tools based on --allowed-tools (PascalCase names)
+      const effectiveTools = options.allowedTools?.length
+        ? ANTHROPIC_TOOL_NAMES.filter(t => options.allowedTools!.includes(t))
+        : [...ANTHROPIC_TOOL_NAMES];
+
       const q = this.queryFn({
         prompt: task,
         options: {
           model: 'sonnet', // Alias — resolved to provider model via ANTHROPIC_DEFAULT_SONNET_MODEL env var
           env,
           permissionMode: 'default',
-          allowedTools: [...ANTHROPIC_TOOL_NAMES],
+          allowedTools: effectiveTools,
           ...(options.systemPromptContent && {
             systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: options.systemPromptContent },
           }),
@@ -566,6 +594,10 @@ export class OpenAIRunner implements AgentRunner {
     const baseUrl = this.preset.base_url.replace(/\/v1\/?$/, '');
     const deadline = Date.now() + options.timeoutMs;
 
+    // Filter OpenAI tools based on --allowed-tools (PascalCase → snake_case via registry)
+    const allowedOpenAINames = resolveOpenAIAllowed(options.allowedTools);
+    const effectiveOpenAITools = OPENAI_TOOLS.filter(t => allowedOpenAINames.has(t.function.name));
+
     for (let i = 0; i < OPENAI_MAX_ITERATIONS; i++) {
       if (Date.now() >= deadline) {
         throw new Error(`OpenAI session timed out after ${options.timeoutMs / 1000}s`);
@@ -578,7 +610,7 @@ export class OpenAIRunner implements AgentRunner {
       const body: Record<string, unknown> = {
         model: options.model,
         messages,
-        tools: OPENAI_TOOLS,
+        tools: effectiveOpenAITools,
         max_tokens: effectiveMaxTokens,
       };
       if (this.preset.reasoning_effort) {
@@ -619,6 +651,14 @@ export class OpenAIRunner implements AgentRunner {
       // If model wants to call tools, execute them and continue the loop
       if (choice.finish_reason === 'tool_calls' && choice.message.tool_calls?.length) {
         for (const tc of choice.message.tool_calls) {
+          // Defense-in-depth: reject tool calls not in the allowed set
+          if (!allowedOpenAINames.has(tc.function.name)) {
+            messages.push({
+              role: 'tool', tool_call_id: tc.id,
+              content: `Error: Tool '${tc.function.name}' is not allowed. Available: ${[...allowedOpenAINames].join(', ')}`,
+            });
+            continue;
+          }
           let toolArgs: Record<string, unknown> = {};
           try { toolArgs = JSON.parse(tc.function.arguments); } catch { /* empty args */ }
           const result = await executeToolCall(tc.function.name, toolArgs);
@@ -679,6 +719,8 @@ export interface ParsedArgs {
   stageType?: string;
   /** When true, print result text to stdout instead of JSON wrapper. For one-shot mode. */
   stream: boolean;
+  /** Comma-separated PascalCase tool names to restrict available tools. */
+  allowedTools?: string[];
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -732,6 +774,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       case '--stream':
         result.stream = true;
+        break;
+      case '--allowed-tools':
+        if (!next) throw new Error('--allowed-tools requires a value');
+        result.allowedTools = next.split(',').map(t => t.trim());
+        i++;
+        break;
+      default:
+        if (arg.startsWith('--')) throw new Error(`Unknown flag: ${arg}`);
         break;
     }
   }
@@ -882,6 +932,7 @@ async function main(): Promise<void> {
     cwd: args.cwd,
     debugEnabled,
     presetName: args.preset,
+    allowedTools: args.allowedTools,
   });
 
   // Stream mode: plain text to stdout, errors to stderr (for one-shot / stdio:inherit)

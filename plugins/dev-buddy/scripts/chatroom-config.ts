@@ -12,7 +12,8 @@ import path from 'path';
 import { CONFIG_DIR, readPresets } from './preset-utils.ts';
 import type { ChatroomConfig, ChatroomParticipant } from '../types/chatroom.ts';
 import type { PresetConfig, CliPreset } from '../types/presets.ts';
-import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
+import { MODEL_NAME_REGEX, STAGE_DEFINITIONS, LEGACY_AGENT_TYPES, LEGACY_STAGE_MAPPING } from '../types/stage-definitions.ts';
+import type { LegacyStageType } from '../types/stage-definitions.ts';
 import { atomicWriteFile } from './pipeline-config.ts';
 import { discoverSystemPrompts } from './system-prompts.ts';
 
@@ -105,7 +106,7 @@ export function loadChatroomConfig(configPath = CHATROOM_CONFIG_PATH): ChatroomC
   }
 
   // Merge with defaults
-  return {
+  const result: ChatroomConfig = {
     participants: Array.isArray(parsed.participants)
       ? (parsed.participants as ChatroomParticipant[])
       : [...DEFAULT_CHATROOM_CONFIG.participants],
@@ -113,6 +114,29 @@ export function loadChatroomConfig(configPath = CHATROOM_CONFIG_PATH): ChatroomC
       ? (parsed.max_rounds as number)
       : DEFAULT_CHATROOM_CONFIG.max_rounds,
   };
+
+  // Migrate legacy system_prompt names to Ralph equivalents.
+  // Old built-in prompt files are deleted; derive new name from:
+  // old prompt → old stage (reverse LEGACY_AGENT_TYPES) → new stage → new default prompt
+  const oldPromptToStage: Record<string, LegacyStageType> = {};
+  for (const [stage, prompt] of Object.entries(LEGACY_AGENT_TYPES)) {
+    oldPromptToStage[prompt] = stage as LegacyStageType;
+  }
+  let migrated = false;
+  for (const p of result.participants) {
+    if (p.system_prompt && oldPromptToStage[p.system_prompt]) {
+      const legacyStage = oldPromptToStage[p.system_prompt];
+      const newStage = LEGACY_STAGE_MAPPING[legacyStage];
+      p.system_prompt = STAGE_DEFINITIONS[newStage].agent_type;
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    atomicWriteFile(configPath, result);
+    console.error(`[Chatroom] Migrated legacy system_prompt names to Ralph equivalents.`);
+  }
+
+  return result;
 }
 
 // ─── Config Saving ───────────────────────────────────────────────────────────

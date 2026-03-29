@@ -20,7 +20,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { readPresets, writePresets, validatePreset, maskApiKey, maskPresetKeys, CONFIG_DIR } from './preset-utils.ts';
-import { loadDevBuddyConfig, validateDevBuddyConfig, validatePipelineName, fetchWithTimeout, atomicWriteFile, CONFIG_PATH as PIPELINE_CONFIG_PATH } from './pipeline-config.ts';
+import { loadDevBuddyConfig, validateDevBuddyConfig, fetchWithTimeout, atomicWriteFile, CONFIG_PATH as PIPELINE_CONFIG_PATH } from './pipeline-config.ts';
 import { discoverSystemPrompts, getSystemPrompt, writeCustomPrompt, deleteCustomPrompt } from './system-prompts.ts';
 import { loadChatroomConfig, saveChatroomConfig, validateChatroomConfig, DEFAULT_CHATROOM_CONFIG } from './chatroom-config.ts';
 import type { ChatroomConfig } from '../types/chatroom.ts';
@@ -765,89 +765,18 @@ async function handleApiRequest(
       }
     }
 
-    // --- Pipelines routes (v4 custom pipelines) ---
-    if (pathname === '/api/pipelines') {
-      if (req.method === 'GET') {
-        const config = loadDevBuddyConfig();
-        return jsonResponse({ pipelines: config.pipelines }, 200, corsHeaders);
-      }
-      if (req.method === 'PUT') {
-        const body = await req.json() as Record<string, unknown>;
-        const config = loadDevBuddyConfig();
-        if (body.pipelines && typeof body.pipelines === 'object') {
-          config.pipelines = body.pipelines as typeof config.pipelines;
-        }
-        validateDevBuddyConfig(config);
-        atomicWriteFile(PIPELINE_CONFIG_PATH, config);
-        return jsonResponse({ success: true }, 200, corsHeaders);
-      }
-      if (req.method === 'POST') {
-        // Create a new pipeline
-        const body = await req.json() as Record<string, unknown>;
-        const name = body.name as string;
-        if (!name) return jsonResponse({ error: { message: 'Pipeline name is required' } }, 400, corsHeaders);
-        validatePipelineName(name);
-        const config = loadDevBuddyConfig();
-        if (config.pipelines[name]) {
-          return jsonResponse({ error: { message: `Pipeline '${name}' already exists` } }, 409, corsHeaders);
-        }
-        config.pipelines[name] = (body.stages as typeof config.pipelines[string]) || [];
-        validateDevBuddyConfig(config);
-        atomicWriteFile(PIPELINE_CONFIG_PATH, config);
-        return jsonResponse({ success: true }, 201, corsHeaders);
-      }
-    }
-
-    // --- Individual pipeline routes ---
-    const pipelineMatch = pathname.match(/^\/api\/pipelines\/([^/]+)$/);
-    if (pipelineMatch) {
-      const pipelineName = decodeURIComponent(pipelineMatch[1]);
-      if (req.method === 'DELETE') {
-        const config = loadDevBuddyConfig();
-        if (!config.pipelines[pipelineName]) {
-          return jsonResponse({ error: { message: `Pipeline '${pipelineName}' not found` } }, 404, corsHeaders);
-        }
-        if (Object.keys(config.pipelines).length <= 1) {
-          return jsonResponse({ error: { message: 'Cannot delete the last pipeline' } }, 400, corsHeaders);
-        }
-        delete config.pipelines[pipelineName];
-        atomicWriteFile(PIPELINE_CONFIG_PATH, config);
-        return jsonResponse({ success: true }, 200, corsHeaders);
-      }
-    }
-
-    // --- Pipeline rename ---
-    const renameMatch = pathname.match(/^\/api\/pipelines\/([^/]+)\/rename$/);
-    if (renameMatch && req.method === 'PUT') {
-      const oldName = decodeURIComponent(renameMatch[1]);
-      const body = await req.json() as Record<string, unknown>;
-      const newName = body.name as string;
-      if (!newName) return jsonResponse({ error: { message: 'New name is required' } }, 400, corsHeaders);
-      validatePipelineName(newName);
-      const config = loadDevBuddyConfig();
-      if (!config.pipelines[oldName]) {
-        return jsonResponse({ error: { message: `Pipeline '${oldName}' not found` } }, 404, corsHeaders);
-      }
-      if (config.pipelines[newName]) {
-        return jsonResponse({ error: { message: `Pipeline '${newName}' already exists` } }, 409, corsHeaders);
-      }
-      config.pipelines[newName] = config.pipelines[oldName];
-      delete config.pipelines[oldName];
-      atomicWriteFile(PIPELINE_CONFIG_PATH, config);
-      return jsonResponse({ success: true }, 200, corsHeaders);
-    }
-
     // --- v3 Settings routes ---
     if (pathname === '/api/settings') {
       if (req.method === 'GET') {
         const config = loadDevBuddyConfig();
-        return jsonResponse({ max_iterations: config.max_iterations, max_tdd_iterations: config.max_tdd_iterations, theme: config.theme }, 200, corsHeaders);
+        return jsonResponse({ max_iterations: config.max_iterations, max_build_attempts: config.max_build_attempts, max_outer_iterations: config.max_outer_iterations, theme: config.theme }, 200, corsHeaders);
       }
       if (req.method === 'PUT') {
         const body = await req.json() as Record<string, unknown>;
         const config = loadDevBuddyConfig();
         if (typeof body.max_iterations === 'number') config.max_iterations = body.max_iterations;
-        if (typeof body.max_tdd_iterations === 'number') config.max_tdd_iterations = body.max_tdd_iterations;
+        if (typeof body.max_build_attempts === 'number') config.max_build_attempts = body.max_build_attempts;
+        if (typeof body.max_outer_iterations === 'number') config.max_outer_iterations = body.max_outer_iterations;
         if (typeof body.theme === 'string' && (body.theme === 'light' || body.theme === 'dark')) config.theme = body.theme as 'light' | 'dark';
         validateDevBuddyConfig(config);
         atomicWriteFile(PIPELINE_CONFIG_PATH, config);

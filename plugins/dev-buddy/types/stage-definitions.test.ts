@@ -1,234 +1,105 @@
 import { describe, expect, test } from 'bun:test';
-import { sanitizeForFilename, getV3OutputFileName, isValidStageEntry, VALID_STAGE_TYPES, SAFE_PATH_RE } from './stage-definitions.ts';
-
-// ─── sanitizeForFilename ─────────────────────────────────────────────────────
-
-describe('sanitizeForFilename', () => {
-  test('lowercases input', () => {
-    expect(sanitizeForFilename('O3')).toBe('o3');
-    expect(sanitizeForFilename('Sonnet')).toBe('sonnet');
-  });
-
-  test('replaces spaces with hyphens', () => {
-    expect(sanitizeForFilename('Codex CLI')).toBe('codex-cli');
-  });
-
-  test('replaces underscores with hyphens', () => {
-    expect(sanitizeForFilename('gpt_4')).toBe('gpt-4');
-  });
-
-  test('strips unsafe characters', () => {
-    expect(sanitizeForFilename('foo/bar')).toBe('foobar');
-    expect(sanitizeForFilename('a@b#c')).toBe('abc');
-  });
-
-  test('collapses consecutive hyphens', () => {
-    expect(sanitizeForFilename('a   b')).toBe('a-b');
-    expect(sanitizeForFilename('a___b')).toBe('a-b');
-    expect(sanitizeForFilename('a - b')).toBe('a-b');
-  });
-
-  test('trims leading and trailing hyphens', () => {
-    expect(sanitizeForFilename(' hello ')).toBe('hello');
-    expect(sanitizeForFilename('_leading_')).toBe('leading');
-  });
-
-  test('preserves dots in model names', () => {
-    expect(sanitizeForFilename('gpt-5.3-codex')).toBe('gpt-5.3-codex');
-    expect(sanitizeForFilename('M2.5')).toBe('m2.5');
-  });
-
-  test('preserves already-clean names', () => {
-    expect(sanitizeForFilename('anthropic-subscription')).toBe('anthropic-subscription');
-    expect(sanitizeForFilename('sonnet')).toBe('sonnet');
-    expect(sanitizeForFilename('o3')).toBe('o3');
-  });
-
-  test('throws on empty string', () => {
-    expect(() => sanitizeForFilename('')).toThrow('Cannot sanitize');
-  });
-
-  test('throws on whitespace-only string', () => {
-    expect(() => sanitizeForFilename('   ')).toThrow('Cannot sanitize');
-  });
-
-  test('throws on dot', () => {
-    expect(() => sanitizeForFilename('.')).toThrow('Cannot sanitize');
-  });
-
-  test('throws on double dot', () => {
-    expect(() => sanitizeForFilename('..')).toThrow('Cannot sanitize');
-  });
-
-  test('throws when all chars are stripped', () => {
-    expect(() => sanitizeForFilename('///???')).toThrow('Cannot sanitize');
-  });
-});
-
-// ─── getV3OutputFileName ────────────────────────────────────────────────────
-
-describe('getV3OutputFileName', () => {
-  test('includes system prompt name for plan-review', () => {
-    expect(getV3OutputFileName('plan-review', 'plan-reviewer', 1, 'anthropic-subscription', 'sonnet', 1))
-      .toBe('plan-review-plan-reviewer-anthropic-subscription-sonnet-1.json');
-  });
-
-  test('includes system prompt name for code-review', () => {
-    expect(getV3OutputFileName('code-review', 'code-reviewer', 1, 'anthropic-subscription', 'opus', 1))
-      .toBe('code-review-code-reviewer-anthropic-subscription-opus-1.json');
-  });
-
-  test('omits version for review stages', () => {
-    const name = getV3OutputFileName('plan-review', 'plan-reviewer', 1, 'sub', 'sonnet', 1);
-    expect(name).not.toContain('-v1');
-    expect(name).toBe('plan-review-plan-reviewer-sub-sonnet-1.json');
-  });
-
-  test('keeps version for rca', () => {
-    expect(getV3OutputFileName('rca', 'root-cause-analyst', 1, 'anthropic-subscription', 'sonnet', 1))
-      .toBe('rca-root-cause-analyst-anthropic-subscription-sonnet-1-v1.json');
-  });
-
-  test('rca version increments', () => {
-    expect(getV3OutputFileName('rca', 'root-cause-analyst', 1, 'sub', 'sonnet', 2))
-      .toBe('rca-root-cause-analyst-sub-sonnet-1-v2.json');
-  });
-
-  test('falls back to v2 pattern for singletons', () => {
-    expect(getV3OutputFileName('requirements', 'requirements-gatherer', 1, 'sub', 'opus', 1))
-      .toBe('user-story/manifest.json');
-  });
-
-  test('sanitizes system prompt name', () => {
-    expect(getV3OutputFileName('plan-review', 'Custom Reviewer', 1, 'sub', 'sonnet', 1))
-      .toBe('plan-review-custom-reviewer-sub-sonnet-1.json');
-  });
-});
-
-// ─── SAFE_PATH_RE compatibility ─────────────────────────────────────────────
-
-describe('SAFE_PATH_RE', () => {
-  test('validates new unversioned review filenames', () => {
-    expect(SAFE_PATH_RE.test('plan-review-plan-reviewer-sub-sonnet-1.json')).toBe(true);
-    expect(SAFE_PATH_RE.test('code-review-code-reviewer-sub-opus-2.json')).toBe(true);
-  });
-
-  test('validates old versioned review filenames (backward compat)', () => {
-    expect(SAFE_PATH_RE.test('plan-review-sub-sonnet-1-v1.json')).toBe(true);
-    expect(SAFE_PATH_RE.test('code-review-sub-opus-2-v1.json')).toBe(true);
-  });
-
-  test('validates rca versioned filenames', () => {
-    expect(SAFE_PATH_RE.test('rca-root-cause-analyst-sub-sonnet-1-v1.json')).toBe(true);
-  });
-
-  test('validates singleton paths', () => {
-    expect(SAFE_PATH_RE.test('user-story/manifest.json')).toBe(true);
-    expect(SAFE_PATH_RE.test('plan/manifest.json')).toBe(true);
-    expect(SAFE_PATH_RE.test('impl-result.json')).toBe(true);
-  });
-
-  test('rejects path traversal', () => {
-    expect(SAFE_PATH_RE.test('../evil.json')).toBe(false);
-    expect(SAFE_PATH_RE.test('../../etc/passwd')).toBe(false);
-  });
-});
+import {
+  VALID_STAGE_TYPES,
+  VALID_LEGACY_STAGE_TYPES,
+  STAGE_DEFINITIONS,
+  LEGACY_STAGE_MAPPING,
+  LEGACY_AGENT_TYPES,
+  MODEL_NAME_REGEX,
+} from './stage-definitions.ts';
+import type { StageType, LegacyStageType } from './stage-definitions.ts';
 
 // ─── VALID_STAGE_TYPES ───────────────────────────────────────────────────────
 
 describe('VALID_STAGE_TYPES', () => {
-  test('contains all 6 stage types', () => {
+  test('contains all 6 Ralph stage types', () => {
     expect(VALID_STAGE_TYPES.size).toBe(6);
-    for (const t of ['requirements', 'planning', 'plan-review', 'implementation', 'code-review', 'rca']) {
+    for (const t of ['discovery', 'ralph-requirements', 'decomposition', 'ralph-build', 'ralph-code-review', 'ralph-uat']) {
       expect(VALID_STAGE_TYPES.has(t)).toBe(true);
+    }
+  });
+
+  test('does not contain legacy stage types', () => {
+    for (const t of ['requirements', 'planning', 'plan-review', 'implementation', 'code-review', 'rca']) {
+      expect(VALID_STAGE_TYPES.has(t)).toBe(false);
     }
   });
 });
 
-// ─── isValidStageEntry ───────────────────────────────────────────────────────
+// ─── STAGE_DEFINITIONS ──────────────────────────────────────────────────────
 
-describe('isValidStageEntry', () => {
-  test('accepts valid plan-review entry (new format)', () => {
-    expect(isValidStageEntry({ type: 'plan-review', output_file: 'plan-review-plan-reviewer-sub-sonnet-1.json' })).toBe(true);
+describe('STAGE_DEFINITIONS', () => {
+  test('every stage has agent_type', () => {
+    for (const [, def] of Object.entries(STAGE_DEFINITIONS)) {
+      expect(typeof def.agent_type).toBe('string');
+      expect(def.agent_type.length).toBeGreaterThan(0);
+    }
   });
 
-  test('accepts valid plan-review entry (old versioned format)', () => {
-    expect(isValidStageEntry({ type: 'plan-review', output_file: 'plan-review-sub-sonnet-1-v1.json' })).toBe(true);
+  test('ralph-build is singleton with max 1 executor', () => {
+    expect(STAGE_DEFINITIONS['ralph-build'].singleton).toBe(true);
+    expect(STAGE_DEFINITIONS['ralph-build'].max_executors).toBe(1);
   });
 
-  test('accepts valid code-review entry', () => {
-    expect(isValidStageEntry({ type: 'code-review', output_file: 'code-review-code-reviewer-sub-opus-2.json' })).toBe(true);
+  test('ralph-uat is singleton with max 1 executor', () => {
+    expect(STAGE_DEFINITIONS['ralph-uat'].singleton).toBe(true);
+    expect(STAGE_DEFINITIONS['ralph-uat'].max_executors).toBe(1);
   });
 
-  test('accepts valid singleton entries', () => {
-    expect(isValidStageEntry({ type: 'requirements', output_file: 'user-story/manifest.json' })).toBe(true);
-    expect(isValidStageEntry({ type: 'planning', output_file: 'plan/manifest.json' })).toBe(true);
-    expect(isValidStageEntry({ type: 'implementation', output_file: 'impl-result.json' })).toBe(true);
+  test('multi-executor stages have no max_executors', () => {
+    expect(STAGE_DEFINITIONS['discovery'].max_executors).toBeUndefined();
+    expect(STAGE_DEFINITIONS['ralph-requirements'].max_executors).toBeUndefined();
+    expect(STAGE_DEFINITIONS['decomposition'].max_executors).toBeUndefined();
+    expect(STAGE_DEFINITIONS['ralph-code-review'].max_executors).toBeUndefined();
+  });
+});
+
+// ─── Legacy Mappings ─────────────────────────────────────────────────────────
+
+describe('LEGACY_STAGE_MAPPING', () => {
+  test('maps all 6 legacy types to valid Ralph types', () => {
+    const legacyTypes: LegacyStageType[] = ['requirements', 'planning', 'plan-review', 'implementation', 'code-review', 'rca'];
+    for (const lt of legacyTypes) {
+      const mapped = LEGACY_STAGE_MAPPING[lt];
+      expect(VALID_STAGE_TYPES.has(mapped)).toBe(true);
+    }
   });
 
-  test('accepts valid rca entry', () => {
-    expect(isValidStageEntry({ type: 'rca', output_file: 'rca-sub-sonnet-1-v1.json' })).toBe(true);
+  test('plan-review and rca both map to discovery', () => {
+    expect(LEGACY_STAGE_MAPPING['plan-review']).toBe('discovery');
+    expect(LEGACY_STAGE_MAPPING['rca']).toBe('discovery');
+  });
+});
+
+describe('LEGACY_AGENT_TYPES', () => {
+  test('has agent types for all 6 legacy stages', () => {
+    expect(Object.keys(LEGACY_AGENT_TYPES).length).toBe(6);
+  });
+});
+
+// ─── VALID_LEGACY_STAGE_TYPES ────────────────────────────────────────────────
+
+describe('VALID_LEGACY_STAGE_TYPES', () => {
+  test('contains all 6 legacy types', () => {
+    expect(VALID_LEGACY_STAGE_TYPES.size).toBe(6);
+    for (const t of ['requirements', 'planning', 'plan-review', 'implementation', 'code-review', 'rca']) {
+      expect(VALID_LEGACY_STAGE_TYPES.has(t)).toBe(true);
+    }
+  });
+});
+
+// ─── MODEL_NAME_REGEX ────────────────────────────────────────────────────────
+
+describe('MODEL_NAME_REGEX', () => {
+  test('accepts valid model names', () => {
+    expect(MODEL_NAME_REGEX.test('sonnet')).toBe(true);
+    expect(MODEL_NAME_REGEX.test('gpt-5.4')).toBe(true);
+    expect(MODEL_NAME_REGEX.test('MiniMax-M2.5')).toBe(true);
   });
 
-  test('accepts extra properties (forward-compatible)', () => {
-    expect(isValidStageEntry({
-      type: 'code-review',
-      output_file: 'code-review-code-reviewer-sub-sonnet-1.json',
-      current_version: 1,
-      provider: 'anthropic-subscription',
-    })).toBe(true);
-  });
-
-  test('rejects null', () => {
-    expect(isValidStageEntry(null)).toBe(false);
-  });
-
-  test('rejects undefined', () => {
-    expect(isValidStageEntry(undefined)).toBe(false);
-  });
-
-  test('rejects non-object', () => {
-    expect(isValidStageEntry('plan-review')).toBe(false);
-    expect(isValidStageEntry(42)).toBe(false);
-  });
-
-  test('rejects missing type', () => {
-    expect(isValidStageEntry({ output_file: 'plan-review-sub-sonnet-1.json' })).toBe(false);
-  });
-
-  test('rejects missing output_file', () => {
-    expect(isValidStageEntry({ type: 'plan-review' })).toBe(false);
-  });
-
-  test('rejects unknown stage type', () => {
-    expect(isValidStageEntry({ type: 'not-a-stage', output_file: 'foo.json' })).toBe(false);
-  });
-
-  test('rejects path traversal in output_file', () => {
-    expect(isValidStageEntry({ type: 'plan-review', output_file: '../../package.json' })).toBe(false);
-    expect(isValidStageEntry({ type: 'plan-review', output_file: '../etc/passwd' })).toBe(false);
-  });
-
-  test('rejects absolute paths in output_file', () => {
-    expect(isValidStageEntry({ type: 'plan-review', output_file: '/etc/passwd' })).toBe(false);
-  });
-
-  test('accepts output_file with safe path separators', () => {
-    expect(isValidStageEntry({ type: 'plan-review', output_file: 'subdir/review.json' })).toBe(true);
-    expect(isValidStageEntry({ type: 'requirements', output_file: 'user-story/manifest.json' })).toBe(true);
-    expect(isValidStageEntry({ type: 'planning', output_file: 'plan/manifest.json' })).toBe(true);
-  });
-
-  test('rejects non-json output_file', () => {
-    expect(isValidStageEntry({ type: 'plan-review', output_file: 'review.txt' })).toBe(false);
-    expect(isValidStageEntry({ type: 'plan-review', output_file: 'review' })).toBe(false);
-  });
-
-  test('rejects output_file starting with dot', () => {
-    expect(isValidStageEntry({ type: 'plan-review', output_file: '.hidden.json' })).toBe(false);
-  });
-
-  test('rejects empty output_file', () => {
-    expect(isValidStageEntry({ type: 'plan-review', output_file: '' })).toBe(false);
+  test('rejects names with special chars', () => {
+    expect(MODEL_NAME_REGEX.test('model name')).toBe(false);
+    expect(MODEL_NAME_REGEX.test('model;drop')).toBe(false);
+    expect(MODEL_NAME_REGEX.test('')).toBe(false);
   });
 });

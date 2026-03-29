@@ -1,7 +1,7 @@
 # Review Guidelines
 
-Provider-neutral reference for all review stages (plan review, code review).
-Loaded as system prompt for API providers; referenced by CLI executor prompts.
+Provider-neutral reference for the ralph-code-review stage.
+Loaded as system prompt for API providers.
 
 ---
 

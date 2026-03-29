@@ -172,14 +172,10 @@ Claude Opus 规划 ──→ Claude Sonnet 评审 ──→ Claude Opus 评审 �
 # 安装 Dev Buddy
 /plugin install vcp@dev-buddy
 
-# 运行任意 pipeline
-/dev-buddy-run feature 添加基于 JWT 的用户认证
+# 运行 Ralph 工作流
+/dev-buddy-ralph 添加基于 JWT 的用户认证
 
-# 已弃用的别名（将在未来版本中移除）：
-# /dev-buddy-feature-implement → 请使用 /dev-buddy-run feature
-# /dev-buddy-bug-fix → 请使用 /dev-buddy-run bug-fix
-
-# 通过 Web 门户配置 pipeline 阶段和 provider
+# 通过 Web 门户配置阶段和 provider
 /dev-buddy-config
 ```
 
@@ -189,36 +185,27 @@ Claude Opus 规划 ──→ Claude Sonnet 评审 ──→ Claude Opus 评审 �
 
 | Skill | 命令 | 描述 |
 |-------|------|------|
-| 运行 Pipeline | `/dev-buddy-run <pipeline-name>` | 运行任意用户定义的 pipeline |
-| 功能实现 | `/dev-buddy-feature-implement` | **已弃用** — 请使用 `/dev-buddy-run feature` |
-| Bug 修复 | `/dev-buddy-bug-fix` | **已弃用** — 请使用 `/dev-buddy-run bug-fix` |
-| 规划 | `/dev-buddy-plan` | 从用户故事创建实现计划，TDD 测试生成 + 步骤到 AC 映射 |
-| 评审 | `/dev-buddy-review` | 评审计划（`--plan`）或代码（`--code`），包含误报分析和用户确认检查点 |
-| 实现 | `/dev-buddy-implement` | 使用 TDD 循环实现计划，每步后运行测试 |
-| 需求 | `/dev-buddy-requirements` | 收集需求，带来源追踪 |
-| 根因分析 | `/dev-buddy-rca` | 根因分析，仅输出诊断结果 |
+| Ralph | `/dev-buddy-ralph <描述>` | 完整的 6 阶段特性开发工作流，包含双循环和多 AI 多样性 |
+| 对话室 | `/dev-buddy-chatroom <主题>` | 多 AI 竞争辩论，迭代达成共识 |
 | 单次执行 | `/dev-buddy-once` | 使用指定 AI provider 和模型运行单个任务 |
-| 配置 | `/dev-buddy-config` | 管理 pipeline 阶段、provider 和模型的 Web 门户 |
-| 管理 Preset | `/dev-buddy-manage-presets` | 列出、添加、更新或删除 AI provider preset |
+| 配置 | `/dev-buddy-config` | 管理阶段、preset、系统提示和设置的 Web 门户 |
 
 ## Agent 参考
 
-| Agent | 角色 |
-|-------|------|
-| requirements-gatherer | 将专家发现综合为完整规格说明 |
-| planner | 根据需求和代码库分析设计实现计划 |
-| plan-reviewer | 评审计划的完整性、正确性和安全性 |
-| implementer | 执行计划，创建子任务并设置任务依赖 |
-| code-reviewer | 从安全、架构、质量和正确性角度评审代码 |
-| root-cause-analyst | 调查 bug 以识别根因与表象 |
-| cli-executor | 使用 preset 模板执行基于 CLI 的评审 |
+| Agent | 阶段 | 角色 |
+|-------|------|------|
+| discoverer | Discovery | 代码库和应用探索者 |
+| ralph-requirements-analyst | Requirements | AC 和 UAT 设计师 |
+| decomposer | Decomposition | 任务分解专家 |
+| unit-builder | Build | 专注的单元实现者 |
+| ralph-code-reviewer | Code Review | 语义漂移检测器 |
+| uat-evaluator | UAT | 悲观主义测试执行者 |
 
 ## Hook 参考
 
 | Hook | 触发条件 | 描述 |
 |------|----------|------|
 | guidance-hook | UserPromptSubmit | 向用户提示注入 pipeline 引导信息 |
-| *（评审验证由 `cli-executor.ts` 和 `dev-buddy-review` SKILL.md 处理）* | | |
 
 ---
 

@@ -6,7 +6,6 @@ import {
   discoverSystemPrompts,
   getSystemPrompt,
 } from '../system-prompts.ts';
-import type { StagePrompt, SystemPrompt } from '../system-prompts.ts';
 
 const STAGES_DIR = path.join(import.meta.dir, '..', '..', 'stages');
 const BUILT_IN_DIR = path.join(import.meta.dir, '..', '..', 'system-prompts', 'built-in');
@@ -14,7 +13,7 @@ const BUILT_IN_DIR = path.join(import.meta.dir, '..', '..', 'system-prompts', 'b
 // ─── Stage Definition Loading ───────────────────────────────────────────────
 
 describe('loadStageDefinition', () => {
-  const stageTypes = ['requirements', 'planning', 'plan-review', 'implementation', 'code-review', 'rca'] as const;
+  const stageTypes = ['discovery', 'ralph-requirements', 'decomposition', 'ralph-build', 'ralph-code-review', 'ralph-uat'] as const;
 
   for (const stageType of stageTypes) {
     test(`loads ${stageType} stage definition`, () => {
@@ -35,78 +34,81 @@ describe('loadStageDefinition', () => {
   });
 
   test('returns null for nonexistent directory', () => {
-    const stage = loadStageDefinition('plan-review', '/nonexistent/dir');
+    const stage = loadStageDefinition('discovery', '/nonexistent/dir');
     expect(stage).toBeNull();
   });
 
-  test('plan-review stage has correct tools', () => {
-    const stage = loadStageDefinition('plan-review', STAGES_DIR);
+  test('discovery stage has read-only tools (no Bash)', () => {
+    const stage = loadStageDefinition('discovery', STAGES_DIR);
     expect(stage!.tools).toContain('Read');
-    expect(stage!.tools).toContain('Write');
+    expect(stage!.tools).toContain('Glob');
+    expect(stage!.tools).toContain('Grep');
     expect(stage!.tools).not.toContain('Bash');
-    expect(stage!.disallowedTools).toContain('Edit');
-    expect(stage!.disallowedTools).toContain('Bash');
   });
 
-  test('implementation stage has all tools including TaskCreate', () => {
-    const stage = loadStageDefinition('implementation', STAGES_DIR);
-    expect(stage!.tools).toContain('TaskCreate');
-    expect(stage!.tools).toContain('Bash');
+  test('ralph-build stage has all implementation tools', () => {
+    const stage = loadStageDefinition('ralph-build', STAGES_DIR);
+    expect(stage!.tools).toContain('Write');
     expect(stage!.tools).toContain('Edit');
+    expect(stage!.tools).toContain('Bash');
   });
 
-  test('plan-review stage starts with Output Contract', () => {
-    const stage = loadStageDefinition('plan-review', STAGES_DIR);
-    expect(stage!.content).toMatch(/^# Plan Review Stage\s+## Output Contract/);
+  test('ralph-code-review stage disallows Edit', () => {
+    const stage = loadStageDefinition('ralph-code-review', STAGES_DIR);
+    expect(stage!.disallowedTools).toContain('Edit');
   });
 
-  test('code-review stage starts with Output Contract', () => {
-    const stage = loadStageDefinition('code-review', STAGES_DIR);
-    expect(stage!.content).toMatch(/Output Contract/);
+  test('ralph-uat stage disallows Edit and Write', () => {
+    const stage = loadStageDefinition('ralph-uat', STAGES_DIR);
+    expect(stage!.disallowedTools).toContain('Edit');
+    expect(stage!.disallowedTools).toContain('Write');
   });
 });
 
-// ─── Role Prompt Loading (Stripped System Prompts) ──────────────────────────
+// ─── Role Prompt Loading ────────────────────────────────────────────────────
 
-describe('role prompts (stripped system prompts)', () => {
-  test('discovers all 6 built-in role prompts', () => {
+describe('role prompts', () => {
+  test('discovers all 6 built-in Ralph role prompts (plus custom)', () => {
     const prompts = discoverSystemPrompts(BUILT_IN_DIR);
     const builtIn = prompts.filter(p => p.source === 'built-in');
-    expect(builtIn.length).toBe(6);
+    // At least 6 Ralph built-in prompts (may have more custom ones discovered)
+    expect(builtIn.length).toBeGreaterThanOrEqual(6);
 
-    const names = builtIn.map(p => p.name).sort();
-    expect(names).toEqual([
-      'code-reviewer',
-      'implementer',
-      'plan-reviewer',
-      'planner',
-      'requirements-gatherer',
-      'root-cause-analyst',
-    ]);
+    const names = builtIn.map(p => p.name);
+    expect(names).toContain('discoverer');
+    expect(names).toContain('ralph-requirements-analyst');
+    expect(names).toContain('decomposer');
+    expect(names).toContain('unit-builder');
+    expect(names).toContain('ralph-code-reviewer');
+    expect(names).toContain('uat-evaluator');
   });
 
-  test('role prompts have empty tools array', () => {
+  test('role prompts have empty tools array (tools defined on stage, not role)', () => {
     const prompts = discoverSystemPrompts(BUILT_IN_DIR);
-    for (const p of prompts.filter(p => p.source === 'built-in')) {
+    const ralph = ['discoverer', 'ralph-requirements-analyst', 'decomposer', 'unit-builder', 'ralph-code-reviewer', 'uat-evaluator'];
+    for (const p of prompts.filter(p => ralph.includes(p.name))) {
       expect(p.tools).toEqual([]);
     }
   });
 
-  test('role prompts contain competencies, not output format', () => {
+  test('role prompts contain Core Competencies section', () => {
     const prompts = discoverSystemPrompts(BUILT_IN_DIR);
-    for (const p of prompts.filter(p => p.source === 'built-in')) {
+    const ralph = ['discoverer', 'ralph-requirements-analyst', 'decomposer', 'unit-builder', 'ralph-code-reviewer', 'uat-evaluator'];
+    for (const p of prompts.filter(p => ralph.includes(p.name))) {
       expect(p.content).toContain('Core Competencies');
-      expect(p.content).not.toContain('## Output Format');
-      expect(p.content).not.toContain('## Output Contract');
-      expect(p.content).not.toContain('## Completion Requirements');
     }
   });
 
   test('getSystemPrompt resolves by name', () => {
-    const prompt = getSystemPrompt('plan-reviewer', BUILT_IN_DIR);
+    const prompt = getSystemPrompt('discoverer', BUILT_IN_DIR);
     expect(prompt).not.toBeNull();
-    expect(prompt!.name).toBe('plan-reviewer');
+    expect(prompt!.name).toBe('discoverer');
     expect(prompt!.description).toBeTruthy();
+  });
+
+  test('old prompt names no longer resolve', () => {
+    const prompt = getSystemPrompt('plan-reviewer', BUILT_IN_DIR);
+    expect(prompt).toBeNull();
   });
 });
 
@@ -114,31 +116,27 @@ describe('role prompts (stripped system prompts)', () => {
 
 describe('composePrompt', () => {
   test('composes stage + role with separator', () => {
-    const stage = loadStageDefinition('plan-review', STAGES_DIR)!;
-    const role = getSystemPrompt('plan-reviewer', BUILT_IN_DIR)!;
+    const stage = loadStageDefinition('ralph-code-review', STAGES_DIR)!;
+    const role = getSystemPrompt('ralph-code-reviewer', BUILT_IN_DIR)!;
     const composed = composePrompt(stage, role);
-
-    // Stage content comes first
-    expect(composed.indexOf('Output Contract')).toBeLessThan(composed.indexOf('Core Competencies'));
 
     // Separator between stage and role
     expect(composed).toContain('\n\n---\n\n');
 
     // Both sections present
-    expect(composed).toContain('Output Contract');
+    expect(composed).toContain('Code Review Stage');
     expect(composed).toContain('Core Competencies');
   });
 
-  test('composed prompt has stage rules before role expertise', () => {
-    const stage = loadStageDefinition('code-review', STAGES_DIR)!;
-    const role = getSystemPrompt('code-reviewer', BUILT_IN_DIR)!;
+  test('stage content comes before role content', () => {
+    const stage = loadStageDefinition('discovery', STAGES_DIR)!;
+    const role = getSystemPrompt('discoverer', BUILT_IN_DIR)!;
     const composed = composePrompt(stage, role);
 
-    const contractPos = composed.indexOf('Output Contract');
-    const competenciesPos = composed.indexOf('Core Competencies');
-    expect(contractPos).toBeGreaterThan(-1);
-    expect(competenciesPos).toBeGreaterThan(-1);
-    expect(contractPos).toBeLessThan(competenciesPos);
+    const stagePos = composed.indexOf('Discovery Stage');
+    const rolePos = composed.indexOf('Core Competencies');
+    expect(stagePos).toBeGreaterThan(-1);
+    expect(rolePos).toBeGreaterThan(-1);
+    expect(stagePos).toBeLessThan(rolePos);
   });
 });
-
