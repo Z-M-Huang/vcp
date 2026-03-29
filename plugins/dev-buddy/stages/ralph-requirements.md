@@ -68,10 +68,11 @@ Structure your output as:
 
 Executor output is a DRAFT. The orchestrator confirms each item with the user individually before writing to the plan file:
 
-1. Each AC is presented one at a time — user approves or requests changes
-2. User is asked if additional ACs are needed — loop if yes
-3. Each UAT scenario is presented one at a time — user approves or requests changes
-4. User is asked if additional scenarios are needed — loop if yes
+1. ALL ACs are presented in batches of up to 4 per AskUserQuestion call — user reviews the entire set first
+2. User is asked if additional ACs are needed
+3. If any ACs need changes or additions → collect feedback, re-run the stage with history + feedback, present revised ACs from the start
+4. Once all ACs are confirmed, same round-based flow for UAT scenarios
+5. UAT changes only restart the UAT portion — confirmed ACs are locked
 
 Only confirmed ACs and UAT scenarios are written to the plan. The user never needs to open the plan file — all interaction flows through AskUserQuestion.
 

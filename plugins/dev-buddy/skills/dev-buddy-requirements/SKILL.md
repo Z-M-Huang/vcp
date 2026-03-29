@@ -99,62 +99,79 @@ Synthesize into a draft containing:
 
 **Do NOT write to the plan file yet.** Hold the draft in context for interactive confirmation.
 
-## Step 6: Interactive AC confirmation
+## Step 6: AC review round (batched, up to 4 per call)
 
-Present each AC to the user **one at a time** via AskUserQuestion. The user should not need to open the plan file — all information flows through the conversation.
+Present ALL ACs to the user in **batches of up to 4** via AskUserQuestion. The user reviews the entire set before any re-synthesis happens. AskUserQuestion supports 1-4 questions per call, each with 2-4 options.
 
-For each AC:
-```
-AskUserQuestion: "AC-{N}: {title}
+### 6a. Full round — present all ACs
 
-Given {context}
-When {action}
-Then {outcome}
-
-Misinterpretation: {wrong implementation that technically passes}
-
-Approve this AC? Or describe what needs to change."
-```
-
-- If the user **approves** — mark this AC as confirmed, proceed to the next.
-- If the user **requests changes** — revise the AC based on feedback, then present the revised version for re-confirmation. Repeat until approved.
-
-After all ACs are confirmed:
-```
-AskUserQuestion: "All {N} acceptance criteria are confirmed. Are there any additional acceptance criteria we should add? If yes, describe what's missing. If no, say 'done'."
-```
-
-- If the user adds new ACs — draft them, confirm each one individually (same loop as above), then ask again if more are needed.
-- If the user says done — proceed to UAT confirmation.
-
-## Step 7: Interactive UAT scenario confirmation
-
-Present each UAT scenario to the user **one at a time** via AskUserQuestion:
+For each batch of up to 4 ACs, make one AskUserQuestion call:
 
 ```
-AskUserQuestion: "UAT-{N}: {scenario description}
-
-Test file: {file path}
-Steps:
-1. {step}
-2. {step}
-...
-Assertions: {what gets checked}
-Validates: AC-{X}, AC-{Y}
-
-Is this scenario sufficient? Or describe changes or additions needed."
+AskUserQuestion(questions: [
+  {
+    question: "AC-1: {title}\n\nGiven {context}\nWhen {action}\nThen {outcome}\n\nMisinterpretation: {wrong impl}",
+    options: ["Approve", "Needs changes"]
+  },
+  {
+    question: "AC-2: ...",
+    options: ["Approve", "Needs changes"]
+  },
+  // ... up to 4 per call
+])
 ```
 
-- If the user **approves** — mark confirmed, proceed to next.
-- If the user **requests changes** — revise and re-confirm.
+Continue with batches until ALL ACs have been presented. Track which ACs the user marked "Needs changes".
 
-After all UAT scenarios confirmed:
+### 6b. Additional ACs check
+
+After all batches:
 ```
-AskUserQuestion: "All {N} UAT scenarios are confirmed. Are there any additional scenarios we should add? If yes, describe what's missing. If no, say 'done'."
+AskUserQuestion: "All {N} acceptance criteria reviewed. Any additional ACs needed?"
+  options: ["No — I'm done reviewing", "Yes — I have more ACs to add"]
 ```
 
-- If the user adds new scenarios — draft, confirm each, ask again.
-- If done — proceed to write.
+If the user wants additions, collect descriptions of new ACs.
+
+### 6c. Evaluate round result
+
+- **All approved, no additions** → ACs are confirmed. Proceed to Step 7.
+- **Any "Needs changes" or additions** → collect specific feedback for each changed AC via follow-up AskUserQuestion calls, then **re-run the stage** (back to Step 4):
+  - Re-dispatch executors with: discovery findings + previous ACs + user feedback per changed item + any new AC descriptions
+  - Instruct executors: "Revise these ACs based on user feedback. Check ALL other ACs for cascading impacts from the changes."
+  - When new synthesis returns, go back to Step 6a (fresh full round with revised ACs)
+
+The user always sees the complete revised set — no partial re-confirmation.
+
+## Step 7: UAT review round (batched, up to 4 per call)
+
+Same round-based pattern. ACs are now locked (confirmed in Step 6).
+
+### 7a. Full round — present all UAT scenarios
+
+For each batch of up to 4 UAT scenarios:
+
+```
+AskUserQuestion(questions: [
+  {
+    question: "UAT-1: {scenario}\n\nTest file: {path}\nSteps: {steps}\nAssertions: {checks}\nValidates: AC-{X}, AC-{Y}",
+    options: ["Approve", "Needs changes"]
+  },
+  // ... up to 4 per call
+])
+```
+
+### 7b. Additional scenarios check
+
+```
+AskUserQuestion: "All {N} UAT scenarios reviewed. Any additional scenarios needed?"
+  options: ["No — I'm done reviewing", "Yes — I have more scenarios to add"]
+```
+
+### 7c. Evaluate round result
+
+- **All approved, no additions** → UATs are confirmed. Proceed to Step 8.
+- **Any "Needs changes" or additions** → collect feedback, **re-run the stage** (back to Step 4) with: confirmed ACs + previous UATs + user feedback. Instruct executors to revise UAT scenarios and check for cascading impacts. Return to Step 7a with revised UATs.
 
 ## Step 8: Write confirmed requirements to plan file
 
