@@ -116,7 +116,7 @@ If Playwright tests are defined in the UAT scenarios, run them. If Playwright is
 4. Reset affected unit statuses to `pending` in master plan
 5. Update plan status to `build` using Edit tool: replace `**Status:** uat` with `**Status:** build`.
 
-If running under orchestrator: the orchestrator handles the loop back to build → code review → UAT.
+If running under orchestrator: call `TaskList()` to find the next pending stage. The task description tells you which skill to invoke. Continue the pipeline immediately — the loop back to build → code review → UAT should happen without stopping.
 
 If standalone: report failures and tell the user to run `/dev-buddy-build` for affected units, then `/dev-buddy-code-review`, then `/dev-buddy-uat` again.
 

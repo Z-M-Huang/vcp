@@ -769,7 +769,7 @@ async function handleApiRequest(
     if (pathname === '/api/settings') {
       if (req.method === 'GET') {
         const config = loadDevBuddyConfig();
-        return jsonResponse({ max_iterations: config.max_iterations, max_build_attempts: config.max_build_attempts, max_outer_iterations: config.max_outer_iterations, theme: config.theme }, 200, corsHeaders);
+        return jsonResponse({ max_iterations: config.max_iterations, max_build_attempts: config.max_build_attempts, max_outer_iterations: config.max_outer_iterations, max_discovery_iterations: config.max_discovery_iterations, max_requirements_iterations: config.max_requirements_iterations, max_decomposition_iterations: config.max_decomposition_iterations, theme: config.theme }, 200, corsHeaders);
       }
       if (req.method === 'PUT') {
         const body = await req.json() as Record<string, unknown>;
@@ -777,6 +777,9 @@ async function handleApiRequest(
         if (typeof body.max_iterations === 'number') config.max_iterations = body.max_iterations;
         if (typeof body.max_build_attempts === 'number') config.max_build_attempts = body.max_build_attempts;
         if (typeof body.max_outer_iterations === 'number') config.max_outer_iterations = body.max_outer_iterations;
+        if (typeof body.max_discovery_iterations === 'number') config.max_discovery_iterations = body.max_discovery_iterations;
+        if (typeof body.max_requirements_iterations === 'number') config.max_requirements_iterations = body.max_requirements_iterations;
+        if (typeof body.max_decomposition_iterations === 'number') config.max_decomposition_iterations = body.max_decomposition_iterations;
         if (typeof body.theme === 'string' && (body.theme === 'light' || body.theme === 'dark')) config.theme = body.theme as 'light' | 'dark';
         validateDevBuddyConfig(config);
         atomicWriteFile(PIPELINE_CONFIG_PATH, config);

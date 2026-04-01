@@ -22,8 +22,10 @@ Each stage is a standalone skill that can also be invoked independently. This or
 If you have lost context (conversation compressed), immediately:
 1. Call `TaskList()` to see all tasks and their statuses
 2. Read the master plan file (path is in the first task's description: `ralph-{SLUG}`)
-3. Find the first non-completed task — resume from that stage
-4. The task dependency chain prevents skipping or regression
+3. Find the first non-completed task — its description contains the skill to invoke (e.g., "run /dev-buddy-code-review")
+4. If the task is blocked but all its blockers are completed, update it to `in_progress`
+5. Invoke the skill named in the task description and continue the pipeline
+6. After decompose, the pipeline must run to completion without stopping — do NOT yield to the user between stages
 
 ---
 
@@ -85,17 +87,18 @@ Use the Write tool to create `~/.claude/plans/ralph-{SLUG}.md`:
 TaskCreate("Stage: Discovery — ralph-{SLUG}", status: "in_progress")
 TaskCreate("Stage: Requirements + UAT — ralph-{SLUG}", status: "pending", blocked_by: [T-discover])
 TaskCreate("Stage: Decompose — ralph-{SLUG}", status: "pending", blocked_by: [T-requirements])
-TaskCreate("Stage: Code Review — ralph-{SLUG}", status: "pending", blocked_by: [T-decompose])
-TaskCreate("Stage: UAT — ralph-{SLUG}", status: "pending", blocked_by: [T-review])
+TaskCreate("Stage: Code Review — run /dev-buddy-code-review — DO NOT STOP, continue pipeline — ralph-{SLUG}", status: "pending", blocked_by: [T-decompose])
+TaskCreate("Stage: UAT — run /dev-buddy-uat — DO NOT STOP, continue pipeline — ralph-{SLUG}", status: "pending", blocked_by: [T-review])
 ```
 
 Note: Build tasks (T-unit-N) are created during decomposition when units are known.
+Post-decompose task descriptions include the skill to invoke and a continuation hint — these survive context compaction and serve as breadcrumbs when checking TaskList.
 
 ---
 
 ## Step 2: DISCOVER
 
-Run `/dev-buddy-discover`. The skill reads the plan file, dispatches multi-AI exploration, synthesizes findings, and gets user confirmation.
+Run `/dev-buddy-discover`. The skill reads the plan file, dispatches multi-AI exploration, synthesizes findings, runs internal adversarial validation, and gets user confirmation.
 
 After completion:
 - `TaskUpdate(T-discover, status: "completed")`
@@ -105,7 +108,7 @@ After completion:
 
 ## Step 3: REQUIREMENTS + UAT DESIGN
 
-Run `/dev-buddy-requirements`. The skill reads discovery from the plan, dispatches multi-AI requirements analysis, synthesizes ACs + UAT scenarios, and gets user approval.
+Run `/dev-buddy-requirements`. The skill reads discovery from the plan, dispatches multi-AI requirements analysis, synthesizes ACs + UAT scenarios, runs internal adversarial validation, and gets user approval through batched AC/UAT review rounds.
 
 After completion:
 - `TaskUpdate(T-requirements, status: "completed")`
@@ -115,7 +118,7 @@ After completion:
 
 ## Step 4: DECOMPOSE
 
-Run `/dev-buddy-decompose`. The skill reads requirements from the plan, dispatches multi-AI decomposition, creates per-unit plan files, creates unit tasks, and gets user approval.
+Run `/dev-buddy-decompose`. The skill reads requirements from the plan, dispatches multi-AI decomposition, runs internal adversarial validation (including fresh-context simulation), gets user approval FIRST, and only then creates per-unit plan files and unit tasks.
 
 After completion:
 - `TaskUpdate(T-decompose, status: "completed")`

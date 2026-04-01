@@ -61,17 +61,21 @@ else console.log('ERROR: Could not resolve prompts');
 
 ## Step 4: Dispatch executors
 
+**MANDATORY: You MUST dispatch executors as configured. Do NOT skip this step.** Even if you have prior context from discovery, chatroom debates, or earlier stages, executor dispatch is required — each executor brings independent perspective and the synthesis depends on multi-AI diversity. Skipping dispatch violates the pipeline contract.
+
 Same dispatch pattern as discovery. Each executor receives:
 - Discovery findings from the master plan
 - Feature description
 - Instructions to produce: ACs (Given/When/Then + misinterpretation), UAT scenarios, edge cases, risks
+
+Track the current iteration counter `N` (starts at 1). Use it in output IDs.
 
 **Subscription executors:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + discovery_section + feature_description})`
 
 **API/CLI executors:** `Bash(run_in_background: true)` with one-shot-runner.ts:
 ```bash
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
-  --type {api|cli} --output-id ralph-req-p{i} \
+  --type {api|cli} --output-id ralph-req-p{i}-iter{N} \
   --preset "{PRESET}" --model "{MODEL}" \
   --stage-type ralph-requirements --system-prompt {SYSTEM_PROMPT} \
   --allowed-tools Read,Glob,Grep \
@@ -87,91 +91,166 @@ Define acceptance criteria (Given/When/Then + misinterpretation), UAT scenarios,
 
 **Dispatch all parallel executors in a single message.** Sequential executors wait for prior ones.
 
-## Step 5: Collect and synthesize (draft)
+## Step 5: Collect and synthesize (structured draft)
 
 Collect all responses (sequential TaskOutput polling — one at a time, never multiple in same message).
 
-Synthesize into a draft containing:
-- **Acceptance Criteria** (Given/When/Then + misinterpretation for each)
-- **UAT Scenarios** (Playwright test descriptions mapped to ACs)
+Synthesize into a **structured draft** using the exact format below. Every AC and UAT must follow this template:
+
+### AC format
+
+```markdown
+### AC-{N}: {title}
+- **Given:** {concrete precondition}
+- **When:** {specific action}
+- **Then:** {observable, testable outcome}
+- **Misinterpretation:** {plausible wrong implementation}
+- **Discovery refs:** F-{X}, F-{Y}
+- **Edge cases:** {list}
+```
+
+### UAT format
+
+```markdown
+### UAT-{N}: {title}
+- **Validates:** AC-{X}, AC-{Y}
+- **Test file:** {path}
+- **Steps:** {numbered steps}
+- **Assertions:** {specific checks}
+```
+
+### AC-to-UAT mapping table
+
+Include this table immediately after all AC and UAT definitions:
+
+```markdown
+| AC | UAT Scenarios |
+|----|--------------|
+| AC-1 | UAT-1, UAT-3 |
+| AC-2 | UAT-2 |
+```
+
+The draft must also include:
 - **Backpressure Commands** (test, typecheck, lint, build, uat commands)
 - **Risk Registry** (identified risks with mitigations)
 
-**Do NOT write to the plan file yet.** Hold the draft in context for interactive confirmation.
+**Do NOT write to the plan file yet.** Hold the draft in context for the internal adversarial validation loop.
 
-## Step 6: AC review round (batched, up to 4 per call)
+## Step 6: Internal adversarial validation loop
 
-Present ALL ACs to the user in **batches of up to 4** via AskUserQuestion. The user reviews the entire set before any re-synthesis happens. AskUserQuestion supports 1-4 questions per call, each with 2-4 options.
+Before presenting the draft to the user, validate it mechanically. This catches structural defects early and reduces human review burden.
 
-### 6a. Full round — present all ACs
+### 6a. Load validation config
 
-For each batch of up to 4 ACs, make one AskUserQuestion call:
-
-```
-AskUserQuestion(questions: [
-  {
-    question: "AC-1: {title}\n\nGiven {context}\nWhen {action}\nThen {outcome}\n\nMisinterpretation: {wrong impl}",
-    options: ["Approve", "Needs changes"]
-  },
-  {
-    question: "AC-2: ...",
-    options: ["Approve", "Needs changes"]
-  },
-  // ... up to 4 per call
-])
+```bash
+bun -e "
+import { loadDevBuddyConfig } from '${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts';
+const config = loadDevBuddyConfig();
+console.log(JSON.stringify({ max_requirements_iterations: config.max_requirements_iterations }));
+"
 ```
 
-Continue with batches until ALL ACs have been presented. Track which ACs the user marked "Needs changes".
+Store `max_requirements_iterations`.
 
-### 6b. Additional ACs check
+### 6b. Backpressure gates
 
-After all batches:
-```
-AskUserQuestion: "All {N} acceptance criteria reviewed. Any additional ACs needed?"
-  options: ["No — I'm done reviewing", "Yes — I have more ACs to add"]
-```
+Apply these six gates against the current draft. Each gate is either PASS or FAIL. Gates marked **(critical)** cause an overall FAIL regardless of other gate results.
 
-If the user wants additions, collect descriptions of new ACs.
+1. **GIVEN/WHEN/THEN COMPLETENESS** (critical): Every AC-{N} has all three fields non-empty. Flag vague terms in any field: "should work," "appropriate," "correctly," "properly," "as expected." Any missing field or vague term = FAIL.
 
-### 6c. Evaluate round result
+2. **MISINTERPRETATION FIELD**: Every AC has a misinterpretation that describes a *different, plausible* implementation someone might build by misreading the AC. Tautological misinterpretations (restating the AC negated, e.g., "does not do X" when the AC says "does X") = FAIL.
 
-- **All approved, no additions** → ACs are confirmed. Proceed to Step 7.
-- **Any "Needs changes" or additions** → collect specific feedback for each changed AC via follow-up AskUserQuestion calls, then **re-run the stage** (back to Step 4):
-  - Re-dispatch executors with: discovery findings + previous ACs + user feedback per changed item + any new AC descriptions
-  - Instruct executors: "Revise these ACs based on user feedback. Check ALL other ACs for cascading impacts from the changes."
-  - When new synthesis returns, go back to Step 6a (fresh full round with revised ACs)
+3. **AC-TO-UAT MAPPING** (critical): The mapping table contains every AC-{N} with >= 1 corresponding UAT scenario. Orphan ACs (present in AC list but missing from mapping table) = FAIL.
 
-The user always sees the complete revised set — no partial re-confirmation.
+4. **EDGE CASE COVERAGE**: Each AC has >= 1 edge case listed. "No edge cases" = FAIL unless accompanied by a written justification explaining why none exist.
 
-## Step 7: UAT review round (batched, up to 4 per call)
+5. **AC-TO-DISCOVERY TRACEABILITY**: Each AC references >= 1 discovery finding (F-{N}) in its Discovery refs field. Unreferenced ACs = FAIL.
 
-Same round-based pattern. ACs are now locked (confirmed in Step 6).
+6. **COUNTEREXAMPLE**: Attempt to find at least one AC that is vague, untestable, or has a tautological misinterpretation. If found = FAIL with the specific AC identified. If none found = PASS.
 
-### 7a. Full round — present all UAT scenarios
+### 6c. Validator dispatch
 
-For each batch of up to 4 UAT scenarios:
+Dispatch the validator as a single Agent call (inherits the main session's model):
 
 ```
-AskUserQuestion(questions: [
-  {
-    question: "UAT-1: {scenario}\n\nTest file: {path}\nSteps: {steps}\nAssertions: {checks}\nValidates: AC-{X}, AC-{Y}",
-    options: ["Approve", "Needs changes"]
-  },
-  // ... up to 4 per call
-])
+Agent(subagent_type: "general-purpose", prompt: """
+You are a requirements validator. Evaluate the following draft against these gates.
+For each gate, output PASS or FAIL with a one-line justification.
+If FAIL, quote the specific offending item(s).
+
+GATES:
+1. GIVEN/WHEN/THEN COMPLETENESS (critical) — all ACs have Given/When/Then; no vague terms
+2. MISINTERPRETATION FIELD — each AC has a non-tautological misinterpretation
+3. AC-TO-UAT MAPPING (critical) — mapping table covers every AC with >= 1 UAT
+4. EDGE CASE COVERAGE — each AC has >= 1 edge case or justification
+5. AC-TO-DISCOVERY TRACEABILITY — each AC refs >= 1 discovery finding
+6. COUNTEREXAMPLE — find one vague, untestable, or tautological AC
+
+Output format:
+GATE 1: PASS|FAIL — {reason}
+GATE 2: PASS|FAIL — {reason}
+...
+GATE 6: PASS|FAIL — {reason}
+OVERALL: PASS|FAIL
+
+If OVERALL is FAIL, list specific fixes needed per failed gate.
+
+--- DRAFT ---
+{full structured draft}
+""")
 ```
 
-### 7b. Additional scenarios check
+### 6d. PASS/FAIL/exhaustion logic
+
+- **OVERALL PASS**: Proceed to Step 7 (present and confirm).
+- **OVERALL FAIL**: Apply the validator's fixes to the draft. Increment iteration counter `N`. If `N > max_requirements_iterations`, proceed to Step 7 anyway (exhaustion — let the human decide). Otherwise, loop back to Step 6c with the revised draft.
+- **Critical gate FAIL**: If gates 1 (GIVEN/WHEN/THEN COMPLETENESS) or 3 (AC-TO-UAT MAPPING) fail, the draft MUST be fixed before proceeding even on exhaustion. On exhaustion with a critical gate still failing, re-dispatch to Step 4 with validator feedback as additional context (one final attempt).
+
+Track iteration count and report it when presenting to the user: "Internal validation: passed after {N} iteration(s)" or "Internal validation: exhausted after {N} iteration(s), {remaining issues}".
+
+## Step 7: Present findings and confirm
+
+### 7a. Pre-presentation clarification (optional)
+
+If during synthesis you identified ambiguities or questions that would materially affect the ACs or UATs, ask the user BEFORE presenting the final list:
 
 ```
-AskUserQuestion: "All {N} UAT scenarios reviewed. Any additional scenarios needed?"
-  options: ["No — I'm done reviewing", "Yes — I have more scenarios to add"]
+AskUserQuestion: "{specific question about the feature that affects requirements}"
+  options: ["{option A}", "{option B}", "Let me explain"]
 ```
 
-### 7c. Evaluate round result
+Only use this for genuine blockers — questions whose answer changes the requirements. Do not ask rhetorical or confirmatory questions.
 
-- **All approved, no additions** → UATs are confirmed. Proceed to Step 8.
-- **Any "Needs changes" or additions** → collect feedback, **re-run the stage** (back to Step 4) with: confirmed ACs + previous UATs + user feedback. Instruct executors to revise UAT scenarios and check for cascading impacts. Return to Step 7a with revised UATs.
+### 7b. Present the full draft
+
+Print the complete set of ACs, UATs, and the AC-to-UAT mapping table directly into the session as formatted text. Include the validation status (iteration count, gate results).
+
+The user reads the full draft in context. This IS the review — no separate batched approval flow.
+
+### 7c. Single confirmation
+
+After presenting everything:
+
+```
+AskUserQuestion: "Requirements ready for review. {N} acceptance criteria, {M} UAT scenarios."
+  options: ["Approve", "Reject", "I have additional context"]
+```
+
+### 7d. Handle response
+
+**Approve** → Proceed to Step 8 (write to plan file).
+
+**Reject** → The user provides specific feedback on what needs to change (which ACs/UATs are wrong and why). Classify the feedback:
+
+- **Localized** (specific ACs/UATs are wrong): Re-synthesize only the contested items. Run the internal validation loop (Step 6). Re-present the **full revised set** (back to Step 7b).
+
+- **Structural** (missing areas, wrong scope): Full re-dispatch to Step 4 with user feedback injected into executor prompts. Run the full pipeline (Steps 5-6). Re-present (back to Step 7b).
+
+- **Fundamental** (requirements need rethinking): Escalate — "This feedback suggests re-running discovery with refined scope." Stop the stage.
+
+**I have additional context** → The user provides context that should inform the requirements. Revise the draft incorporating the new context. Run the internal validation loop (Step 6). Re-present the **full revised set** (back to Step 7b).
+
+**Key invariant:** After any revision, the user ALWAYS sees the complete revised set — never a partial update.
 
 ## Step 8: Write confirmed requirements to plan file
 
@@ -191,3 +270,4 @@ If running under the orchestrator, update tasks:
 
 1. **Tool restriction:** API executors are structurally restricted to `Read,Glob,Grep` via `--allowed-tools`. CLI executors receive a prompt-level instruction. Subscription executors get prompt-level guidance only.
 2. **Sequential TaskOutput polling:** Do NOT issue multiple TaskOutput calls in the same message.
+3. **Adversarial validator:** The validator runs as a subscription-based Agent inheriting the main session's model. It does not have tool access — it validates the synthesis purely from text. The max iteration count is controlled by `config.max_requirements_iterations` (default: 3).

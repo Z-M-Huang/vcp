@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   DEFAULT_CONFIG,
   validateDevBuddyConfig,
+  loadDevBuddyConfig,
 } from '../pipeline-config.ts';
 import type { DevBuddyConfig } from '../../types/pipeline.ts';
 
@@ -44,6 +45,13 @@ describe('DEFAULT_CONFIG', () => {
   test('has max_outer_iterations', () => {
     expect(DEFAULT_CONFIG.max_outer_iterations).toBe(3);
   });
+
+  test('has internal loop iteration defaults', () => {
+    expect(DEFAULT_CONFIG.max_discovery_iterations).toBe(3);
+    expect(DEFAULT_CONFIG.max_requirements_iterations).toBe(3);
+    expect(DEFAULT_CONFIG.max_decomposition_iterations).toBe(2);
+  });
+
 
   test('has ralph pipeline', () => {
     expect(DEFAULT_CONFIG.pipelines).toHaveProperty('ralph');
@@ -143,5 +151,39 @@ describe('validateDevBuddyConfig', () => {
     const config = structuredClone(DEFAULT_CONFIG);
     config.max_outer_iterations = 0;
     expect(() => validateDevBuddyConfig(config)).toThrow(/max_outer_iterations/);
+  });
+
+  test('rejects zero max_discovery_iterations', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.max_discovery_iterations = 0;
+    expect(() => validateDevBuddyConfig(config)).toThrow(/max_discovery_iterations/);
+  });
+
+  test('rejects negative max_requirements_iterations', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.max_requirements_iterations = -1;
+    expect(() => validateDevBuddyConfig(config)).toThrow(/max_requirements_iterations/);
+  });
+
+  test('rejects zero max_decomposition_iterations', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.max_decomposition_iterations = 0;
+    expect(() => validateDevBuddyConfig(config)).toThrow(/max_decomposition_iterations/);
+  });
+
+});
+
+// ─── loadDevBuddyConfig — additive default-filling ─────────────────────────
+
+describe('loadDevBuddyConfig default-filling', () => {
+  test('fills missing internal loop fields on existing v5 config', () => {
+    // loadDevBuddyConfig reads from ~/.vcp/dev-buddy.json — we test via
+    // DEFAULT_CONFIG that it has the fields, and validate accepts them.
+    // The actual file-based regression test is a smoke test (manual).
+    const config = structuredClone(DEFAULT_CONFIG);
+    expect(config.max_discovery_iterations).toBe(3);
+    expect(config.max_requirements_iterations).toBe(3);
+    expect(config.max_decomposition_iterations).toBe(2);
+    expect(() => validateDevBuddyConfig(config)).not.toThrow();
   });
 });

@@ -444,9 +444,9 @@ describe('parseArgs', () => {
       '--model', 'm',
       '--cwd', '/d',
       '--task', 't',
-      '--system-prompt', '/path/to/docs/review-guidelines.md',
+      '--system-prompt', 'discoverer',
     ]);
-    expect(result.systemPrompt).toBe('/path/to/docs/review-guidelines.md');
+    expect(result.systemPrompt).toBe('discoverer');
   });
 
   test('omitting --system-prompt leaves it undefined', () => {

@@ -62,14 +62,18 @@ else console.log('ERROR: Could not resolve prompts');
 
 ## Step 4: Dispatch executors
 
+**MANDATORY: You MUST dispatch executors as configured. Do NOT skip this step.** Even if you have prior context from chatroom debates or other stages, executor dispatch is required — each executor brings independent perspective and the synthesis depends on multi-AI diversity. Skipping dispatch violates the pipeline contract.
+
 Use the same dispatch pattern as `/dev-buddy-chatroom`:
 
-**Subscription executors:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + feature_description})`
+Set iteration N = 1 on first entry. On re-entry from Step 6b (validation failure) or Step 7 (user rejection), increment N.
+
+**Subscription executors:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + feature_description + validation_feedback_if_any})`
 
 **API/CLI executors:** `Bash(run_in_background: true)` with one-shot-runner.ts:
 ```bash
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
-  --type {api|cli} --output-id ralph-discover-p{i} \
+  --type {api|cli} --output-id ralph-discover-p{i}-iter{N} \
   --preset "{PRESET}" --model "{MODEL}" \
   --stage-type discovery --system-prompt {SYSTEM_PROMPT} \
   --allowed-tools Read,Glob,Grep \
@@ -79,27 +83,196 @@ Do NOT create, modify, or delete any files. The orchestrator will write the fina
 
 {feature_description}
 
+{validation_feedback_if_any}
+
 Explore the codebase and running app. Report your findings with file:line references.
 {DELIM}
 ```
 
 **Dispatch all parallel executors in a single message.** Sequential executors wait for prior ones.
 
-## Step 5: Collect and synthesize
+## Step 5: Collect and synthesize (draft)
 
 Collect all responses (sequential TaskOutput polling — one at a time, never multiple in same message).
 
-As the orchestrator, synthesize all findings into a coherent `## Discovery` section. Be specific — include file:line references, patterns found, impact points, backpressure commands.
+As the orchestrator, synthesize all findings into a **draft** `## Discovery` section. Be specific — include file:line references, patterns found, impact points, backpressure commands.
 
-Update the master plan file using Edit tool: replace `## Discovery\n(pending)` with the synthesis.
+**Do NOT write to the plan file yet.** Hold the draft in context for adversarial validation.
+
+The synthesis MUST use this structured format with numbered findings:
+
+```markdown
+## Discovery
+
+### Finding F-1: {title}
+- **Area:** structure | app-behavior | test-infrastructure | error-handling
+- **Evidence:** {file:line references}
+- **Executor support:** {list of executor indices that found this}
+- **Confidence:** high | medium | low
+- **Resolution:** {only if executors disagreed — which executor is correct and why}
+
+### Finding F-2: {title}
+...
+
+### Area Coverage
+- **structure:** F-1, F-3, F-7
+- **app-behavior:** F-2, F-5
+- **test-infrastructure:** not applicable — no test files exist in this repo
+- **error-handling:** F-4, F-6
+```
+
+Rules for the synthesis:
+- Every finding MUST have exactly one area tag: `structure`, `app-behavior`, `test-infrastructure`, or `error-handling`.
+- The Area Coverage section MUST list all 4 areas. Areas with no findings MUST say `not applicable — {reason}`.
+- When executors disagree, the synthesizer MUST include a `Resolution` field explaining which executor is correct and why.
+- `Confidence` is derived from executor agreement: all executors agree = `high`, majority = `medium`, minority = `low`.
+
+## Step 6: Internal adversarial validation
+
+Load the max iteration count:
+```bash
+bun -e "
+import { loadDevBuddyConfig } from '${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts';
+const config = loadDevBuddyConfig();
+console.log(JSON.stringify({ max_discovery_iterations: config.max_discovery_iterations }));
+"
+```
+
+If this is the first time reaching Step 6, set iteration = 1.
+
+### 6a. Dispatch adversarial validator
+
+Dispatch a separate agent to validate the synthesis:
+
+```
+Agent(subagent_type: "general-purpose", prompt: {validator_prompt})
+```
+
+The validator prompt:
+
+```
+You are an ADVERSARIAL VALIDATOR. Your job is to find flaws, not to approve.
+You MUST operate fail-closed: if you cannot verify a gate with concrete evidence, it FAILS.
+
+## What You Are Validating
+Stage: Discovery
+Iteration: {N} of {max}
+
+## Synthesis Under Review
+{draft_synthesis}
+
+## Raw Executor Outputs
+{executor_1_output}
+---
+{executor_2_output}
+---
+...
+
+## Backpressure Gates (ALL must pass)
+
+1. AREA COVERAGE (critical): Every finding has an area tag. All 4 areas (structure, app-behavior, test-infrastructure, error-handling) have >= 1 finding OR an explicit "not applicable — {reason}" entry in Area Coverage. Missing areas = FAIL.
+
+2. CROSS-EXECUTOR AGREEMENT (critical): For each finding, the executor-support list must include >= ceil(executor_count * 0.8) executors. Findings supported by fewer must have explicit justification or be flagged as "low-confidence".
+
+3. NO UNRESOLVED CONTRADICTIONS: Where executors disagree, the synthesis must include a Resolution field. Contradictions without resolutions = FAIL.
+
+4. COUNTEREXAMPLE: Attempt to identify an obvious question about the codebase that remains unanswered and would block requirements definition.
+
+## Rules
+1. For every PASS, you MUST quote specific evidence from the synthesis or executor outputs.
+2. If you cannot find evidence for a gate, it is FAIL — not PASS.
+3. "UNVERIFIABLE" means FAIL. Do not pass gates you cannot check.
+4. Before issuing a final PASS verdict, you MUST attempt one concrete counterexample.
+
+## Response Format
+**VERDICT:** PASS | FAIL
+
+**Gate Results:**
+- Gate 1: AREA COVERAGE — PASS (evidence: "...") | FAIL: {reason}
+- Gate 2: CROSS-EXECUTOR AGREEMENT — PASS (evidence: "...") | FAIL: {reason}
+- Gate 3: NO UNRESOLVED CONTRADICTIONS — PASS (evidence: "...") | FAIL: {reason}
+- Gate 4: COUNTEREXAMPLE — PASS (counterexample: "..." — synthesis handles this) | FAIL: {gap found}
+
+**Counterexample Attempt:**
+{scenario and result}
+
+**Failure Summary** (only if FAIL):
+**Fix Guidance** (only if FAIL):
+```
+
+### 6b. Evaluate validator result
+
+Parse the validator's response for **VERDICT: PASS** or **VERDICT: FAIL**.
+
+**If PASS:** Proceed to Step 7 (user checkpoint).
+
+**If FAIL and iteration < max_discovery_iterations:**
+- Extract Fix Guidance from validator response.
+- Increment iteration.
+- Re-dispatch executors (back to Step 4) with additional context:
+  ```
+  VALIDATION FEEDBACK (iteration {N}): The following issues were found:
+  {failure_summary}
+  Fix guidance: {fix_guidance}
+  Focus your exploration on addressing these specific gaps.
+  ```
+- Collect new responses (Step 5), re-synthesize, return to Step 6a.
+
+**If FAIL and iteration >= max_discovery_iterations:**
+
+Compute confidence from gate results:
+- Count passing gates vs total gates (4 total). Critical gates: AREA COVERAGE (Gate 1), CROSS-EXECUTOR AGREEMENT (Gate 2).
+- **HIGH** (>= 80% pass, no critical fail) -- proceed with a brief note, no banner.
+- **MEDIUM** (50-80% pass, no critical fail) -- proceed with caution, show warning banner.
+- **LOW** (< 50% pass OR any critical fail) -- manual review required, prominent warning.
+- **BLOCK** (both critical gates fail) -- escalate to orchestrator, do not present to user.
+
+For HIGH: proceed directly to Step 7.
+
+For MEDIUM or LOW: present structured failure warning before Step 7:
+
+```
+**WARNING: Internal validation did not fully pass after {N} iterations.**
+Confidence: {level} ({X}/{Y} gates passed, critical gates: {pass|fail for each})
+Unresolved: [failing gates with one-line evidence each]
+Attempted fixes: [what each iteration addressed]
+Recommendation: {PROCEED_WITH_CAUTION|MANUAL_REVIEW_REQUIRED}
+```
+
+Then proceed to Step 7.
+
+For BLOCK: If running under the orchestrator, signal stop via `TaskUpdate(T-discover, status: "blocked")`. If standalone, inform the user that discovery could not produce reliable findings and ask how to proceed.
+
+## Step 7: User checkpoint with rejection classification
+
+Present discovery findings to the user directly in the session. Include the validation status (passed, passed with warnings, or failed with details).
+
+The user reads the full findings in context. This IS the review.
+
+```
+AskUserQuestion: "Discovery findings ready for review. Proceed to requirements?"
+  options: ["Approve", "Reject", "I have additional context"]
+```
+
+**Approve** → Proceed to Step 8.
+
+**Reject** → The user provides specific feedback on what's wrong. Classify the feedback:
+
+- **Localized** (specific findings are wrong): Re-synthesize only the contested findings (keep uncontested as-is). Re-run the validator (Step 6) on the full revised draft. Return to Step 7 to re-present.
+
+- **Structural** (missed areas, wrong scope): Re-dispatch ALL executors (back to Step 4) with user feedback as additional context. Run the full internal validation loop (Steps 5-6). Return to Step 7 to re-present.
+
+- **Fundamental** (wrong direction entirely): If running under the orchestrator, signal stop via `TaskUpdate(T-discover, status: "blocked")` and let the orchestrator handle. If standalone, ask the user what to do differently.
+
+**I have additional context** → The user provides context that should inform discovery. Revise the synthesis incorporating the new context. Re-run the validator (Step 6). Return to Step 7 to re-present the full revised set.
+
+## Step 8: Write approved synthesis to plan file
+
+Only after user approval in Step 7:
+
+Update the master plan file using Edit tool: replace `## Discovery\n(pending)` with the approved synthesis.
 
 Update plan status to `requirements`.
-
-## Step 6: User checkpoint
-
-Present discovery findings to the user. Ask: "Does this understanding look correct? Any corrections before we proceed to requirements?"
-
-Wait for user confirmation via AskUserQuestion.
 
 If running under the orchestrator, update tasks:
 - `TaskUpdate(T-discover, status: "completed")`
@@ -114,3 +287,5 @@ If running under the orchestrator, update tasks:
 2. **Tool restriction:** API executors are structurally restricted to `Read,Glob,Grep` via `--allowed-tools`. CLI executors receive a prompt-level instruction. Subscription executors get prompt-level guidance only.
 
 3. **Sequential TaskOutput polling:** Do NOT issue multiple TaskOutput calls in the same message — this causes cascade failures. Poll one at a time.
+
+4. **Adversarial validator:** The validator runs as a subscription-based Agent inheriting the main session's model. It does not have tool access — it validates the synthesis purely from the text of the draft and executor outputs. The max iteration count is controlled by `config.max_discovery_iterations` (default: 3).

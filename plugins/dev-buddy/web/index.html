@@ -689,6 +689,21 @@
             <input type="number" x-model.number="v3Settings.max_outer_iterations" min="1" max="10">
             <span class="form-hint">Maximum UAT → build → review → UAT loop iterations</span>
           </label>
+          <label>
+            <span class="form-label">Max Discovery Validation Loops</span>
+            <input type="number" x-model.number="v3Settings.max_discovery_iterations" min="1" max="10">
+            <span class="form-hint">Internal adversarial validation iterations for discovery stage</span>
+          </label>
+          <label>
+            <span class="form-label">Max Requirements Validation Loops</span>
+            <input type="number" x-model.number="v3Settings.max_requirements_iterations" min="1" max="10">
+            <span class="form-hint">Internal adversarial validation iterations for requirements stage</span>
+          </label>
+          <label>
+            <span class="form-label">Max Decomposition Validation Loops</span>
+            <input type="number" x-model.number="v3Settings.max_decomposition_iterations" min="1" max="10">
+            <span class="form-hint">Internal adversarial validation iterations for decomposition stage</span>
+          </label>
         </div>
         <div class="form-actions" style="margin-top: 16px;">
           <button x-on:click="saveSettings()" class="btn-primary">Save Settings</button>

@@ -129,12 +129,14 @@ Fundamental design issue. Escalate to user via AskUserQuestion. Do not loop — 
 
 ---
 
-## Step 7: Update tasks (if under orchestrator)
+## Step 7: Update tasks and continue (if under orchestrator)
 
 - `TaskUpdate(T-review, status: "completed")`
 - `TaskUpdate(T-uat, status: "in_progress")`
 
 Max review iterations: `max_iterations` from config. After exhaustion, report to user.
+
+**Pipeline continuation:** After updating tasks, call `TaskList()` to find the next pending stage. The task description tells you which skill to invoke. Continue the pipeline immediately — do NOT stop and wait for user input.
 
 ---
 

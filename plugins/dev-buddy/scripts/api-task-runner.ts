@@ -713,7 +713,7 @@ export interface ParsedArgs {
   taskTimeoutMs: number;
   /** When true, task text is read from stdin instead of --task arg. */
   taskFromStdin: boolean;
-  /** Optional path to a file whose content is appended to the system prompt. */
+  /** Optional role name (e.g., 'discoverer') resolved via getSystemPrompt(). */
   systemPrompt?: string;
   /** Stage type for auto-resolving stage definition (e.g., 'plan-review', 'code-review'). */
   stageType?: string;
@@ -843,42 +843,23 @@ async function main(): Promise<void> {
     }
   }
 
-  // Validate and read --system-prompt file if provided
+  // Resolve --system-prompt role name to prompt content
   let systemPromptContent: string | undefined;
   if (args.systemPrompt) {
-    try {
-      // Path validation: must resolve under plugin root directory (CWE-22)
-      // Allows docs/, system-prompts/, and stages/ subdirectories
-      const pluginRoot = path.resolve(path.join(import.meta.dir, '..'));
-      const resolved = path.resolve(args.systemPrompt);
-      const relative = path.relative(pluginRoot, resolved);
-      if (relative.startsWith('..') || path.isAbsolute(relative)) {
-        emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt path must be under plugin directory. Got: ${args.systemPrompt}` }, 1);
-      }
-      let rawContent = fs.readFileSync(resolved, 'utf-8');
-      if (!rawContent.trim()) {
-        emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt file is empty: ${args.systemPrompt}` }, 1);
-      }
-      // Strip YAML frontmatter if present (role prompt .md files have ---..--- headers)
-      if (rawContent.startsWith('---')) {
-        const endIdx = rawContent.indexOf('\n---', 3);
-        if (endIdx !== -1) {
-          rawContent = rawContent.slice(endIdx + 4).trim();
-        }
-      }
-      systemPromptContent = rawContent;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt file not found: ${args.systemPrompt}` }, 1);
-      }
-      // Re-throw if not already handled by emitAndExit (which calls process.exit)
-      throw err;
+    const { getSystemPrompt } = await import('./system-prompts.ts');
+    const builtInDir = path.join(import.meta.dir, '..', 'system-prompts', 'built-in');
+    const rolePrompt = getSystemPrompt(args.systemPrompt, builtInDir);
+    if (!rolePrompt) {
+      const { discoverSystemPrompts } = await import('./system-prompts.ts');
+      const available = discoverSystemPrompts(builtInDir).map(p => p.name);
+      emitAndExit({ event: 'error', phase: 'validation', error: `--system-prompt role '${args.systemPrompt}' not found. Available: ${available.join(', ')}` }, 1);
     }
+    systemPromptContent = rolePrompt!.content;
   }
 
   // Auto-resolve stage definition and compose with system prompt if --stage-type provided
   if (args.stageType) {
-    const { loadStageDefinition, composePrompt } = await import('./system-prompts.ts');
+    const { loadStageDefinition } = await import('./system-prompts.ts');
     const stagesDir = path.join(import.meta.dir, '..', 'stages');
     const stageDef = loadStageDefinition(args.stageType, stagesDir);
     if (!stageDef) {

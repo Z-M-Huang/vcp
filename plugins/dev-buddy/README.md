@@ -22,30 +22,60 @@ When one AI writes your code and the same AI reviews it, you get a rubber stamp.
 
 ## The Solution: Ralph Loop Architecture
 
-Dev Buddy v0.4.0 implements a **Ralph loop** workflow ([Ralph Wiggum technique](https://ghuntley.com/ralph/)) — fresh context per iteration, specs on disk, iterate until correct.
+Dev Buddy implements a **Ralph loop** workflow ([Ralph Wiggum technique](https://ghuntley.com/ralph/)) — fresh context per iteration, specs on disk, iterate until correct.
 
-```
-/dev-buddy-ralph "add auth system"
-          |
-   DISCOVER ---------> Multi-AI codebase + running app exploration
-          |
-   REQUIREMENTS -----> ACs + Playwright UAT design (multi-AI debate)
-          |
-   DECOMPOSE --------> Break into ~50 LOC units (multi-AI)
-          |
-   BUILD (inner loop)  Per-unit: implement -> backpressure -> iterate
-          |
-   CODE REVIEW ------> Multi-AI semantic drift detection
-          |
-   UAT (outer loop) -> Playwright tests against running app
-          |
-       Done
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+flowchart TD
+    START(["/dev-buddy-ralph"]) --> INIT["Create plan file + stage tasks"]
+    INIT --> D
+
+    D["DISCOVER — multi-AI executors"]
+    D --> D_VAL{"Adversarial<br/>validation"}
+    D_VAL -->|fail, retries left| D
+    D_VAL -->|pass / exhausted| D_UC{"User<br/>Checkpoint"}
+    D_UC -->|Approve| R
+    D_UC -->|Reject / Context| D
+
+    R["REQUIREMENTS + UAT — multi-AI executors"]
+    R --> R_VAL{"Adversarial<br/>validation<br/>6 backpressure gates"}
+    R_VAL -->|fail, retries left| R
+    R_VAL -->|pass / exhausted| R_UC{"User<br/>Checkpoint"}
+    R_UC -->|Approve| DC
+    R_UC -->|Reject / Context| R
+
+    DC["DECOMPOSE — multi-AI executors"]
+    DC --> DC_VAL{"Adversarial<br/>validation"}
+    DC_VAL -->|fail, retries left| DC
+    DC_VAL -->|pass / exhausted| DC_UC{"User<br/>Checkpoint"}
+    DC_UC -->|Approve| BUILD
+    DC_UC -->|Reject / Context| DC
+
+    BUILD["BUILD — per-unit fresh context + implement"]
+    BUILD --> BP{"Backpressure<br/>test, typecheck, lint"}
+    BP -->|fail, attempts left| BUILD
+    BP -->|pass| MORE{"More<br/>units?"}
+    MORE -->|yes| BUILD
+    MORE -->|all done| CR
+
+    CR["CODE REVIEW — multi-AI AC tracing"]
+    CR -->|approved| UAT
+    CR -->|needs_changes| BUILD
+    CR -->|rejected| STOP([Escalate to User])
+
+    UAT["UAT — Playwright + full backpressure"]
+    UAT -->|all pass| DONE([Done])
+    UAT -->|any fail| BUILD
 ```
 
 **Two nested loops + review gate:**
-- **Inner (BUILD):** per-unit Ralph loop — fresh context, implement, backpressure, iterate
-- **Review gate (CODE REVIEW):** multi-AI review of ALL units — semantic drift, integration gaps
-- **Outer (UAT):** integration Ralph loop — real Playwright UAT, evaluate, loop back if fail
+- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), retry up to `max_build_attempts`. Code review can send units back for rework.
+- **Outer (UAT):** integration Ralph loop — real Playwright UAT against running app. Failures identify affected units and loop back through BUILD and CODE REVIEW (up to `max_outer_iterations`).
+- **User checkpoints** after Discovery, Requirements, and Decompose — approve, reject, or provide additional context. Each stage runs internal adversarial validation before presenting to the user.
 
 ---
 

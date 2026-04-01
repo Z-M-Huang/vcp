@@ -114,7 +114,7 @@ interface ParsedArgs {
   outputId: string | null;
   /** Stage type for auto-resolving stage definition (forwarded to api-task-runner). */
   stageType: string | null;
-  /** Path to system prompt file (forwarded to api-task-runner). */
+  /** Role name for system prompt (forwarded to api-task-runner). */
   systemPrompt: string | null;
   /** Comma-separated PascalCase tool names to restrict available tools (forwarded to api-task-runner). */
   allowedTools: string | null;

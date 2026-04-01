@@ -136,7 +136,7 @@ function v3Mixin() {
     // Settings
     // ============================================================
 
-    v3Settings: { max_iterations: 10, max_build_attempts: 3, max_outer_iterations: 3 },
+    v3Settings: { max_iterations: 10, max_build_attempts: 3, max_outer_iterations: 3, max_discovery_iterations: 3, max_requirements_iterations: 3, max_decomposition_iterations: 2 },
     loadingSettings: false,
 
     async loadSettings() {

@@ -49,6 +49,12 @@ export interface DevBuddyConfig {
   max_build_attempts: number;
   /** Maximum outer (UAT → build → review → UAT) loop iterations. Default: 3. */
   max_outer_iterations: number;
+  /** Maximum internal adversarial validation iterations for discovery stage. Default: 3. */
+  max_discovery_iterations: number;
+  /** Maximum internal adversarial validation iterations for requirements stage. Default: 3. */
+  max_requirements_iterations: number;
+  /** Maximum internal adversarial validation iterations for decomposition stage. Default: 2. */
+  max_decomposition_iterations: number;
   /** UI theme preference. Saved in config for persistence across browsers. */
   theme?: 'light' | 'dark';
 }

@@ -137,9 +137,9 @@ describe('parseArgs', () => {
       '--model', 'm',
       '--cwd', '/d',
       '--task', 't',
-      '--system-prompt', '/path/to/prompt.md',
+      '--system-prompt', 'discoverer',
     ]);
-    expect(result.systemPrompt).toBe('/path/to/prompt.md');
+    expect(result.systemPrompt).toBe('discoverer');
   });
 
   test('parses --allowed-tools flag', () => {
@@ -429,7 +429,7 @@ describe('runApiPath', () => {
     const argsWithFlags = {
       ...baseApiArgs,
       stageType: 'discovery',
-      systemPrompt: '/path/to/prompt.md',
+      systemPrompt: 'discoverer',
       allowedTools: 'Read,Glob,Grep',
     };
     await runApiPath(argsWithFlags, baseApiPreset, false, deps);
@@ -437,7 +437,7 @@ describe('runApiPath', () => {
     expect(calls.spawnCalls.length).toBe(1);
     const spawnArgs = calls.spawnCalls[0].args as typeof argsWithFlags;
     expect(spawnArgs.stageType).toBe('discovery');
-    expect(spawnArgs.systemPrompt).toBe('/path/to/prompt.md');
+    expect(spawnArgs.systemPrompt).toBe('discoverer');
     expect(spawnArgs.allowedTools).toBe('Read,Glob,Grep');
   });
 

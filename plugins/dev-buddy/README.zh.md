@@ -2,11 +2,11 @@
 
 # Dev Buddy
 
-**打破 AI 回音壁。交付安全代码。**
+**打破 AI 回音壁。交付正确的功能。**
 
-![Skills-12](https://img.shields.io/badge/Skills-12-blue?style=flat-square)
-![Agents-8](https://img.shields.io/badge/Agents-8-green?style=flat-square)
-![Hooks-2](https://img.shields.io/badge/Hooks-2-orange?style=flat-square)
+![Skills-4](https://img.shields.io/badge/Skills-4-blue?style=flat-square)
+![Stages-6](https://img.shields.io/badge/Stages-6-green?style=flat-square)
+![Role Prompts-6](https://img.shields.io/badge/Role%20Prompts-6-purple?style=flat-square)
 
 <img src="../../assets/hero.png" alt="Dev Buddy — 多 AI Pipeline 编排" width="700">
 
@@ -16,153 +16,96 @@
 
 ## 问题
 
-<div align="center">
-<img src="../../assets/echo-chamber.png" alt="回音壁问题" width="800">
-</div>
-
-当一个 AI 编写你的代码，同一个 AI 又来评审它，你得到的是橡皮图章——而不是真正的评审。同系列模型共享训练偏差、架构血统和盲点。它们遗漏相同类型的 bug。每一次都是如此。
+当一个 AI 编写代码，同一个 AI 又来评审，你得到的只是橡皮图章。同系列模型共享训练偏差和盲点。机械反压（测试、类型检查、lint）能捕获编译错误，但捕获不了语义漂移——代码技术上能工作，但与意图不符。
 
 ---
 
-## 解决方案
+## 解决方案：Ralph 循环架构
 
-<div align="center">
-<img src="../../assets/pipeline.png" alt="多 AI Pipeline" width="800">
-</div>
+Dev Buddy 实现了 **Ralph 循环**工作流（[Ralph Wiggum 技术](https://ghuntley.com/ralph/)）——每次迭代全新上下文，规格写在磁盘上，反复迭代直到正确。
 
-Dev Buddy 将代码路由到来自不同 provider 的**独立 AI 评审者**——通过基于任务的执行机制来防止跳过阶段。每个评审者独立运作。评审者之间不共享上下文。没有橡皮图章。
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+flowchart TD
+    START(["/dev-buddy-ralph"]) --> INIT["创建计划文件 + 阶段任务"]
+    INIT --> D
+
+    D["DISCOVER — 多 AI 执行器"]
+    D --> D_VAL{"对抗性<br/>验证"}
+    D_VAL -->|失败，剩余重试| D
+    D_VAL -->|通过 / 耗尽| D_UC{"用户<br/>检查点"}
+    D_UC -->|批准| R
+    D_UC -->|拒绝 / 补充上下文| D
+
+    R["REQUIREMENTS + UAT — 多 AI 执行器"]
+    R --> R_VAL{"对抗性<br/>验证<br/>6 个反压门控"}
+    R_VAL -->|失败，剩余重试| R
+    R_VAL -->|通过 / 耗尽| R_UC{"用户<br/>检查点"}
+    R_UC -->|批准| DC
+    R_UC -->|拒绝 / 补充上下文| R
+
+    DC["DECOMPOSE — 多 AI 执行器"]
+    DC --> DC_VAL{"对抗性<br/>验证"}
+    DC_VAL -->|失败，剩余重试| DC
+    DC_VAL -->|通过 / 耗尽| DC_UC{"用户<br/>检查点"}
+    DC_UC -->|批准| BUILD
+    DC_UC -->|拒绝 / 补充上下文| DC
+
+    BUILD["BUILD — 逐单元全新上下文 + 实现"]
+    BUILD --> BP{"反压<br/>test, typecheck, lint"}
+    BP -->|失败，剩余尝试| BUILD
+    BP -->|通过| MORE{"更多<br/>单元?"}
+    MORE -->|是| BUILD
+    MORE -->|全部完成| CR
+
+    CR["CODE REVIEW — 多 AI AC 追踪"]
+    CR -->|approved| UAT
+    CR -->|needs_changes| BUILD
+    CR -->|rejected| STOP([升级给用户])
+
+    UAT["UAT — Playwright + 完整反压"]
+    UAT -->|全部通过| DONE([完成])
+    UAT -->|任意失败| BUILD
+```
+
+**双嵌套循环 + 评审门控：**
+- **内循环（BUILD -> CODE REVIEW）：** 逐单元 Ralph 循环——从磁盘读取全新上下文，实现，机械反压（test/typecheck/lint），重试上限 `max_build_attempts`。代码评审可将单元打回重做。
+- **外循环（UAT）：** 集成 Ralph 循环——对运行中的应用执行 Playwright UAT。失败时定位受影响单元，回到 BUILD 和 CODE REVIEW（上限 `max_outer_iterations`）。
+- **用户检查点** 在 Discovery、Requirements 和 Decompose 之后——批准、拒绝或补充上下文。每个阶段在呈现给用户之前先运行内部对抗性验证。
 
 ---
 
-## 真实 Pipeline 运行实况
+## 6 个阶段
 
-<div align="center">
-<img src="../../assets/real-screenshot.png" alt="5 个并发评审，横跨 MiniMax、Qwen、Kimi、GLM、Codex" width="800">
-</div>
-
-*5 个并发评审，横跨 MiniMax、Qwen、Kimi、GLM、Codex —— 每个独立运作，不共享上下文。*
-
----
-
-## Pipeline
-
-Pipeline 是用户自定义的阶段序列。可根据需要创建任意 pipeline —— 两个默认 pipeline 开箱即用，也可通过 Web 门户（`/dev-buddy-config`）或 JSON 配置自定义。
-
-### 默认 Pipeline
-
-**`feature`** —— 功能开发
-
-```
-需求 + TDD → 规划 → 计划评审 → 实现 → 代码评审
-```
-
-**`bug-fix`** —— Bug 修复
-
-```
-根因分析 → 需求 + TDD → 规划 → 计划评审 → 实现 → 代码评审
-```
-
-所有阶段写入**单一计划文件** —— 无散落的产物文件。
-
-### 阶段类型
-
-| 阶段 | 执行内容 |
-|------|----------|
-| **需求 + TDD** | 收集需求，悲观优先影响分析。在规划前生成 TDD 测试计划（单元测试、端到端测试、技能测试）。构建用户确认的风险注册表。 |
-| **规划** | 创建粒度化实现步骤，每步映射 AC 和测试 ID。每步是一个架构单元，带回滚方案。复用现有代码 —— KISS 架构。 |
-| **计划评审** | 假设一切都不能工作。验证每个 AC 有步骤和测试。标记覆盖空白、缺失回滚、不必要的新代码。包含误报分析和用户确认检查点。 |
-| **实现** | 每步 TDD 循环，TaskManagement 进度跟踪。运行映射测试。完全自动化 —— 无用户提示。 |
-| **代码评审** | 假设每个变更都有 bug。用 file:line 证据验证每个 AC。追踪输入 → 处理 → 输出。包含误报分析和用户确认检查点。 |
-| **根因分析** | 多个独立分析者悲观追踪调查 bug（追问五次"为什么"，引用 file:line 证据） |
-
-### 自定义 Pipeline
-
-将任意 pipeline 定义为阶段类型的有序数组。Pipeline 名称必须匹配 `/^[a-z0-9][a-z0-9-]*$/`（最长 50 个字符）。通过 Web 门户管理 pipeline —— 支持创建、重命名和删除的完整 CRUD 操作。
+| 阶段 | 执行内容 | 多 AI |
+|------|----------|-------|
+| **Discovery** | 探索代码库 + 运行中的应用。映射代码路径、模式、影响点。截图当前状态。 | 是 |
+| **Requirements + UAT** | 定义 AC（Given/When/Then + 误解释）。设计 Playwright UAT 场景。风险注册表。 | 是 |
+| **Decomposition** | 分解为约 50 行代码的单元。每个单元有独立的计划文件和精确指令。 | 是 |
+| **Build** | 逐单元实现，全新上下文。编排器独立运行反压。 | 单一 |
+| **Code Review** | AC 追踪，带 file:line 证据。意图匹配。集成检查。 | 是 |
+| **UAT** | 对运行中的应用执行 Playwright 测试 + 全部机械反压。 | 单一 |
 
 ---
 
-## 跨 AI 评审门控
-
-不同 AI 模型在每个阶段互相评审对方的工作：
+## 8 层执行栈
 
 ```
-Claude Opus 规划 ──→ Claude Sonnet 评审 ──→ Claude Opus 评审 ──→ Codex 评审
-                                                                      │
-                    Claude Sonnet 实现 ◀──────────────────────────────┘
-                          │
-                    Claude Sonnet 评审 ──→ Claude Opus 评审 ──→ Codex 评审
+第 1 层：单元计划提示词       <- 意图（实现什么）
+第 2 层：机械反压             <- 编译、类型、lint 错误
+第 3 层：编排器验证           <- 子 agent 谎报测试结果
+第 4 层：代码评审（多 AI）    <- 语义漂移、集成空白
+第 5 层：UAT（Playwright）    <- 真实用户场景失败
+第 6 层：用户检查点           <- 以上全部遗漏的
+第 7 层：TaskManagement       <- 流程合规（不跳步）
+第 8 层：磁盘上的计划文件     <- 上下文压缩后状态存活
 ```
 
-每次评审都是独立的——评审者看不到彼此的结论。
-
-### 为什么基于任务的执行很重要
-
-| 基于指令（脆弱） | 基于任务（Dev Buddy） |
-|-------------------|----------------------|
-| "执行 Sonnet → Opus → Codex" | `blockedBy` 阻止 Codex 在 Opus 完成前启动 |
-| AI 可以跳过"多余"的步骤 | `TaskList()` 只显示未被阻塞的任务 |
-| 无审计轨迹 | 完整的任务历史和元数据 |
-| 进度不可见 | 实时任务进度对用户可见 |
-
----
-
-## 团队化需求收集
-
-功能 pipeline 在编写任何一行代码之前，先启动 5 个专家 agent 并行探索你的代码库：
-
-| 专家 | 关注点 |
-|------|--------|
-| 技术分析师 | 现有代码库、模式、依赖、需要修改的文件 |
-| UX/领域分析师 | 用户工作流、边界情况、可访问性 |
-| 安全分析师 | 威胁模型、OWASP 相关性、非功能性安全需求 |
-| 性能分析师 | 负载影响、可扩展性、瓶颈、缓存 |
-| 架构分析师 | 设计模式、SOLID 原则、可维护性 |
-
-他们的发现为需求收集提供信息——从一开始就产出更丰富、更完整的规格说明。
-
----
-
-## 可配置 Pipeline
-
-<div align="center">
-<img src="../../assets/dev-buddy-pipeline.png" alt="可配置 Pipeline" width="800">
-</div>
-
-配置文件（`~/.vcp/dev-buddy.json`，版本 `4.0`）将 pipeline 存储在 `pipelines` 映射下 —— 每个键是 pipeline 名称，每个值是有序的阶段数组。每个阶段指定类型、provider 和模型。添加、删除或重新排序阶段。按阶段切换 AI provider —— API preset 通过 `protocol` 字段支持 **Anthropic 兼容**和 **OpenAI 兼容**端点。
-
-使用 Web 门户（`/dev-buddy-config`）或直接编辑 JSON。门户支持 pipeline 的完整 CRUD 操作 —— 创建、重命名和删除。
-
-<details>
-<summary><strong>示例：v4.0 配置，包含自定义 pipeline</strong></summary>
-
-```json
-{
-  "version": "4.0",
-  "pipelines": {
-    "feature": [
-      { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
-      { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
-      { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
-      { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus" },
-      { "type": "plan-review", "provider": "my-codex-preset", "model": "o3" },
-      { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
-      { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" },
-      { "type": "code-review", "provider": "anthropic-subscription", "model": "opus" },
-      { "type": "code-review", "provider": "my-codex-preset", "model": "o3" }
-    ],
-    "bug-fix": [
-      { "type": "rca", "provider": "anthropic-subscription", "model": "opus" },
-      { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
-      { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
-      { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
-      { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
-      { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" }
-    ]
-  }
-}
-```
-
-</details>
+每一层捕获上层遗漏的问题。模型越弱，触发的层越多。模型越强，大多数层直接通过。
 
 ---
 
@@ -175,8 +118,14 @@ Claude Opus 规划 ──→ Claude Sonnet 评审 ──→ Claude Opus 评审 �
 # 运行 Ralph 工作流
 /dev-buddy-ralph 添加基于 JWT 的用户认证
 
-# 通过 Web 门户配置阶段和 provider
+# 通过 Web 门户配置
 /dev-buddy-config
+
+# 多 AI 辩论任意主题
+/dev-buddy-chatroom 应该用 REST 还是 GraphQL？
+
+# 使用指定 AI 运行单个任务
+/dev-buddy-once --preset openai-api --model gpt-5.4 "评审 auth 中间件"
 ```
 
 ---
@@ -185,48 +134,105 @@ Claude Opus 规划 ──→ Claude Sonnet 评审 ──→ Claude Opus 评审 �
 
 | Skill | 命令 | 描述 |
 |-------|------|------|
-| Ralph | `/dev-buddy-ralph <描述>` | 完整的 6 阶段特性开发工作流，包含双循环和多 AI 多样性 |
-| 对话室 | `/dev-buddy-chatroom <主题>` | 多 AI 竞争辩论，迭代达成共识 |
-| 单次执行 | `/dev-buddy-once` | 使用指定 AI provider 和模型运行单个任务 |
-| 配置 | `/dev-buddy-config` | 管理阶段、preset、系统提示和设置的 Web 门户 |
+| Ralph | `/dev-buddy-ralph <描述>` | 完整 pipeline 编排器——串联全部 6 个阶段，包含循环逻辑 |
+| Discover | `/dev-buddy-discover` | Discovery 阶段——多 AI 代码库和运行应用探索 |
+| Requirements | `/dev-buddy-requirements` | 需求 + UAT 设计——验收标准和测试场景 |
+| Decompose | `/dev-buddy-decompose` | 分解——将功能拆分为小的工作单元 |
+| Build | `/dev-buddy-build` | Build 阶段——逐单元实现，带反压 |
+| Code Review | `/dev-buddy-code-review` | 代码评审——多 AI 语义漂移检测 |
+| UAT | `/dev-buddy-uat` | UAT 阶段——对运行中的应用执行测试 |
+| Chatroom | `/dev-buddy-chatroom <主题>` | 多 AI 竞争辩论，迭代达成共识 |
+| Once | `/dev-buddy-once` | 使用指定 AI provider 和模型运行单个任务 |
+| Config | `/dev-buddy-config` | 管理阶段、preset、系统提示词和设置的 Web 门户 |
+
+每个阶段 skill 可独立运行（读取已有计划文件），也可作为 `/dev-buddy-ralph` pipeline 的一部分。
 
 ## Agent 参考
 
 | Agent | 阶段 | 角色 |
 |-------|------|------|
-| discoverer | Discovery | 代码库和应用探索者 |
-| ralph-requirements-analyst | Requirements | AC 和 UAT 设计师 |
+| discoverer | Discovery | 代码库 + 应用探索者 |
+| ralph-requirements-analyst | Requirements | AC + UAT 设计师 |
 | decomposer | Decomposition | 任务分解专家 |
 | unit-builder | Build | 专注的单元实现者 |
 | ralph-code-reviewer | Code Review | 语义漂移检测器 |
 | uat-evaluator | UAT | 悲观主义测试执行者 |
 
-## Hook 参考
+---
 
-| Hook | 触发条件 | 描述 |
-|------|----------|------|
-| guidance-hook | UserPromptSubmit | 向用户提示注入 pipeline 引导信息 |
+## 配置
+
+配置文件（`~/.vcp/dev-buddy.json`，版本 `5.0`）存储：
+- **Stages：** 每阶段执行器分配（系统提示词 + preset + 模型）
+- **Pipeline：** Ralph pipeline（6 个阶段，固定顺序）
+- **Settings：** max_iterations, max_build_attempts, max_outer_iterations
+
+使用 Web 门户（`/dev-buddy-config`）或直接编辑 JSON。
+
+<details>
+<summary><strong>示例：v5.0 配置</strong></summary>
+
+```json
+{
+  "version": "5.0",
+  "stages": {
+    "discovery": { "executors": [
+      { "system_prompt": "discoverer", "preset": "anthropic-subscription", "model": "sonnet", "parallel": true },
+      { "system_prompt": "discoverer", "preset": "openai-api", "model": "o3", "parallel": true }
+    ]},
+    "ralph-requirements": { "executors": [
+      { "system_prompt": "ralph-requirements-analyst", "preset": "anthropic-subscription", "model": "opus" }
+    ]},
+    "decomposition": { "executors": [
+      { "system_prompt": "decomposer", "preset": "anthropic-subscription", "model": "opus" }
+    ]},
+    "ralph-build": { "executors": [
+      { "system_prompt": "unit-builder", "preset": "anthropic-subscription", "model": "sonnet" }
+    ]},
+    "ralph-code-review": { "executors": [
+      { "system_prompt": "ralph-code-reviewer", "preset": "anthropic-subscription", "model": "sonnet", "parallel": true },
+      { "system_prompt": "ralph-code-reviewer", "preset": "openai-api", "model": "o3", "parallel": true }
+    ]},
+    "ralph-uat": { "executors": [
+      { "system_prompt": "uat-evaluator", "preset": "anthropic-subscription", "model": "sonnet" }
+    ]}
+  },
+  "pipelines": { "ralph": ["discovery", "ralph-requirements", "decomposition", "ralph-build", "ralph-code-review", "ralph-uat"] },
+  "max_iterations": 10,
+  "max_build_attempts": 3,
+  "max_outer_iterations": 3
+}
+```
+
+</details>
+
+### 从 v0.3.x 迁移
+
+配置在首次加载时自动迁移。旧阶段类型映射到 Ralph 等价物：
+
+| 旧阶段 | 新阶段 |
+|--------|--------|
+| requirements | ralph-requirements |
+| planning | decomposition |
+| plan-review | discovery |
+| implementation | ralph-build |
+| code-review | ralph-code-review |
+| rca | discovery |
+
+Preset 和模型保留不变。旧 pipeline 替换为 `ralph` pipeline。
 
 ---
 
 ## 前置条件
 
-- **[Bun](https://bun.sh/)** —— Hook 执行所需
-- **[Claude Code](https://code.claude.com/)** —— AI 编码助手
+- **[Bun](https://bun.sh/)** — Hook 执行所需
+- **[Claude Code](https://code.claude.com/)** — AI 编码助手
 
 ---
 
 ## 文档
 
-完整文档请访问 **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)**：
-
-- **[Dev Buddy 快速入门](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Quick-Start.zh)** —— 安装、首次 pipeline 运行
-- **[Dev Buddy 配置](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Configuration.zh)** —— Pipeline 阶段、provider、模型
-- **[功能开发 Pipeline](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Feature-Pipeline.zh)** —— 团队需求、计划评审、代码评审
-- **[Bug 修复 Pipeline](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Bug-Fix-Pipeline.zh)** —— RCA、汇总、最小化修复
-- **[AI Provider Presets](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-AI-Provider-Presets.zh)** —— Subscription、API 和 CLI preset
-- **[Agent 参考](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Agents-Reference.zh)** —— 全部 8 种 agent 类型
-- **[Dev Buddy Hooks](https://github.com/Z-M-Huang/vcp/wiki/Dev-Buddy-Hooks-Reference.zh)** —— Guidance hook 和 review validator
+完整文档请访问 **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)**。
 
 ---
 

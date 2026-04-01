@@ -98,6 +98,9 @@ export const DEFAULT_CONFIG: DevBuddyConfig = {
   max_iterations: 10,
   max_build_attempts: 3,
   max_outer_iterations: 3,
+  max_discovery_iterations: 3,
+  max_requirements_iterations: 3,
+  max_decomposition_iterations: 2,
 };
 
 // ─── Pipeline Name Validation ────────────────────────────────────────────────
@@ -240,6 +243,15 @@ export function validateDevBuddyConfig(config: DevBuddyConfig): void {
   if (!Number.isInteger(config.max_outer_iterations) || config.max_outer_iterations <= 0) {
     throw new Error(`max_outer_iterations must be a positive integer`);
   }
+  if (!Number.isInteger(config.max_discovery_iterations) || config.max_discovery_iterations <= 0) {
+    throw new Error(`max_discovery_iterations must be a positive integer`);
+  }
+  if (!Number.isInteger(config.max_requirements_iterations) || config.max_requirements_iterations <= 0) {
+    throw new Error(`max_requirements_iterations must be a positive integer`);
+  }
+  if (!Number.isInteger(config.max_decomposition_iterations) || config.max_decomposition_iterations <= 0) {
+    throw new Error(`max_decomposition_iterations must be a positive integer`);
+  }
 
   // Validate optional theme field
   if (config.theme !== undefined && config.theme !== 'light' && config.theme !== 'dark') {
@@ -359,6 +371,9 @@ function migrateV4ToV5(v4: Record<string, unknown>): DevBuddyConfig {
     max_iterations: (v4.max_iterations as number) ?? 10,
     max_build_attempts: (v4.max_tdd_iterations as number) ?? 3,
     max_outer_iterations: 3,
+    max_discovery_iterations: 3,
+    max_requirements_iterations: 3,
+    max_decomposition_iterations: 2,
     ...((v4.theme as string) ? { theme: v4.theme as 'light' | 'dark' } : {}),
   };
 }
@@ -384,6 +399,9 @@ function migrateV3InlineToV5(v3: DevBuddyConfigV3): DevBuddyConfig {
     max_iterations: v3.max_iterations ?? 10,
     max_build_attempts: v3.max_tdd_iterations ?? 3,
     max_outer_iterations: 3,
+    max_discovery_iterations: 3,
+    max_requirements_iterations: 3,
+    max_decomposition_iterations: 2,
     ...(v3.theme ? { theme: v3.theme } : {}),
   };
 }
@@ -426,6 +444,9 @@ function migrateV3NamedToV5(config: Record<string, unknown>): DevBuddyConfig {
     max_iterations: (config.max_iterations as number) ?? 10,
     max_build_attempts: (config.max_tdd_iterations as number) ?? 3,
     max_outer_iterations: 3,
+    max_discovery_iterations: 3,
+    max_requirements_iterations: 3,
+    max_decomposition_iterations: 2,
     ...((config.theme as string) ? { theme: config.theme as 'light' | 'dark' } : {}),
   };
 }
@@ -464,6 +485,9 @@ function migrateV2ToV5(v2: PipelineConfig): DevBuddyConfig {
     max_iterations: v2.max_iterations ?? 10,
     max_build_attempts: 3,
     max_outer_iterations: 3,
+    max_discovery_iterations: 3,
+    max_requirements_iterations: 3,
+    max_decomposition_iterations: 2,
   };
 }
 
@@ -486,9 +510,12 @@ export function loadDevBuddyConfig(): DevBuddyConfig {
     throw new Error(`Config at ${CONFIG_PATH} is not valid JSON`);
   }
 
-  // Already v5 — validate and return
+  // Already v5 — fill additive defaults BEFORE validation, then validate and return
   if (isV5(parsed)) {
     const config = parsed as unknown as DevBuddyConfig;
+    config.max_discovery_iterations ??= DEFAULT_CONFIG.max_discovery_iterations;
+    config.max_requirements_iterations ??= DEFAULT_CONFIG.max_requirements_iterations;
+    config.max_decomposition_iterations ??= DEFAULT_CONFIG.max_decomposition_iterations;
     validateDevBuddyConfig(config);
     return config;
   }
