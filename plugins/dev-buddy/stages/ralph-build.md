@@ -21,6 +21,7 @@ Implement ONE unit of work. You receive a unit plan file path. Read it, implemen
 ## Rules
 
 - **ONLY touch files listed in the unit plan.** Do not modify other files.
+- **Touch ALL files listed in the unit plan.** Every file in "Files to Touch" is mandatory. If you determine a listed file doesn't need changes, explain why in your output — do not silently skip it.
 - **Search before assuming.** If the plan says to use a utility, verify it exists (Glob/Grep).
 - **Follow existing patterns.** The discovered context section tells you what conventions to follow.
 - **Run backpressure yourself.** Execute the specific test commands from the unit plan.

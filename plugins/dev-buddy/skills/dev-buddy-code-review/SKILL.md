@@ -115,9 +115,15 @@ All ACs traced to code. No semantic drift. Integration is sound.
 For each finding that requires changes:
 1. Identify affected unit(s)
 2. Append fix instructions to affected unit plan file(s) using Edit tool
-3. Reset affected unit status to `pending` in master plan
-4. Update plan status to `build` using Edit tool: replace `**Status:** review` with `**Status:** build`.
-5. If running under orchestrator: reset affected unit tasks to `in_progress`
+3. Reset affected unit plan file status using Edit tool:
+   - old_string: `**Status:** done`
+   - new_string: `**Status:** pending`
+4. Reset affected unit attempts counter using Edit tool:
+   - old_string: `**Attempts:** {current_N}`
+   - new_string: `**Attempts:** 0`
+5. Reset affected unit status to `pending` in master plan "Units of Work" table using Edit tool
+6. Update plan status to `build` using Edit tool: replace `**Status:** review` with `**Status:** build`.
+7. If running under orchestrator: reset affected unit tasks to `in_progress`
 
 Report findings to user. If running under orchestrator, the orchestrator handles looping back to build.
 

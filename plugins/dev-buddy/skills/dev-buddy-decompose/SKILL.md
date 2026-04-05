@@ -97,18 +97,44 @@ Break this feature into small, independently testable units of work. Return your
 
 Collect all responses (sequential TaskOutput polling -- one at a time).
 
-Synthesize into a decomposition using the following structured format. Each unit MUST use this exact template:
+**Before synthesizing:** Re-read the master plan's `## Discovery` section. For each unit you create, you MUST:
+1. Identify which discovery findings (F-N) are relevant to that unit's files and functionality
+2. Extract specific file:line references, existing patterns, and API signatures from those findings
+3. Include this extracted context in the unit's "Discovered Context" field — cite the finding IDs
+
+Do NOT synthesize from memory alone. Do NOT use generic placeholders.
+
+Synthesize into a decomposition using the following structured format. This template matches the `decomposition.md` stage definition Output Format — ALL sections are required, do not omit any:
 
 ```markdown
 ### Unit {N}: {title}
-- **ACs:** AC-{X}, AC-{Y}
-- **Depends on:** Unit {A}, Unit {B} (or "none")
-- **What to implement:** {specific functions, components, or changes}
-- **Files to touch:**
-  - `src/foo.ts` -- existing | modify
-  - `src/bar.ts` -- new | create
-- **Backpressure:** `bun test src/foo.test.ts`
-- **Done when:** {specific criteria}
+
+#### Acceptance Criteria
+- AC-{X}: {copy the specific AC text from master plan}
+
+#### What to Implement
+- **Current state:** {what the code/app looks like now — from discovery findings}
+- **Target state:** {what it should look like after — from requirements/ACs}
+- **Changes:** {specific functions, components, or changes to make}
+
+#### Discovered Context
+{Relevant findings from discovery — cite F-N IDs, include file:line refs, existing patterns, API signatures, architectural constraints that the implementer needs}
+
+#### Files to Touch
+- `src/foo.ts` -- existing | modify -- {why this file and what to change in it}
+- `tests/foo.test.ts` -- new | create -- {what this file contains and why}
+
+#### Backpressure
+- Unit tests: `{specific test command for this unit}`
+- Typecheck: `{typecheck command}`
+- Lint: `{lint command}`
+
+#### Dependencies
+- Depends on: Unit {A}, Unit {B} (or "none")
+- Required by: Unit {P} (or "none")
+
+#### Done When
+{specific testable criteria — all backpressure passes}
 ```
 
 Each unit must:
@@ -120,7 +146,7 @@ Each unit must:
 - **First unit**: write the UAT Playwright test files (red -- they should fail initially)
 - **Last unit**: integration glue if needed
 
-Every file listed in "Files to touch" MUST be tagged `existing | modify` or `new | create`.
+Every file listed in "Files to Touch" MUST be tagged `existing | modify` or `new | create` with a "why and what" annotation.
 
 **Do NOT create any artifacts yet.** Hold the synthesis in context for adversarial validation.
 
@@ -241,6 +267,12 @@ Agent(subagent_type: "general-purpose", prompt:
 
 Collect all simulation results. Any unit where the simulator found gaps = evidence for gate 5 in Step 6c.
 
+**Gap enrichment for re-dispatch:** When simulation gaps trigger a FAIL verdict (Step 6d) and re-dispatch to Step 4, include the specific gaps as enrichment instructions in the re-dispatch prompt. One-way flow:
+- Missing file paths → executor must add to "Files to Touch" with correct existing/new tags
+- Missing function names or API signatures → executor must add to "Discovered Context" by reading relevant source files
+- Ambiguous instructions → executor must expand in "What to Implement" with concrete before/after/changes
+- Unstated assumptions → executor must make explicit in "Discovered Context"
+
 ### 6f. Exhaustion handling
 
 Reached from Step 6d when iterations are exhausted (after any critical-gate final attempt).
@@ -294,7 +326,9 @@ For each unit, check existence before writing (idempotent):
 test -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" && echo "EXISTS" || echo "NEW"
 ```
 
-Use Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md`:
+Use Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md`.
+
+Populate each field by **transcribing from the approved synthesis** (Step 5/7). The unit file is a self-contained document — a fresh-context implementer reads ONLY this file. Every field must contain concrete content transcribed from the synthesis, not placeholders.
 
 ```markdown
 # Unit {N}: {Title}
@@ -305,26 +339,39 @@ Use Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.
 **Max Attempts:** {max_build_attempts from config}
 
 ## Acceptance Criteria
-{specific ACs from master plan}
+{transcribe the specific AC text from synthesis — include Given/When/Then from master plan's ## Requirements}
 
 ## What to Implement
-{precise instructions -- no design decisions left}
+- **Current state:** {transcribe from synthesis — what the code/app looks like now}
+- **Target state:** {transcribe from synthesis — what it should look like after}
+- **Changes:** {transcribe from synthesis — specific functions, components, or changes}
 
 ## Discovered Context
-{relevant discovery findings}
+{transcribe from synthesis — must include F-N finding IDs, file:line refs, existing patterns, API signatures, architectural constraints from master plan's ## Discovery section}
 
 ## Files to Touch
-- `src/foo.ts` -- existing | modify -- why and what
-- `tests/foo.test.ts` -- new | create -- what to test
+- `src/foo.ts` -- existing | modify -- {transcribe why and what from synthesis}
+- `tests/foo.test.ts` -- new | create -- {transcribe what to test from synthesis}
 
 ## Backpressure
-- Unit tests: `{specific test command}`
-- Typecheck: `{command}`
-- Lint: `{command}`
+- Unit tests: `{specific test command from synthesis}`
+- Typecheck: `{typecheck command from synthesis}`
+- Lint: `{lint command from synthesis}`
+
+## Dependencies
+- Depends on: {transcribe from synthesis}
+- Required by: {transcribe from synthesis}
 
 ## Done When
-All listed backpressure passes
+{transcribe specific criteria from synthesis}
 ```
+
+**Post-Write verification:** After each unit file Write, confirm the Discovered Context section is non-empty:
+```bash
+grep -c '## Discovered Context' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" && \
+grep -A1 '## Discovered Context' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" | tail -1 | grep -cv '^$'
+```
+If the section is empty (second grep returns 0), re-Write the file with the missing content before proceeding to the next unit.
 
 ### 8b. Update master plan
 
