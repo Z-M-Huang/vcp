@@ -70,7 +70,7 @@ Each executor receives:
 - Decomposition rules (max ~50 LOC, AC mapping, dependency ordering, first unit = UAT tests)
 - If re-dispatched from Step 6: validator feedback and specific revision instructions
 
-**Subscription executors:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + plan_context})`
+**Subscription executors:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + plan_context + validation_feedback_if_any})`
 
 **API/CLI executors:** `Bash(run_in_background: true)` with one-shot-runner.ts:
 ```bash
@@ -84,6 +84,8 @@ IMPORTANT: You are a PARALLEL executor. Return your analysis as text output ONLY
 Do NOT create, modify, or delete any files. The orchestrator will write the final output.
 
 {plan_context}
+
+{validation_feedback_if_any}
 
 Break this feature into small, independently testable units of work. Return your decomposition as text.
 {DELIM}
@@ -134,7 +136,7 @@ console.log(JSON.stringify({ max_decomposition_iterations: config.max_decomposit
 "
 ```
 
-Track iteration count. If this is iteration `N` and `N > max_decomposition_iterations`, skip to exhaustion handling (Step 6f).
+Track iteration count `N`.
 
 ### 6b. Mechanical file existence check
 
@@ -193,17 +195,28 @@ Agent(subagent_type: "general-purpose", prompt:
 
    For each gate: PASS or FAIL with specific evidence.
    Final verdict: PASS (all gates pass) or FAIL (any gate fails).
-   If FAIL, classify: STRUCTURAL (needs re-dispatch to Step 4) or
-   LOCALIZED (can be fixed by re-synthesizing locally in Step 5).
-   Structural = missing ACs, wrong unit boundaries, fundamental ordering issues.
-   Localized = missing fields, vague descriptions, file tag mismatches.")
+   If FAIL, output:
+   **Failure Summary:** {one-paragraph summary of all failures}
+   **Fix Guidance:** {specific fixes needed per failed gate}")
 ```
 
 ### 6d. Evaluate validator result
 
 - **PASS:** All gates pass. Proceed to Step 7 (user approval).
-- **FAIL (LOCALIZED):** Re-synthesize locally. Return to Step 5 with the validator's specific feedback, fix only the flagged issues, then re-run Step 6 (increment iteration).
-- **FAIL (STRUCTURAL):** Re-dispatch to Step 4 with the validator's feedback injected into executor prompts. Increment iteration, then flow through Step 5 -> Step 6 again.
+- **FAIL and iteration < max_decomposition_iterations:**
+  - Extract Failure Summary and Fix Guidance from validator response.
+  - Increment iteration counter `N`.
+  - Re-dispatch executors (back to Step 4) with additional context:
+    ```
+    VALIDATION FEEDBACK (iteration {N}): The following issues were found:
+    {failure_summary}
+    Fix guidance: {fix_guidance}
+    Focus on addressing these specific gaps in your decomposition.
+    ```
+  - Collect new responses (Step 5), re-synthesize, run Steps 6b-6e, return to Step 6c.
+- **FAIL and iteration >= max_decomposition_iterations (exhaustion):**
+  - If critical gates (1: AC COVERAGE or 2: NO DEPENDENCY CYCLES) are still failing: re-dispatch to Step 4 one final time with validator feedback (one last attempt before presenting to user). After this final attempt, proceed to Step 6f regardless of outcome.
+  - Otherwise: proceed to Step 6f (exhaustion handling).
 - **Critical gate failures** (AC COVERAGE or NO DEPENDENCY CYCLES) always count as FAIL regardless of other gates.
 
 ### 6e. Fresh-context simulation (runs in parallel with 6b, before 6c)
@@ -230,8 +243,7 @@ Collect all simulation results. Any unit where the simulator found gaps = eviden
 
 ### 6f. Exhaustion handling
 
-If iteration count exceeds `max_decomposition_iterations`:
-- Do NOT loop again.
+Reached from Step 6d when iterations are exhausted (after any critical-gate final attempt).
 - Present the current decomposition to the user with all outstanding validator findings.
 - Ask the user to resolve the remaining issues manually via AskUserQuestion.
 - Proceed to Step 7 with whatever the user confirms.

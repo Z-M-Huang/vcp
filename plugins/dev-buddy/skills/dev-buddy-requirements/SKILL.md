@@ -68,9 +68,9 @@ Same dispatch pattern as discovery. Each executor receives:
 - Feature description
 - Instructions to produce: ACs (Given/When/Then + misinterpretation), UAT scenarios, edge cases, risks
 
-Track the current iteration counter `N` (starts at 1). Use it in output IDs.
+Set iteration N = 1 on first entry. On re-entry from Step 6d (validation failure), increment N. Use it in output IDs.
 
-**Subscription executors:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + discovery_section + feature_description})`
+**Subscription executors:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + discovery_section + feature_description + validation_feedback_if_any})`
 
 **API/CLI executors:** `Bash(run_in_background: true)` with one-shot-runner.ts:
 ```bash
@@ -84,6 +84,8 @@ IMPORTANT: You are a PARALLEL executor. Return your analysis as text output ONLY
 Do NOT create, modify, or delete any files. The orchestrator will write the final output.
 
 {discovery_section + feature_description}
+
+{validation_feedback_if_any}
 
 Define acceptance criteria (Given/When/Then + misinterpretation), UAT scenarios, edge cases, and risks.
 {DELIM}
@@ -193,7 +195,9 @@ GATE 2: PASS|FAIL — {reason}
 GATE 6: PASS|FAIL — {reason}
 OVERALL: PASS|FAIL
 
-If OVERALL is FAIL, list specific fixes needed per failed gate.
+If OVERALL is FAIL, output:
+**Failure Summary:** {one-paragraph summary of all failures}
+**Fix Guidance:** {specific fixes needed per failed gate}
 
 --- DRAFT ---
 {full structured draft}
@@ -203,8 +207,20 @@ If OVERALL is FAIL, list specific fixes needed per failed gate.
 ### 6d. PASS/FAIL/exhaustion logic
 
 - **OVERALL PASS**: Proceed to Step 7 (present and confirm).
-- **OVERALL FAIL**: Apply the validator's fixes to the draft. Increment iteration counter `N`. If `N > max_requirements_iterations`, proceed to Step 7 anyway (exhaustion — let the human decide). Otherwise, loop back to Step 6c with the revised draft.
-- **Critical gate FAIL**: If gates 1 (GIVEN/WHEN/THEN COMPLETENESS) or 3 (AC-TO-UAT MAPPING) fail, the draft MUST be fixed before proceeding even on exhaustion. On exhaustion with a critical gate still failing, re-dispatch to Step 4 with validator feedback as additional context (one final attempt).
+- **OVERALL FAIL and iteration < max_requirements_iterations:**
+  - Extract Failure Summary and Fix Guidance from validator response.
+  - Increment iteration counter `N`.
+  - Re-dispatch executors (back to Step 4) with additional context:
+    ```
+    VALIDATION FEEDBACK (iteration {N}): The following issues were found:
+    {failure_summary}
+    Fix guidance: {fix_guidance}
+    Focus on addressing these specific gaps in your acceptance criteria, UAT scenarios, and coverage.
+    ```
+  - Collect new responses (Step 5), re-synthesize, return to Step 6a.
+- **OVERALL FAIL and iteration >= max_requirements_iterations (exhaustion):**
+  - If critical gates (1: GIVEN/WHEN/THEN COMPLETENESS or 3: AC-TO-UAT MAPPING) are still failing: re-dispatch to Step 4 one final time with validator feedback (one last attempt before presenting to user).
+  - Otherwise: proceed to Step 7 with exhaustion warning — let the human decide.
 
 Track iteration count and report it when presenting to the user: "Internal validation: passed after {N} iteration(s)" or "Internal validation: exhausted after {N} iteration(s), {remaining issues}".
 
