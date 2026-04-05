@@ -19,7 +19,7 @@ Implement each unit of work with fresh context per iteration. Orchestrator indep
 
 If no plan file path is in current context, find the most recent one:
 ```bash
-ls -t ~/.claude/plans/ralph-*.md 2>/dev/null | head -1
+ls -t "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-*.md" 2>/dev/null | head -1
 ```
 
 Read the master plan file. The `## Units of Work` table must exist with at least one unit. If not, tell the user to run `/dev-buddy-decompose` first.
@@ -71,7 +71,7 @@ Read the master plan's "Units of Work" table. Verify all dependency units are `d
 
 ### 3b. Read unit plan
 
-Read `~/.claude/plans/ralph/{SLUG}/unit-{N}.md`.
+Read `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md`.
 
 ### 3c. Resolve stage + role prompts
 

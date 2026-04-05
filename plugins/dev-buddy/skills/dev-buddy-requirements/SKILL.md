@@ -19,7 +19,7 @@ Define what "done" looks like — acceptance criteria in Given/When/Then format 
 
 If no plan file path is in current context, find the most recent one:
 ```bash
-ls -t ~/.claude/plans/ralph-*.md 2>/dev/null | head -1
+ls -t "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-*.md" 2>/dev/null | head -1
 ```
 
 Read the plan file. The `## Discovery` section must be populated (not `(pending)`). If discovery hasn't been done, tell the user to run `/dev-buddy-discover` first.

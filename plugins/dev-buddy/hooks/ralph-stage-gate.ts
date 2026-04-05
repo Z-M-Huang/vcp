@@ -16,7 +16,6 @@
 
 import { readdirSync, readFileSync, statSync } from 'fs';
 import path from 'path';
-import os from 'os';
 
 // ================== STAGE MAPPINGS ==================
 
@@ -53,11 +52,11 @@ const ALWAYS_ALLOWED_SKILLS = new Set([
 /**
  * Find the most recent ralph-*.md master plan file.
  * Unit plans live in ralph/{slug}/ subdirectories, so only master plans
- * (ralph-*.md) exist at the top level of ~/.claude/plans/.
+ * (ralph-*.md) exist at the top level of .vcp/plan/.
  * Returns null if no plan found.
  */
 function findMasterPlan(): string | null {
-  const plansDir = path.join(os.homedir(), '.claude', 'plans');
+  const plansDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), '.vcp', 'plan');
   let entries: string[];
   try {
     entries = readdirSync(plansDir);

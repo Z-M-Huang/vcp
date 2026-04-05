@@ -19,7 +19,7 @@ Validate the feature works from a user's perspective. Pessimistic — assume eve
 
 If no plan file path is in current context, find the most recent one:
 ```bash
-ls -t ~/.claude/plans/ralph-*.md 2>/dev/null | head -1
+ls -t "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-*.md" 2>/dev/null | head -1
 ```
 
 Read the master plan file. Code review must be completed (all units `done`, review verdict `approved`). If not, tell the user to run `/dev-buddy-code-review` first.

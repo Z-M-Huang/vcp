@@ -9,7 +9,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, Tas
 
 Explore the codebase and running application to deeply understand what exists before making changes.
 
-**Standalone usage:** `/dev-buddy-discover` — discovers the most recent `ralph-*.md` plan file in `~/.claude/plans/` and appends findings.
+**Standalone usage:** `/dev-buddy-discover` — discovers the most recent `ralph-*.md` plan file in `{PROJECT_PATH}/.vcp/plan/` and appends findings.
 
 **Orchestrator usage:** Called by `/dev-buddy-ralph` with plan path already established.
 
@@ -19,7 +19,7 @@ Explore the codebase and running application to deeply understand what exists be
 
 If no plan file path is in current context, find the most recent one:
 ```bash
-ls -t ~/.claude/plans/ralph-*.md 2>/dev/null | head -1
+ls -t "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-*.md" 2>/dev/null | head -1
 ```
 
 Read the plan file. Extract the feature description from the `# Ralph: {title}` heading.

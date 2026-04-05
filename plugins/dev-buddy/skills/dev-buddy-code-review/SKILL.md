@@ -19,7 +19,7 @@ Catch semantic drift, integration gaps, and missed intent that mechanical backpr
 
 If no plan file path is in current context, find the most recent one:
 ```bash
-ls -t ~/.claude/plans/ralph-*.md 2>/dev/null | head -1
+ls -t "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-*.md" 2>/dev/null | head -1
 ```
 
 Read the master plan file. All units in the "Units of Work" table must be `done`. If any are `pending` or `failed`, tell the user to run `/dev-buddy-build` first.
@@ -65,7 +65,7 @@ else console.log('ERROR: Could not resolve prompts');
 
 Prepare the review package for each executor:
 - Master plan (requirements, ACs, discovery findings)
-- All unit plan files: `~/.claude/plans/ralph/{SLUG}/unit-*.md`
+- All unit plan files: `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-*.md`
 - Git diff of all changes: `git diff HEAD~{N}` (or since workflow started)
 - Review guidelines: `${CLAUDE_PLUGIN_ROOT}/docs/review-guidelines.md`
 

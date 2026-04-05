@@ -56,9 +56,18 @@ bun -e "console.log(process.argv[1].toLowerCase().replace(/[^a-z0-9]+/g,'-').rep
 ```
 Store as `{SLUG}`.
 
-### 1c. Create master plan file
+### 1c. Initialize plan directory
 
-Use the Write tool to create `~/.claude/plans/ralph-{SLUG}.md`:
+```bash
+mkdir -p "${CLAUDE_PROJECT_DIR}/.vcp/plan"
+if ! grep -qF '.vcp/plan/' "${CLAUDE_PROJECT_DIR}/.gitignore" 2>/dev/null; then
+  echo '.vcp/plan/' >> "${CLAUDE_PROJECT_DIR}/.gitignore"
+fi
+```
+
+### 1d. Create master plan file
+
+Use the Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md`:
 
 ```markdown
 # Ralph: {Feature Title}
@@ -81,13 +90,14 @@ Use the Write tool to create `~/.claude/plans/ralph-{SLUG}.md`:
 (pending)
 ```
 
-### 1d. Create stage tasks
+### 1e. Create stage tasks
 
 ```
 TaskCreate("Stage: Discovery — ralph-{SLUG}", status: "in_progress")
 TaskCreate("Stage: Requirements + UAT — ralph-{SLUG}", status: "pending", blocked_by: [T-discover])
 TaskCreate("Stage: Decompose — ralph-{SLUG}", status: "pending", blocked_by: [T-requirements])
-TaskCreate("Stage: Code Review — run /dev-buddy-code-review — DO NOT STOP, continue pipeline — ralph-{SLUG}", status: "pending", blocked_by: [T-decompose])
+TaskCreate("Stage: Build — ralph-{SLUG}", status: "pending", blocked_by: [T-decompose])
+TaskCreate("Stage: Code Review — run /dev-buddy-code-review — DO NOT STOP, continue pipeline — ralph-{SLUG}", status: "pending", blocked_by: [T-build])
 TaskCreate("Stage: UAT — run /dev-buddy-uat — DO NOT STOP, continue pipeline — ralph-{SLUG}", status: "pending", blocked_by: [T-review])
 ```
 
@@ -130,7 +140,11 @@ After completion:
 
 Run `/dev-buddy-build`. The skill iterates through all pending units, dispatching fresh-context implementers with independent backpressure verification.
 
+On entry:
+- `TaskUpdate(T-build, status: "in_progress")`
+
 After all units complete:
+- `TaskUpdate(T-build, status: "completed")`
 - `TaskUpdate(T-review, status: "in_progress")`
 
 ---

@@ -11,7 +11,7 @@ Ralph = 6 stages with two nested loops and multi-AI diversity
 - **Stage Definitions** — 6 Ralph types (discovery, ralph-requirements, decomposition, ralph-build, ralph-code-review, ralph-uat) that define WHAT happens
 - **Role Prompts** — Agent role definitions. Built-in (`system-prompts/built-in/*.md`) + custom (`~/.vcp/system-prompts/*.md`)
 - **Executors** — Combinations of system_prompt + preset + model. Defined in `~/.vcp/dev-buddy.json`
-- **Plan Files** — Claude Code's `~/.claude/plans/` for state management. Master plan + per-unit plans.
+- **Plan Files** — Project-local `{PROJECT}/.vcp/plan/` for state management. Master plan + per-unit plans.
 - **TaskManagement** — Structural enforcement that survives context compaction
 
 ## The Ralph Loop
@@ -60,8 +60,8 @@ Multi-executor dispatch:
 
 ## State Management
 
-No scattered files. Uses Claude Code's native `~/.claude/plans/` infrastructure.
+No scattered files. Uses project-local `.vcp/plan/` directory for state persistence.
 
-- **Master plan:** `~/.claude/plans/ralph-{slug}.md` — status, discovery, requirements, units table, UAT results
-- **Per-unit plans:** `~/.claude/plans/ralph/{slug}/unit-{N}.md` — implementation spec, attempts, backpressure
+- **Master plan:** `{PROJECT}/.vcp/plan/ralph-{slug}.md` — status, discovery, requirements, units table, UAT results
+- **Per-unit plans:** `{PROJECT}/.vcp/plan/ralph/{slug}/unit-{N}.md` — implementation spec, attempts, backpressure
 - **Progress tracking:** Master plan's "Units of Work" table is the status tracker

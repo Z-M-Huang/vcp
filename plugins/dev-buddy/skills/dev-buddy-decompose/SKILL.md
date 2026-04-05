@@ -19,7 +19,7 @@ Break the feature into tiny, independently testable units of work. Create per-un
 
 If no plan file path is in current context, find the most recent one:
 ```bash
-ls -t ~/.claude/plans/ralph-*.md 2>/dev/null | head -1
+ls -t "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-*.md" 2>/dev/null | head -1
 ```
 
 Read the plan file. The `## Requirements` section must be populated. If not, tell the user to run `/dev-buddy-requirements` first.
@@ -279,10 +279,10 @@ AskUserQuestion: "What kind of issue?"
 
 For each unit, check existence before writing (idempotent):
 ```bash
-test -f ~/.claude/plans/ralph/{SLUG}/unit-{N}.md && echo "EXISTS" || echo "NEW"
+test -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" && echo "EXISTS" || echo "NEW"
 ```
 
-Use Write tool to create `~/.claude/plans/ralph/{SLUG}/unit-{N}.md`:
+Use Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md`:
 
 ```markdown
 # Unit {N}: {Title}
@@ -342,7 +342,7 @@ Update Code Review task to depend on all unit tasks.
 If any artifact creation fails mid-way:
 1. Delete any unit plan files already created:
    ```bash
-   rm -f ~/.claude/plans/ralph/{SLUG}/unit-*.md
+   rm -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-*.md"
    ```
 2. Do NOT update plan status (stays "decompose").
 3. Do NOT create remaining tasks.
