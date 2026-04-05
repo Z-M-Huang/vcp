@@ -22,10 +22,15 @@ Each stage is a standalone skill that can also be invoked independently. This or
 If you have lost context (conversation compressed), immediately:
 1. Call `TaskList()` to see all tasks and their statuses
 2. Read the master plan file (path is in the first task's description: `ralph-{SLUG}`)
-3. Find the first non-completed task — its description contains the skill to invoke (e.g., "run /dev-buddy-code-review")
-4. If the task is blocked but all its blockers are completed, update it to `in_progress`
-5. Invoke the skill named in the task description and continue the pipeline
-6. After decompose, the pipeline must run to completion without stopping — do NOT yield to the user between stages
+3. Check plan `**Status:**` — this is the source of truth for which stage to run
+4. Find the task matching the current plan status. If it is `completed` but the plan status indicates it should run again (loop-back from code review or UAT), reset it to `in_progress`
+5. Use the Skill tool to invoke the skill named in the task description (e.g., "invoke /dev-buddy-build")
+6. After the skill returns, run the VERIFY commands from the task description
+7. If any VERIFY check fails: fix the issue with Edit tool, re-run VERIFY
+8. Determine next action based on plan status:
+   - Status advanced forward (e.g., build→review): `TaskUpdate` current task to `completed`, go to step 1
+   - Status looped back (e.g., review→build): reset downstream tasks to `pending`, go to step 1
+   - Status is `done`: `TaskUpdate` current task to `completed`, report success to user
 
 ---
 
@@ -86,6 +91,9 @@ Use the Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md`:
 ## Units of Work
 (pending)
 
+## Code Review
+(pending)
+
 ## UAT Results
 (pending)
 ```
@@ -93,99 +101,190 @@ Use the Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md`:
 ### 1e. Create stage tasks
 
 ```
-TaskCreate("Stage: Discovery — ralph-{SLUG}", status: "in_progress")
-TaskCreate("Stage: Requirements + UAT — ralph-{SLUG}", status: "pending", blocked_by: [T-discover])
-TaskCreate("Stage: Decompose — ralph-{SLUG}", status: "pending", blocked_by: [T-requirements])
-TaskCreate("Stage: Build — ralph-{SLUG}", status: "pending", blocked_by: [T-decompose])
-TaskCreate("Stage: Code Review — run /dev-buddy-code-review — DO NOT STOP, continue pipeline — ralph-{SLUG}", status: "pending", blocked_by: [T-build])
-TaskCreate("Stage: UAT — run /dev-buddy-uat — DO NOT STOP, continue pipeline — ralph-{SLUG}", status: "pending", blocked_by: [T-review])
+TaskCreate("Stage: Discovery — invoke /dev-buddy-discover — ralph-{SLUG}
+VERIFY BEFORE COMPLETING:
+  grep -v '(pending)' .vcp/plan/ralph-{SLUG}.md | grep -q '## Discovery'
+  grep '^\*\*Status:\*\* requirements' .vcp/plan/ralph-{SLUG}.md", status: "in_progress")
+
+TaskCreate("Stage: Requirements + UAT — invoke /dev-buddy-requirements — ralph-{SLUG}
+VERIFY BEFORE COMPLETING:
+  grep -v '(pending)' .vcp/plan/ralph-{SLUG}.md | grep -q '## Requirements'
+  grep -c '### AC-' .vcp/plan/ralph-{SLUG}.md | grep -v '^0$'
+  grep -c '### UAT-' .vcp/plan/ralph-{SLUG}.md | grep -v '^0$'
+  grep '^\*\*Status:\*\* decompose' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-discover])
+
+TaskCreate("Stage: Decompose — invoke /dev-buddy-decompose — ralph-{SLUG}
+VERIFY BEFORE COMPLETING:
+  ls .vcp/plan/ralph/{SLUG}/unit-*.md
+  grep -v '(pending)' .vcp/plan/ralph-{SLUG}.md | grep -q '## Units of Work'
+  grep '^\*\*Status:\*\* build' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-requirements])
+
+TaskCreate("Stage: Build — invoke /dev-buddy-build — ralph-{SLUG}
+VERIFY BEFORE COMPLETING:
+  grep -c '^\*\*Status:\*\* pending' .vcp/plan/ralph/{SLUG}/unit-*.md | grep '^0$'
+  grep '^\*\*Status:\*\* review' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-decompose])
+
+TaskCreate("Stage: Code Review — invoke /dev-buddy-code-review — ralph-{SLUG}
+VERIFY BEFORE COMPLETING:
+  grep '^\*\*Verdict:\*\*' .vcp/plan/ralph-{SLUG}.md
+  grep '^\*\*Status:\*\* uat\|^\*\*Status:\*\* build' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-build])
+
+TaskCreate("Stage: UAT — invoke /dev-buddy-uat — ralph-{SLUG}
+VERIFY BEFORE COMPLETING:
+  grep '## UAT Results' .vcp/plan/ralph-{SLUG}.md | grep -v '(pending)'
+  grep '^\*\*Status:\*\* done\|^\*\*Status:\*\* build' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-review])
 ```
 
 Note: Build tasks (T-unit-N) are created during decomposition when units are known.
-Post-decompose task descriptions include the skill to invoke and a continuation hint — these survive context compaction and serve as breadcrumbs when checking TaskList.
+Each task description includes the skill to invoke and VERIFY commands — these survive context compaction and serve as both breadcrumbs and completion checklists.
 
 ---
 
 ## Step 2: DISCOVER
 
-Run `/dev-buddy-discover`. The skill reads the plan file, dispatches multi-AI exploration, synthesizes findings, runs internal adversarial validation, and gets user confirmation.
+Use the Skill tool to invoke `/dev-buddy-discover`.
 
-After completion:
-- `TaskUpdate(T-discover, status: "completed")`
-- `TaskUpdate(T-requirements, status: "in_progress")`
+After the skill returns — run VERIFY from task description:
+1. Confirm `## Discovery` section is no longer `(pending)` in plan file
+2. Confirm `**Status:**` is `requirements`:
+   ```bash
+   grep '^\*\*Status:\*\* requirements' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   ```
+3. If status was not updated: fix with Edit tool, then re-verify
+4. `TaskUpdate(T-discover, status: "completed")`
+5. `TaskUpdate(T-requirements, status: "in_progress")`
 
 ---
 
 ## Step 3: REQUIREMENTS + UAT DESIGN
 
-Run `/dev-buddy-requirements`. The skill reads discovery from the plan, dispatches multi-AI requirements analysis, synthesizes ACs + UAT scenarios, runs internal adversarial validation, and gets user approval through batched AC/UAT review rounds.
+Use the Skill tool to invoke `/dev-buddy-requirements`.
 
-After completion:
-- `TaskUpdate(T-requirements, status: "completed")`
-- `TaskUpdate(T-decompose, status: "in_progress")`
+After the skill returns — run VERIFY from task description:
+1. Confirm `## Requirements` section is no longer `(pending)` in plan file
+2. Confirm ACs and UATs exist:
+   ```bash
+   grep -c '### AC-' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   grep -c '### UAT-' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   ```
+3. Confirm `**Status:**` is `decompose`:
+   ```bash
+   grep '^\*\*Status:\*\* decompose' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   ```
+4. If status was not updated: fix with Edit tool, then re-verify
+5. `TaskUpdate(T-requirements, status: "completed")`
+6. `TaskUpdate(T-decompose, status: "in_progress")`
 
 ---
 
 ## Step 4: DECOMPOSE
 
-Run `/dev-buddy-decompose`. The skill reads requirements from the plan, dispatches multi-AI decomposition, runs internal adversarial validation (including fresh-context simulation), gets user approval FIRST, and only then creates per-unit plan files and unit tasks.
+Use the Skill tool to invoke `/dev-buddy-decompose`.
 
-After completion:
-- `TaskUpdate(T-decompose, status: "completed")`
-- All unit tasks created with dependencies
+After the skill returns — run VERIFY from task description:
+1. Confirm unit plan files exist:
+   ```bash
+   ls "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-"*.md
+   ```
+2. Confirm `## Units of Work` table is no longer `(pending)` in plan file
+3. Confirm `**Status:**` is `build`:
+   ```bash
+   grep '^\*\*Status:\*\* build' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   ```
+4. If status was not updated: fix with Edit tool, then re-verify
+5. `TaskUpdate(T-decompose, status: "completed")`
+6. All unit tasks created with dependencies
 
 ---
 
 ## Step 5: BUILD (Inner Ralph Loop)
 
-Run `/dev-buddy-build`. The skill iterates through all pending units, dispatching fresh-context implementers with independent backpressure verification.
+Use the Skill tool to invoke `/dev-buddy-build`.
 
 On entry:
 - `TaskUpdate(T-build, status: "in_progress")`
 
-After all units complete:
-- `TaskUpdate(T-build, status: "completed")`
-- `TaskUpdate(T-review, status: "in_progress")`
+After the skill returns — run VERIFY from task description:
+1. Check all unit files are done:
+   ```bash
+   grep -l '^\*\*Status:\*\* pending' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-"*.md 2>/dev/null
+   ```
+   If any are still pending but master plan Units table shows them as done, update the unit files.
+2. Verify plan status:
+   ```bash
+   grep '^\*\*Status:\*\* review' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   ```
+   If not `review`: update with Edit tool.
+3. `TaskUpdate(T-build, status: "completed")`
+4. `TaskUpdate(T-review, status: "in_progress")`
 
 ---
 
 ## Step 6: CODE REVIEW (Review Gate)
 
-Run `/dev-buddy-code-review`. The skill dispatches multi-AI reviewers who trace ACs to code with file:line evidence.
+Use the Skill tool to invoke `/dev-buddy-code-review`.
 
 ### Verdict handling (orchestrator's responsibility):
 
 **approved** → proceed to Step 7.
 
-**needs_changes** →
-1. The skill has already updated affected unit plans and reset statuses
-2. Loop back to Step 5 (BUILD for affected units only)
-3. After rebuilds, loop back to Step 6 (fresh CODE REVIEW)
-4. Max review iterations: `max_iterations` from config
+**needs_changes** → loop back to Step 5 (BUILD for affected units only). Max: `max_iterations` from config.
 
 **rejected** → stop and report to user.
 
-After approval:
-- `TaskUpdate(T-review, status: "completed")`
-- `TaskUpdate(T-uat, status: "in_progress")`
+After the skill returns — run VERIFY from task description:
+1. Verify verdict is recorded:
+   ```bash
+   grep '^\*\*Verdict:\*\*' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   ```
+2. Verify plan status matches verdict:
+   ```bash
+   grep '^\*\*Status:\*\*' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   ```
+   - If approved: expected `uat`. If not: fix with Edit.
+   - If needs_changes: expected `build`. If not: fix with Edit.
+3. If status doesn't match: fix with Edit tool
+4. Update tasks per verdict:
+   - approved:
+     - `TaskUpdate(T-review, status: "completed")`
+     - `TaskUpdate(T-uat, status: "in_progress")`
+   - needs_changes (loop back):
+     - `TaskUpdate(T-build, status: "in_progress")`
+     - Do NOT complete T-review — leave it in_progress for the next review round
+     - Go back to Step 5
 
 ---
 
 ## Step 7: UAT (Outer Ralph Loop)
 
-Run `/dev-buddy-uat`. The skill runs all mechanical backpressure and UAT tests.
+Use the Skill tool to invoke `/dev-buddy-uat`.
 
 ### Result handling (orchestrator's responsibility):
 
-**ALL pass** →
-- `TaskUpdate(T-uat, status: "completed")`
-- Report success to user. Done.
+**ALL pass** → done.
 
-**ANY fail** →
-1. The skill has already updated affected unit plans and reset statuses
-2. Loop back: Step 5 (BUILD) → Step 6 (CODE REVIEW) → Step 7 (UAT)
-3. Max outer iterations: `max_outer_iterations` from config
-4. After exhaustion: report to user
+**ANY fail** → loop back to Step 5. Max: `max_outer_iterations` from config.
+
+After the skill returns — run VERIFY from task description:
+1. Verify UAT results recorded:
+   ```bash
+   grep '## UAT Results' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md" | grep -v '(pending)'
+   ```
+2. Verify plan status:
+   ```bash
+   grep '^\*\*Status:\*\*' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   ```
+   - If all pass: expected `done`. If not: fix with Edit.
+   - If any fail: expected `build`. If not: fix with Edit.
+3. Update tasks per result:
+   - all pass:
+     - `TaskUpdate(T-uat, status: "completed")`
+     - Report success to user
+   - any fail (loop back):
+     - `TaskUpdate(T-build, status: "in_progress")`
+     - `TaskUpdate(T-review, status: "pending")`
+     - Do NOT complete T-uat — leave it in_progress for the next UAT round
+     - Go back to Step 5
 
 ---
 

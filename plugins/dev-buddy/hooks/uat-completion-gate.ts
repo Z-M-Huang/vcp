@@ -30,8 +30,8 @@ function main(): void {
     }
 
     const toolName = input.tool_name;
-    if (toolName !== 'Edit') {
-      process.exit(0); // Only intercept Edit calls
+    if (toolName !== 'Edit' && toolName !== 'Write') {
+      process.exit(0); // Only intercept Edit and Write calls
     }
 
     const toolInput = input.tool_input;
@@ -39,6 +39,36 @@ function main(): void {
       process.exit(0); // Fail-open
     }
 
+    // Handle Write tool: check if overwriting a plan file with uat→done transition
+    if (toolName === 'Write') {
+      const filePath = toolInput.file_path as string | undefined;
+      const newContent = toolInput.content as string | undefined;
+      if (!filePath || !newContent) {
+        process.exit(0); // Fail-open
+      }
+      if (!/[\\/]\.vcp[\\/]plan[\\/]ralph-.*\.md$/.test(filePath)) {
+        process.exit(0);
+      }
+      // Check if new content sets status to done
+      if (!/\*\*Status:\*\*\s*done/.test(newContent)) {
+        process.exit(0);
+      }
+      // Read current file to check if transitioning from uat
+      let currentContent: string;
+      try {
+        currentContent = readFileSync(filePath, 'utf-8');
+      } catch {
+        process.exit(0); // Fail-open: file doesn't exist yet
+      }
+      if (!/\*\*Status:\*\*\s*uat/.test(currentContent)) {
+        process.exit(0);
+      }
+      // Verify UAT PASS results exist in the NEW content
+      verifyUatResults(newContent, filePath);
+      process.exit(0); // All UATs passed
+    }
+
+    // Handle Edit tool (existing logic)
     const filePath = toolInput.file_path as string | undefined;
     const oldString = toolInput.old_string as string | undefined;
     const newString = toolInput.new_string as string | undefined;
@@ -68,56 +98,65 @@ function main(): void {
       process.exit(0); // Fail-open: can't read plan file
     }
 
-    // Extract UAT definitions from ## Requirements section: ### UAT-{N}: {title}
-    const definedUATs = new Set<string>();
-    const uatDefRegex = /^### UAT-(\d+):/gm;
-    let match: RegExpExecArray | null;
-    while ((match = uatDefRegex.exec(planContent)) !== null) {
-      definedUATs.add(match[1]);
-    }
-
-    if (definedUATs.size === 0) {
-      process.exit(0); // No UAT definitions found, allow
-    }
-
-    // Find the LAST ## UAT Results section and extract PASS entries
-    const uatResultsSections = planContent.split(/^## UAT Results/gm);
-    const lastResultsSection =
-      uatResultsSections.length > 1
-        ? uatResultsSections[uatResultsSections.length - 1]
-        : '';
-
-    const passedUATs = new Set<string>();
-    const uatPassRegex = /^- UAT-(\d+):\s*PASS/gm;
-    while ((match = uatPassRegex.exec(lastResultsSection)) !== null) {
-      passedUATs.add(match[1]);
-    }
-
-    // Set difference: find defined UATs that are not in PASS set
-    const missing: string[] = [];
-    for (const uatId of definedUATs) {
-      if (!passedUATs.has(uatId)) {
-        missing.push(`UAT-${uatId}`);
-      }
-    }
-
-    if (missing.length > 0) {
-      missing.sort((a, b) => {
-        const numA = parseInt(a.replace('UAT-', ''), 10);
-        const numB = parseInt(b.replace('UAT-', ''), 10);
-        return numA - numB;
-      });
-      process.stderr.write(
-        `[uat-completion-gate] BLOCKED: Cannot transition to 'done' — ` +
-          `the following UATs have not passed: ${missing.join(', ')}. ` +
-          `Plan: ${filePath}\n`,
-      );
-      process.exit(2);
-    }
+    // Verify UAT results in the plan file content
+    verifyUatResults(planContent, filePath);
 
     process.exit(0); // All UATs passed
   } catch {
     process.exit(0); // Fail-open: unexpected error
+  }
+}
+
+/**
+ * Check that all defined UAT-N scenarios have a PASS result in the content.
+ * Blocks (exit 2) if any UAT lacks a PASS result. Returns normally if all pass.
+ */
+function verifyUatResults(content: string, planFilePath: string): void {
+  // Extract UAT definitions from ## Requirements section: ### UAT-{N}: {title}
+  const definedUATs = new Set<string>();
+  const uatDefRegex = /^### UAT-(\d+):/gm;
+  let match: RegExpExecArray | null;
+  while ((match = uatDefRegex.exec(content)) !== null) {
+    definedUATs.add(match[1]);
+  }
+
+  if (definedUATs.size === 0) {
+    return; // No UAT definitions found, allow
+  }
+
+  // Find the LAST ## UAT Results section and extract PASS entries
+  const uatResultsSections = content.split(/^## UAT Results/gm);
+  const lastResultsSection =
+    uatResultsSections.length > 1
+      ? uatResultsSections[uatResultsSections.length - 1]
+      : '';
+
+  const passedUATs = new Set<string>();
+  const uatPassRegex = /^- UAT-(\d+):\s*PASS/gm;
+  while ((match = uatPassRegex.exec(lastResultsSection)) !== null) {
+    passedUATs.add(match[1]);
+  }
+
+  // Set difference: find defined UATs that are not in PASS set
+  const missing: string[] = [];
+  for (const uatId of definedUATs) {
+    if (!passedUATs.has(uatId)) {
+      missing.push(`UAT-${uatId}`);
+    }
+  }
+
+  if (missing.length > 0) {
+    missing.sort((a, b) => {
+      const numA = parseInt(a.replace('UAT-', ''), 10);
+      const numB = parseInt(b.replace('UAT-', ''), 10);
+      return numA - numB;
+    });
+    process.stderr.write(
+      `[uat-completion-gate] BLOCKED: Cannot transition to 'done' — ` +
+        `the following UATs have not passed: ${missing.join(', ')}. ` +
+        `Plan: ${planFilePath}\n`,
+    );
+    process.exit(2);
   }
 }
 

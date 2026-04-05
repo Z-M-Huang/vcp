@@ -165,6 +165,13 @@ function main(): void {
       process.exit(2);
     }
 
+    // Precondition checks — verify previous stage produced expected artifacts
+    const preconditionError = checkPreconditions(status, planContent, planPath);
+    if (preconditionError) {
+      process.stderr.write(preconditionError);
+      process.exit(2);
+    }
+
     process.exit(0); // Allowed
   }
 
@@ -205,6 +212,92 @@ function main(): void {
 
   // Other tool types: fail-open
   process.exit(0);
+}
+
+// ================== PRECONDITION CHECKS ==================
+
+/** Extract slug from plan file path: ralph-{SLUG}.md → {SLUG} */
+function extractSlug(planFilePath: string): string | null {
+  const match = path.basename(planFilePath).match(/^ralph-(.+)\.md$/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Check stage-specific preconditions beyond just plan status matching.
+ * Returns an error message string if preconditions fail, null if all pass.
+ */
+function checkPreconditions(status: string, content: string, planFilePath: string): string | null {
+  const prefix = '[ralph-stage-gate] BLOCKED:';
+
+  switch (status) {
+    case 'requirements':
+      if (/## Discovery\n\(pending\)/.test(content)) {
+        return `${prefix} Discovery section is still (pending). Complete /dev-buddy-discover first. Plan: ${planFilePath}\n`;
+      }
+      return null;
+
+    case 'decompose':
+      if (/## Requirements\n\(pending\)/.test(content)) {
+        return `${prefix} Requirements section is still (pending). Complete /dev-buddy-requirements first. Plan: ${planFilePath}\n`;
+      }
+      if (!/### AC-\d+:/.test(content)) {
+        return `${prefix} No acceptance criteria (AC-N) found in plan. Complete /dev-buddy-requirements first. Plan: ${planFilePath}\n`;
+      }
+      if (!/### UAT-\d+:/.test(content)) {
+        return `${prefix} No UAT scenarios (UAT-N) found in plan. Complete /dev-buddy-requirements first. Plan: ${planFilePath}\n`;
+      }
+      return null;
+
+    case 'build': {
+      const slug = extractSlug(planFilePath);
+      if (!slug) return null; // fail-open
+      const unitsDir = path.join(path.dirname(planFilePath), 'ralph', slug);
+      try {
+        const units = readdirSync(unitsDir).filter(f => /^unit-\d+\.md$/.test(f));
+        if (units.length === 0) {
+          return `${prefix} No unit plan files found in ${unitsDir}. Complete /dev-buddy-decompose first. Plan: ${planFilePath}\n`;
+        }
+      } catch {
+        return `${prefix} Unit plans directory not found: ${unitsDir}. Complete /dev-buddy-decompose first. Plan: ${planFilePath}\n`;
+      }
+      return null;
+    }
+
+    case 'review': {
+      const slug = extractSlug(planFilePath);
+      if (!slug) return null; // fail-open
+      const unitsDir = path.join(path.dirname(planFilePath), 'ralph', slug);
+      try {
+        const unitFiles = readdirSync(unitsDir).filter(f => /^unit-\d+\.md$/.test(f));
+        const notDone: string[] = [];
+        for (const f of unitFiles) {
+          const unitContent = readFileSync(path.join(unitsDir, f), 'utf-8');
+          const unitStatus = parseStatus(unitContent);
+          if (unitStatus !== 'done') {
+            notDone.push(`${f}: ${unitStatus || 'unknown'}`);
+          }
+        }
+        if (notDone.length > 0) {
+          return `${prefix} Cannot start code review — ${notDone.length} unit(s) not done:\n` +
+            notDone.map(u => `  - ${u}`).join('\n') + '\n' +
+            `All units must have **Status:** done. Plan: ${planFilePath}\n`;
+        }
+      } catch {
+        // fail-open: can't read units directory
+      }
+      return null;
+    }
+
+    case 'uat': {
+      if (!/\*\*Verdict:\*\*\s*approved/i.test(content)) {
+        return `${prefix} No code review approval found. Complete /dev-buddy-code-review first. Plan: ${planFilePath}\n`;
+      }
+      return null;
+    }
+
+    default:
+      return null;
+  }
 }
 
 main();

@@ -93,20 +93,20 @@ If Playwright tests are defined in the UAT scenarios, run them. If Playwright is
 
 ### If ALL pass
 
-- Update plan status to `done` using Edit tool: replace `**Status:** uat` with `**Status:** done`.
-- Append UAT results to master plan:
-  ```markdown
-  ## UAT Results — Iteration {N}
-  - All mechanical backpressure: PASS
-  - UAT-1: PASS
-  - UAT-2: PASS
-  ```
-- If running under orchestrator: `TaskUpdate(T-uat, status: "completed")`
-- Report success to user
+1. Append UAT results to master plan FIRST (before status change):
+   ```markdown
+   ## UAT Results — Iteration {N}
+   - All mechanical backpressure: PASS
+   - UAT-1: PASS
+   - UAT-2: PASS
+   ```
+2. THEN update plan status to `done` using Edit tool: replace `**Status:** uat` with `**Status:** done`.
+3. If running under orchestrator: `TaskUpdate(T-uat, status: "completed")`
+4. Report success to user
 
 ### If ANY fail
 
-1. Record results in master plan:
+1. Record results in master plan FIRST (before any status changes):
    ```markdown
    ## UAT Results — Iteration {N}
    - {test}: FAIL — {error summary}
@@ -120,9 +120,9 @@ If Playwright tests are defined in the UAT scenarios, run them. If Playwright is
    - old_string: `**Attempts:** {current_N}`
    - new_string: `**Attempts:** 0`
 6. Reset affected unit statuses to `pending` in master plan "Units of Work" table using Edit tool
-7. Update plan status to `build` using Edit tool: replace `**Status:** uat` with `**Status:** build`.
+7. THEN update plan status to `build` using Edit tool: replace `**Status:** uat` with `**Status:** build`.
 
-If running under orchestrator: call `TaskList()` to find the next pending stage. The task description tells you which skill to invoke. Continue the pipeline immediately — the loop back to build → code review → UAT should happen without stopping.
+If running under orchestrator: the orchestrator handles looping back to build → code review → UAT.
 
 If standalone: report failures and tell the user to run `/dev-buddy-build` for affected units, then `/dev-buddy-code-review`, then `/dev-buddy-uat` again.
 

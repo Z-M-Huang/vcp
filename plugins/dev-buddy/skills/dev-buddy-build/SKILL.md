@@ -217,8 +217,6 @@ If running under the orchestrator, update tasks:
 - `TaskUpdate(T-build, status: "completed")`
 - `TaskUpdate(T-review, status: "in_progress")`
 
-**Pipeline continuation:** After updating, call `TaskList()` to find the next pending stage. The task description tells you which skill to invoke. Continue the pipeline immediately — do NOT stop and wait for user input. The pipeline must run to completion after decompose.
-
 ---
 
 ## Known Constraints

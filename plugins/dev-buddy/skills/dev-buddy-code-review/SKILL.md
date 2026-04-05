@@ -22,7 +22,7 @@ If no plan file path is in current context, find the most recent one:
 ls -t "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-*.md" 2>/dev/null | head -1
 ```
 
-Read the master plan file. All units in the "Units of Work" table must be `done`. If any are `pending` or `failed`, tell the user to run `/dev-buddy-build` first.
+Read the master plan file. All units in the "Units of Work" table must be `done`. If any are `pending`, tell the user to run `/dev-buddy-build` first. Units with status `failed` were explicitly skipped by the user during build — include them in the review report as unimplemented.
 
 Extract the slug from the filename: `ralph-{SLUG}.md` → `{SLUG}`.
 
@@ -101,18 +101,35 @@ Do NOT create, modify, or delete any files. The orchestrator will write the fina
 
 Collect all responses (sequential TaskOutput polling — one at a time).
 
-Synthesize all reviewer findings into a verdict:
+Synthesize all reviewer findings into a verdict.
+
+**Write verdict to plan file FIRST** (before any status changes). Use Edit tool to replace the `## Code Review` section:
 
 ### approved
 
-All ACs traced to code. No semantic drift. Integration is sound.
-- Update plan status to `uat` using Edit tool: replace `**Status:** review` with `**Status:** uat`.
+Edit tool: replace `## Code Review\n(pending)` (or the previous verdict block) with:
+```markdown
+## Code Review
+**Verdict:** approved
+**Iteration:** {N}
+All ACs traced to code. No semantic drift. Integration sound.
+```
+
+THEN update plan status to `uat` using Edit tool: replace `**Status:** review` with `**Status:** uat`.
 - If running under orchestrator: proceed to UAT stage
 - If standalone: report approval to user
 
 ### needs_changes
 
-For each finding that requires changes:
+Edit tool: replace `## Code Review\n(pending)` (or the previous verdict block) with:
+```markdown
+## Code Review
+**Verdict:** needs_changes
+**Iteration:** {N}
+{summary of findings requiring changes}
+```
+
+Then for each finding that requires changes:
 1. Identify affected unit(s)
 2. Append fix instructions to affected unit plan file(s) using Edit tool
 3. Reset affected unit plan file status using Edit tool:
@@ -122,7 +139,7 @@ For each finding that requires changes:
    - old_string: `**Attempts:** {current_N}`
    - new_string: `**Attempts:** 0`
 5. Reset affected unit status to `pending` in master plan "Units of Work" table using Edit tool
-6. Update plan status to `build` using Edit tool: replace `**Status:** review` with `**Status:** build`.
+6. THEN update plan status to `build` using Edit tool: replace `**Status:** review` with `**Status:** build`.
 7. If running under orchestrator: reset affected unit tasks to `in_progress`
 
 Report findings to user. If running under orchestrator, the orchestrator handles looping back to build.
@@ -130,6 +147,14 @@ Report findings to user. If running under orchestrator, the orchestrator handles
 If standalone: tell the user to run `/dev-buddy-build` to fix the affected units, then re-run `/dev-buddy-code-review`.
 
 ### rejected
+
+Edit tool: replace `## Code Review\n(pending)` (or the previous verdict block) with:
+```markdown
+## Code Review
+**Verdict:** rejected
+**Iteration:** {N}
+{reason for rejection}
+```
 
 Fundamental design issue. Escalate to user via AskUserQuestion. Do not loop — this needs human intervention.
 
@@ -141,8 +166,6 @@ Fundamental design issue. Escalate to user via AskUserQuestion. Do not loop — 
 - `TaskUpdate(T-uat, status: "in_progress")`
 
 Max review iterations: `max_iterations` from config. After exhaustion, report to user.
-
-**Pipeline continuation:** After updating tasks, call `TaskList()` to find the next pending stage. The task description tells you which skill to invoke. Continue the pipeline immediately — do NOT stop and wait for user input.
 
 ---
 
