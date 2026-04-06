@@ -4,7 +4,7 @@
 
 **Break the AI echo chamber. Ship correct features.**
 
-![Skills-4](https://img.shields.io/badge/Skills-4-blue?style=flat-square)
+![Skills-10](https://img.shields.io/badge/Skills-10-blue?style=flat-square)
 ![Stages-6](https://img.shields.io/badge/Stages-6-green?style=flat-square)
 ![Role Prompts-6](https://img.shields.io/badge/Role%20Prompts-6-purple?style=flat-square)
 

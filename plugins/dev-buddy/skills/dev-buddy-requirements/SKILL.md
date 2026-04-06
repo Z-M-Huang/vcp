@@ -138,6 +138,33 @@ The draft must also include:
 
 **Do NOT write to the plan file yet.** Hold the draft in context for the internal adversarial validation loop.
 
+## Step 5b: Create dispatch proof
+
+Before any plan-file Edit/Write is allowed at this checkpoint stage, create a dispatch proof for the current draft:
+
+```bash
+mkdir -p "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch"
+```
+
+Use Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json` with:
+
+```json
+{
+  "stage": "requirements",
+  "iteration": {N},
+  "timestamp": "{ISO-8601 UTC now}",
+  "executor_count": {total_executor_count},
+  "executor_type": "{subscription|api|mixed}",
+  "output_ids": ["ralph-req-p0-iter{N}", "ralph-req-p1-iter{N}"]
+}
+```
+
+Rules:
+- Derive `{SLUG}` from the master plan filename `ralph-{SLUG}.md`.
+- Overwrite the prior proof for the same slug when creating a new synthesis iteration.
+- Set `executor_type` to `subscription` only if every executor was a subscription Agent. Otherwise use `api` or `mixed`.
+- For any non-`subscription` proof, `output_ids` MUST include the one-shot output IDs that should exist under `${TMPDIR:-/tmp}/.vcp/oneshot/`.
+
 ## Step 6: Internal adversarial validation loop
 
 Before presenting the draft to the user, validate it mechanically. This catches structural defects early and reduces human review burden.
@@ -209,6 +236,10 @@ If OVERALL is FAIL, output:
 - **OVERALL PASS**: Proceed to Step 7 (present and confirm).
 - **OVERALL FAIL and iteration < max_requirements_iterations:**
   - Extract Failure Summary and Fix Guidance from validator response.
+  - Clear the current dispatch proof before re-dispatch:
+    ```bash
+    rm -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json"
+    ```
   - Increment iteration counter `N`.
   - Re-dispatch executors (back to Step 4) with additional context:
     ```
@@ -256,17 +287,19 @@ AskUserQuestion: "Requirements ready for review. {N} acceptance criteria, {M} UA
 
 **Approve** → Proceed to Step 8 (write to plan file).
 
-**Reject** → The user provides specific feedback on what needs to change (which ACs/UATs are wrong and why). Classify the feedback:
+**Reject / I have additional context** → The user provides feedback or new context. Two paths:
 
-- **Localized** (specific ACs/UATs are wrong): Re-synthesize only the contested items. Run the internal validation loop (Step 6). Re-present the **full revised set** (back to Step 7b).
+- **Single-item correction** (one already-drafted AC or UAT is factually wrong — no additions, no scope changes): Re-synthesize only that item. Run the internal validation loop (Step 6). Re-present the **full revised set** (back to Step 7b).
 
-- **Structural** (missing areas, wrong scope): Full re-dispatch to Step 4 with user feedback injected into executor prompts. Run the full pipeline (Steps 5-6). Re-present (back to Step 7b).
+- **Everything else** (additions, missing areas, wrong scope, new context, multiple items, or unclear): Before re-dispatching, delete the current proof:
+  ```bash
+  rm -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json"
+  ```
+  Then re-dispatch ALL executors (back to Step 4) with user feedback injected into executor prompts alongside the discovery section and feature description. Run the full pipeline (Steps 5-6). Re-present the **full revised set** (back to Step 7b).
 
-- **Fundamental** (requirements need rethinking): Escalate — "This feedback suggests re-running discovery with refined scope." Stop the stage.
+**Default:** If the feedback does not clearly match a single-item factual correction, re-dispatch to executors. When in doubt, re-dispatch — do NOT revise the draft locally.
 
-**I have additional context** → The user provides context that should inform the requirements. Revise the draft incorporating the new context. Run the internal validation loop (Step 6). Re-present the **full revised set** (back to Step 7b).
-
-**Key invariant:** After any revision, the user ALWAYS sees the complete revised set — never a partial update.
+**Key invariant:** After any revision, the user ALWAYS sees the complete revised set — never a partial update. All paths except "Approve" re-present the full set after processing.
 
 ## Step 8: Write confirmed requirements to plan file
 

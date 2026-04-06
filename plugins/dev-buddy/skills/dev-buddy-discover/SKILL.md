@@ -127,6 +127,33 @@ Rules for the synthesis:
 - When executors disagree, the synthesizer MUST include a `Resolution` field explaining which executor is correct and why.
 - `Confidence` is derived from executor agreement: all executors agree = `high`, majority = `medium`, minority = `low`.
 
+## Step 5b: Create dispatch proof
+
+Before any plan-file Edit/Write is allowed at this checkpoint stage, create a dispatch proof for the current synthesis:
+
+```bash
+mkdir -p "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch"
+```
+
+Use Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json` with:
+
+```json
+{
+  "stage": "discover",
+  "iteration": {N},
+  "timestamp": "{ISO-8601 UTC now}",
+  "executor_count": {total_executor_count},
+  "executor_type": "{subscription|api|mixed}",
+  "output_ids": ["ralph-discover-p0-iter{N}", "ralph-discover-p1-iter{N}"]
+}
+```
+
+Rules:
+- Derive `{SLUG}` from the master plan filename `ralph-{SLUG}.md`.
+- Overwrite the prior proof for the same slug when creating a new synthesis iteration.
+- Set `executor_type` to `subscription` only if every executor was a subscription Agent. Otherwise use `api` or `mixed`.
+- For any non-`subscription` proof, `output_ids` MUST include the one-shot output IDs that should exist under `${TMPDIR:-/tmp}/.vcp/oneshot/`.
+
 ## Step 6: Internal adversarial validation
 
 Load the max iteration count:
@@ -208,6 +235,10 @@ Parse the validator's response for **VERDICT: PASS** or **VERDICT: FAIL**.
 
 **If FAIL and iteration < max_discovery_iterations:**
 - Extract Fix Guidance from validator response.
+- Clear the current dispatch proof before re-dispatch:
+  ```bash
+  rm -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json"
+  ```
 - Increment iteration.
 - Re-dispatch executors (back to Step 4) with additional context:
   ```
@@ -256,15 +287,17 @@ AskUserQuestion: "Discovery findings ready for review. Proceed to requirements?"
 
 **Approve** → Proceed to Step 8.
 
-**Reject** → The user provides specific feedback on what's wrong. Classify the feedback:
+**Reject / I have additional context** → The user provides feedback or new context. Two paths:
 
-- **Localized** (specific findings are wrong): Re-synthesize only the contested findings (keep uncontested as-is). Re-run the validator (Step 6) on the full revised draft. Return to Step 7 to re-present.
+- **Single-item correction** (one already-drafted finding is factually wrong — no additions, no scope changes): Re-synthesize only that finding (keep all others as-is). Re-run the validator (Step 6) on the full revised draft. Return to Step 7 to re-present.
 
-- **Structural** (missed areas, wrong scope): Re-dispatch ALL executors (back to Step 4) with user feedback as additional context. Run the full internal validation loop (Steps 5-6). Return to Step 7 to re-present.
+- **Everything else** (additions, missing areas, wrong scope, new context, multiple items, or unclear): Before re-dispatching, delete the current proof:
+  ```bash
+  rm -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json"
+  ```
+  Then re-dispatch ALL executors (back to Step 4) with user feedback injected into executor prompts alongside the original feature description and any prior synthesis. Run the full pipeline (Steps 5-6). Return to Step 7 to re-present the full revised set.
 
-- **Fundamental** (wrong direction entirely): If running under the orchestrator, signal stop via `TaskUpdate(T-discover, status: "blocked")` and let the orchestrator handle. If standalone, ask the user what to do differently.
-
-**I have additional context** → The user provides context that should inform discovery. Revise the synthesis incorporating the new context. Re-run the validator (Step 6). Return to Step 7 to re-present the full revised set.
+**Default:** If the feedback does not clearly match a single-item factual correction, re-dispatch to executors. When in doubt, re-dispatch — do NOT revise the synthesis locally.
 
 ## Step 8: Write approved synthesis to plan file
 

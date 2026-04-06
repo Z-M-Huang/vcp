@@ -150,6 +150,33 @@ Every file listed in "Files to Touch" MUST be tagged `existing | modify` or `new
 
 **Do NOT create any artifacts yet.** Hold the synthesis in context for adversarial validation.
 
+## Step 5b: Create dispatch proof
+
+Before any plan-file Edit/Write is allowed at this checkpoint stage, create a dispatch proof for the current synthesis:
+
+```bash
+mkdir -p "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch"
+```
+
+Use Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json` with:
+
+```json
+{
+  "stage": "decompose",
+  "iteration": {N},
+  "timestamp": "{ISO-8601 UTC now}",
+  "executor_count": {total_executor_count},
+  "executor_type": "{subscription|api|mixed}",
+  "output_ids": ["ralph-decomp-p0-iter{N}", "ralph-decomp-p1-iter{N}"]
+}
+```
+
+Rules:
+- Reuse the slug already extracted from `ralph-{SLUG}.md`.
+- Overwrite the prior proof for the same slug when creating a new synthesis iteration.
+- Set `executor_type` to `subscription` only if every executor was a subscription Agent. Otherwise use `api` or `mixed`.
+- For any non-`subscription` proof, `output_ids` MUST include the one-shot output IDs that should exist under `${TMPDIR:-/tmp}/.vcp/oneshot/`.
+
 ## Step 6: Internal adversarial validation loop
 
 ### 6a. Load validation config
@@ -231,6 +258,10 @@ Agent(subagent_type: "general-purpose", prompt:
 - **PASS:** All gates pass. Proceed to Step 7 (user approval).
 - **FAIL and iteration < max_decomposition_iterations:**
   - Extract Failure Summary and Fix Guidance from validator response.
+  - Clear the current dispatch proof before re-dispatch:
+    ```bash
+    rm -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json"
+    ```
   - Increment iteration counter `N`.
   - Re-dispatch executors (back to Step 4) with additional context:
     ```
@@ -291,29 +322,27 @@ Present the complete decomposition to the user. Include:
 
 ```
 AskUserQuestion: "Does this breakdown look right? Any units that should be split further or reordered?"
-  options: ["Approve", "Reject one or more units"]
+  options: ["Approve", "Reject one or more units", "I have additional context"]
 ```
 
 ### On approval
 
 Proceed to Step 8 (create artifacts).
 
-### On rejection
+### On rejection / "I have additional context"
 
-For each rejected item, classify the rejection:
+The user provides feedback or new context. Two paths:
 
-```
-AskUserQuestion: "What kind of issue?"
-  options: ["Localized fix", "Structural gap", "Fundamental rethink", "Operational problem"]
-```
+- **Single-unit correction** (one already-drafted unit needs factual correction — no additions, no scope changes, no new units): Re-synthesize only that unit locally (Step 5) with the feedback, then re-run validation (Step 6). Do not re-dispatch executors.
 
-**Localized fix:** User provides specific feedback. Re-synthesize locally (Step 5) with the feedback, then re-run validation (Step 6). Do not re-dispatch executors.
+- **Everything else** (additions, missing areas, wrong scope, new context, multiple units, or unclear): Before re-dispatching, delete the current proof:
+  ```bash
+  rm -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json"
+  ```
+  Then re-dispatch ALL executors (back to Step 4) with user feedback injected into executor prompts alongside the plan context. Run the full pipeline (Steps 5-6). Return to Step 7 to re-present the full revised set.
 
-**Structural gap:** User provides feedback on what's wrong with the structure. Re-dispatch to Step 4 with user feedback injected into executor prompts. Flow through Steps 5 -> 6 -> 7.
+**Default:** If the feedback does not clearly match a single-unit factual correction, re-dispatch to executors. When in doubt, re-dispatch — do NOT revise the decomposition locally.
 
-**Fundamental rethink:** The decomposition approach is wrong. Escalate -- ask the user what they want to change about the overall approach. Incorporate their direction and re-dispatch to Step 4 with significantly revised instructions.
-
-**Operational problem:** Something outside the decomposition is wrong (e.g., missing dependencies, environment issues). Do not loop. Report the issue and ask the user to resolve it before retrying.
 
 ---
 
