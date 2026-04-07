@@ -325,6 +325,12 @@ AskUserQuestion: "Does this breakdown look right? Any units that should be split
   options: ["Approve", "Reject one or more units", "I have additional context"]
 ```
 
+**If the user responds with questions or free-form text instead of selecting an option:**
+1. Answer their questions
+2. Classify: did the dialogue result in a design change (added/removed/changed units, changed scope, invalidated assumptions)?
+   - **YES** → treat as "Everything else" below — delete proof, re-dispatch ALL executors with the design change as additional context
+   - **NO** (purely informational, no design impact) → return to this AskUserQuestion to get a formal Approve/Reject/Context
+
 ### On approval
 
 Proceed to Step 8 (create artifacts).
@@ -333,13 +339,21 @@ Proceed to Step 8 (create artifacts).
 
 The user provides feedback or new context. Two paths:
 
-- **Single-unit correction** (one already-drafted unit needs factual correction — no additions, no scope changes, no new units): Re-synthesize only that unit locally (Step 5) with the feedback, then re-run validation (Step 6). Do not re-dispatch executors.
+- **Single-unit correction** (one already-drafted unit needs factual correction — no additions, no removals, no scope changes, no design changes, no new units): Re-synthesize only that unit locally (Step 5) with the feedback, then re-run validation (Step 6). Do not re-dispatch executors.
 
-- **Everything else** (additions, missing areas, wrong scope, new context, multiple units, or unclear): Before re-dispatching, delete the current proof:
+- **Everything else** (additions, removals, missing areas, wrong scope, new context, multiple units, design changes, or unclear): Before re-dispatching, delete the current proof:
   ```bash
   rm -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json"
   ```
   Then re-dispatch ALL executors (back to Step 4) with user feedback injected into executor prompts alongside the plan context. Run the full pipeline (Steps 5-6). Return to Step 7 to re-present the full revised set.
+
+  **The orchestrator MUST NOT author, add, remove, or revise units locally.** The orchestrator synthesizes executor outputs — it does not replace multi-AI diversity with its own analysis. Even if the revision seems straightforward, re-dispatch.
+
+**Scope change detection:** User feedback constitutes "Everything else" if ANY of these apply:
+- Changes the count of units (adds or removes)
+- Changes the dependency order or architecture approach
+- Invalidates assumptions in existing units
+- Provides new context that affects multiple units
 
 **Default:** If the feedback does not clearly match a single-unit factual correction, re-dispatch to executors. When in doubt, re-dispatch — do NOT revise the decomposition locally.
 

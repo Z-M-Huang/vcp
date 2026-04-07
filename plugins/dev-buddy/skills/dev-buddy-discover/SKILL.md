@@ -285,17 +285,31 @@ AskUserQuestion: "Discovery findings ready for review. Proceed to requirements?"
   options: ["Approve", "Reject", "I have additional context"]
 ```
 
+**If the user responds with questions or free-form text instead of selecting an option:**
+1. Answer their questions
+2. Classify: did the dialogue result in a design change (added/removed/changed findings, changed scope, invalidated assumptions)?
+   - **YES** → treat as "Everything else" below — delete proof, re-dispatch ALL executors with the design change as additional context
+   - **NO** (purely informational, no design impact) → return to this AskUserQuestion to get a formal Approve/Reject/Context
+
 **Approve** → Proceed to Step 8.
 
 **Reject / I have additional context** → The user provides feedback or new context. Two paths:
 
-- **Single-item correction** (one already-drafted finding is factually wrong — no additions, no scope changes): Re-synthesize only that finding (keep all others as-is). Re-run the validator (Step 6) on the full revised draft. Return to Step 7 to re-present.
+- **Single-item correction** (one already-drafted finding is factually wrong — no additions, no removals, no scope changes, no design changes): Re-synthesize only that finding (keep all others as-is). Re-run the validator (Step 6) on the full revised draft. Return to Step 7 to re-present.
 
-- **Everything else** (additions, missing areas, wrong scope, new context, multiple items, or unclear): Before re-dispatching, delete the current proof:
+- **Everything else** (additions, removals, missing areas, wrong scope, new context, multiple items, design changes, or unclear): Before re-dispatching, delete the current proof:
   ```bash
   rm -f "${CLAUDE_PROJECT_DIR}/.vcp/plan/.dispatch/{SLUG}-proof.json"
   ```
   Then re-dispatch ALL executors (back to Step 4) with user feedback injected into executor prompts alongside the original feature description and any prior synthesis. Run the full pipeline (Steps 5-6). Return to Step 7 to re-present the full revised set.
+
+  **The orchestrator MUST NOT author, add, remove, or revise findings locally.** The orchestrator synthesizes executor outputs — it does not replace multi-AI diversity with its own analysis. Even if the revision seems straightforward, re-dispatch.
+
+**Scope change detection:** User feedback constitutes "Everything else" if ANY of these apply:
+- Changes the count of findings (adds or removes)
+- Changes the investigation scope or focus area
+- Invalidates assumptions in existing findings
+- Provides new context that affects multiple findings
 
 **Default:** If the feedback does not clearly match a single-item factual correction, re-dispatch to executors. When in doubt, re-dispatch — do NOT revise the synthesis locally.
 
