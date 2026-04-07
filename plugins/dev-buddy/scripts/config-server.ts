@@ -19,6 +19,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import net from 'net';
 import { readPresets, writePresets, validatePreset, maskApiKey, maskPresetKeys, CONFIG_DIR } from './preset-utils.ts';
 import { loadDevBuddyConfig, validateDevBuddyConfig, fetchWithTimeout, atomicWriteFile, CONFIG_PATH as PIPELINE_CONFIG_PATH } from './pipeline-config.ts';
 import { discoverSystemPrompts, getSystemPrompt, writeCustomPrompt, deleteCustomPrompt } from './system-prompts.ts';
@@ -465,6 +466,21 @@ function jsonResponse(body: unknown, status = 200, extraHeaders: Record<string, 
 }
 
 /**
+ * Check if a port is available on 127.0.0.1.
+ * Returns availability status and the system error code on failure.
+ */
+function checkPortAvailable(port: number): Promise<{ available: boolean; errorCode?: string }> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', (err: NodeJS.ErrnoException) => {
+      resolve({ available: false, errorCode: err.code });
+    });
+    srv.once('listening', () => { srv.close(() => resolve({ available: true })); });
+    srv.listen(port, '127.0.0.1');
+  });
+}
+
+/**
  * Parse request body with 10MB size limit.
  */
 async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
@@ -503,8 +519,13 @@ async function startConfigServer(cwd: string, idleTimeoutMinutes: number): Promi
   // Serve static files from the web/ directory
   const webDir = path.join(import.meta.dir, '..', 'web');
 
+  // Read config_port for fixed port binding
+  const devBuddyConfig = loadDevBuddyConfig();
+  const serverPort = devBuddyConfig.config_port ?? 0;
+
   const server = Bun.serve({
-    port: 0, // OS-assigned port
+    hostname: '127.0.0.1', // localhost-only (Bun defaults to 0.0.0.0)
+    port: serverPort,      // config_port or OS-assigned
 
     fetch(req: Request): Response | Promise<Response> {
       const url = new URL(req.url);
@@ -549,7 +570,7 @@ async function startConfigServer(cwd: string, idleTimeoutMinutes: number): Promi
 
       // Route API requests
       if (pathname.startsWith('/api/')) {
-        return handleApiRequest(req, url, pathname, cwd, corsHeaders);
+        return handleApiRequest(req, url, pathname, cwd, corsHeaders, server.port);
       }
 
       // Serve static files
@@ -604,7 +625,8 @@ async function handleApiRequest(
   url: URL,
   pathname: string,
   cwd: string,
-  corsHeaders: Record<string, string>
+  corsHeaders: Record<string, string>,
+  serverPort: number
 ): Promise<Response> {
   try {
     // --- Preset routes ---
@@ -769,11 +791,30 @@ async function handleApiRequest(
     if (pathname === '/api/settings') {
       if (req.method === 'GET') {
         const config = loadDevBuddyConfig();
-        return jsonResponse({ max_iterations: config.max_iterations, max_build_attempts: config.max_build_attempts, max_outer_iterations: config.max_outer_iterations, max_discovery_iterations: config.max_discovery_iterations, max_requirements_iterations: config.max_requirements_iterations, max_decomposition_iterations: config.max_decomposition_iterations, theme: config.theme }, 200, corsHeaders);
+        return jsonResponse({ config_port: config.config_port ?? null, max_iterations: config.max_iterations, max_build_attempts: config.max_build_attempts, max_outer_iterations: config.max_outer_iterations, max_discovery_iterations: config.max_discovery_iterations, max_requirements_iterations: config.max_requirements_iterations, max_decomposition_iterations: config.max_decomposition_iterations, theme: config.theme }, 200, corsHeaders);
       }
       if (req.method === 'PUT') {
         const body = await req.json() as Record<string, unknown>;
         const config = loadDevBuddyConfig();
+        // config_port: only touch when explicitly present (partial PUTs like theme toggle omit it)
+        if ('config_port' in body) {
+          if (body.config_port === null) {
+            delete config.config_port;
+          } else if (typeof body.config_port === 'number' && Number.isInteger(body.config_port) && body.config_port >= 1 && body.config_port <= 65535) {
+            if (body.config_port !== serverPort) {
+              const result = await checkPortAvailable(body.config_port);
+              if (!result.available) {
+                const msg = result.errorCode === 'EACCES'
+                  ? `Port ${body.config_port} requires elevated privileges`
+                  : `Port ${body.config_port} is already in use`;
+                return jsonResponse({ error: { code: 'PORT_UNAVAILABLE', message: msg } }, 409, corsHeaders);
+              }
+            }
+            config.config_port = body.config_port;
+          } else {
+            return jsonResponse({ error: { code: 'INVALID_PORT', message: 'config_port must be an integer between 1 and 65535, or null to clear' } }, 400, corsHeaders);
+          }
+        }
         if (typeof body.max_iterations === 'number') config.max_iterations = body.max_iterations;
         if (typeof body.max_build_attempts === 'number') config.max_build_attempts = body.max_build_attempts;
         if (typeof body.max_outer_iterations === 'number') config.max_outer_iterations = body.max_outer_iterations;

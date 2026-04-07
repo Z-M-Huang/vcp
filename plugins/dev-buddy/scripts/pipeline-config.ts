@@ -253,6 +253,13 @@ export function validateDevBuddyConfig(config: DevBuddyConfig): void {
     throw new Error(`max_decomposition_iterations must be a positive integer`);
   }
 
+  // Validate optional config_port field
+  if (config.config_port !== undefined) {
+    if (!Number.isInteger(config.config_port) || config.config_port < 1 || config.config_port > 65535) {
+      throw new Error(`config_port must be an integer between 1 and 65535, got ${config.config_port}`);
+    }
+  }
+
   // Validate optional theme field
   if (config.theme !== undefined && config.theme !== 'light' && config.theme !== 'dark') {
     throw new Error(`theme must be 'light' or 'dark'`);

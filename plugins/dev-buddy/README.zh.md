@@ -165,7 +165,7 @@ flowchart TD
 配置文件（`~/.vcp/dev-buddy.json`，版本 `5.0`）存储：
 - **Stages：** 每阶段执行器分配（系统提示词 + preset + 模型）
 - **Pipeline：** Ralph pipeline（6 个阶段，固定顺序）
-- **Settings：** max_iterations, max_build_attempts, max_outer_iterations
+- **Settings：** config_port, max_iterations, max_build_attempts, max_outer_iterations, max_discovery_iterations, max_requirements_iterations, max_decomposition_iterations, theme
 
 使用 Web 门户（`/dev-buddy-config`）或直接编辑 JSON。
 
@@ -198,9 +198,13 @@ flowchart TD
     ]}
   },
   "pipelines": { "ralph": ["discovery", "ralph-requirements", "decomposition", "ralph-build", "ralph-code-review", "ralph-uat"] },
+  "config_port": 8888,
   "max_iterations": 10,
   "max_build_attempts": 3,
-  "max_outer_iterations": 3
+  "max_outer_iterations": 3,
+  "max_discovery_iterations": 3,
+  "max_requirements_iterations": 3,
+  "max_decomposition_iterations": 2
 }
 ```
 

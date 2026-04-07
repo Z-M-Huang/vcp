@@ -171,6 +171,36 @@ describe('validateDevBuddyConfig', () => {
     expect(() => validateDevBuddyConfig(config)).toThrow(/max_decomposition_iterations/);
   });
 
+  test('accepts valid config_port', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.config_port = 8888;
+    expect(() => validateDevBuddyConfig(config)).not.toThrow();
+  });
+
+  test('accepts absent config_port (optional field)', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    delete config.config_port;
+    expect(() => validateDevBuddyConfig(config)).not.toThrow();
+  });
+
+  test('rejects config_port of 0', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.config_port = 0;
+    expect(() => validateDevBuddyConfig(config)).toThrow(/config_port/);
+  });
+
+  test('rejects config_port above 65535', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.config_port = 70000;
+    expect(() => validateDevBuddyConfig(config)).toThrow(/config_port/);
+  });
+
+  test('rejects non-integer config_port', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.config_port = 1.5;
+    expect(() => validateDevBuddyConfig(config)).toThrow(/config_port/);
+  });
+
 });
 
 // ─── loadDevBuddyConfig — additive default-filling ─────────────────────────

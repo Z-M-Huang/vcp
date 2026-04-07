@@ -16,7 +16,7 @@ bun "${CLAUDE_PLUGIN_ROOT}/scripts/config-server.ts" --cwd "${CLAUDE_PROJECT_DIR
 ```
 
 The server:
-1. Starts on an OS-assigned port (printed to stdout as JSON)
+1. Starts on the configured port (config_port in settings), or an OS-assigned random port if not set (printed to stdout as JSON)
 2. Opens the user's default browser automatically
 3. Serves the Alpine.js SPA for visual configuration
 4. Auto-shuts down after 60 minutes of inactivity

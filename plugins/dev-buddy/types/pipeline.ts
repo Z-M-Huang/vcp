@@ -55,6 +55,8 @@ export interface DevBuddyConfig {
   max_requirements_iterations: number;
   /** Maximum internal adversarial validation iterations for decomposition stage. Default: 2. */
   max_decomposition_iterations: number;
+  /** Config portal port. If undefined, OS assigns a random port. */
+  config_port?: number;
   /** UI theme preference. Saved in config for persistence across browsers. */
   theme?: 'light' | 'dark';
 }

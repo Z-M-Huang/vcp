@@ -675,6 +675,11 @@
       <div class="card">
         <div class="form-grid">
           <label>
+            <span class="form-label">Config Portal Port</span>
+            <input type="number" x-model.number="v3Settings.config_port" min="1" max="65535" placeholder="Random">
+            <span class="form-hint">Fixed port for the config portal. Leave empty to use a random port each time. Takes effect on next portal restart.</span>
+          </label>
+          <label>
             <span class="form-label">Max Iterations</span>
             <input type="number" x-model.number="v3Settings.max_iterations" min="1" max="50">
             <span class="form-hint">Maximum fix/re-review iterations per code review stage</span>

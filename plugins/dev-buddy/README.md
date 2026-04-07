@@ -165,7 +165,7 @@ Each stage skill works standalone (reads existing plan files) or as part of the 
 The config (`~/.vcp/dev-buddy.json`, version `5.0`) stores:
 - **Stages:** Per-stage executor assignments (system prompt + preset + model)
 - **Pipeline:** Ralph pipeline (6 stages in fixed order)
-- **Settings:** max_iterations, max_build_attempts, max_outer_iterations
+- **Settings:** config_port, max_iterations, max_build_attempts, max_outer_iterations, max_discovery_iterations, max_requirements_iterations, max_decomposition_iterations, theme
 
 Use the web portal (`/dev-buddy-config`) or edit JSON directly.
 
@@ -198,9 +198,13 @@ Use the web portal (`/dev-buddy-config`) or edit JSON directly.
     ]}
   },
   "pipelines": { "ralph": ["discovery", "ralph-requirements", "decomposition", "ralph-build", "ralph-code-review", "ralph-uat"] },
+  "config_port": 8888,
   "max_iterations": 10,
   "max_build_attempts": 3,
-  "max_outer_iterations": 3
+  "max_outer_iterations": 3,
+  "max_discovery_iterations": 3,
+  "max_requirements_iterations": 3,
+  "max_decomposition_iterations": 2
 }
 ```
 
