@@ -71,12 +71,13 @@ Prepare the review package for each executor:
 
 ## Step 5: Dispatch executors
 
-Each executor receives the review package plus instructions to:
-1. **AC tracing:** For each AC, find implementing code (file:line). No code found = FAIL.
-2. **Intent matching:** Does the code do what the AC MEANS, not just what the words say?
-3. **Integration check:** Do units work together? Interfaces match? No missing glue?
-4. **Pattern adherence:** Does code follow existing patterns identified in discovery?
-5. **Edge cases:** What scenarios are NOT tested that should be?
+Each executor receives the review package. Executors are assigned a **focused review lens** based on their system prompt role — this narrows the review scope per executor, making the task weak-model-compatible while ensuring diverse coverage across all reviewers.
+
+Each executor performs:
+1. **AC tracing** (all reviewers): For each AC, find implementing code (file:line). No code found = FAIL.
+2. **Contract verification** (all reviewers): Verify implementations match Interface Contracts from unit plans — typed signatures, error conditions, pre/post conditions.
+3. **Lens-specific review** (per system prompt role): Security lens, compliance lens, correctness lens, UX lens, data lens, or integration lens — see stage definition for mapping.
+4. **Edge cases** (from lens perspective): Scenarios NOT tested that should be, focused through the reviewer's lens.
 
 **Subscription executors:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + review_package})`
 

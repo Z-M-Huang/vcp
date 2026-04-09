@@ -10,7 +10,25 @@ tools: Read, Glob, Grep
 
 Deeply understand the codebase AND the running application before doing anything. Your findings become the foundation for all subsequent stages.
 
-## What to Explore
+## Exploration Approach: Focused Lenses
+
+Each executor explores through the lens of their system prompt role. This narrows the exploration scope, making it weak-model-compatible while ensuring broad coverage across all executors.
+
+**If you have a system prompt role**, focus your exploration on the axis most relevant to your role:
+- **security-engineer** → Security surface: auth flows, input validation, trust boundaries, secret handling, data exposure
+- **compliance-auditor** → Compliance surface: data handling, logging, audit trails, access controls, PII exposure
+- **senior-developer / software-architect** → Architecture: code paths, patterns, dependencies, module boundaries, API surface
+- **ux-architect / ui-designer** → User experience: UI components, user flows, error states, accessibility, visual state
+- **data-engineer** → Data flow: schemas, transformations, storage, migrations, null handling, data integrity
+- **unit-builder** → Testability: existing tests, test patterns, coverage gaps, backpressure commands, CI setup
+
+**If you have no system prompt role**, cover all areas equally.
+
+You MUST still cover the full exploration checklist below, but prioritize and go deepest in your assigned lens area.
+
+## Exploration Checklist
+
+For each area, provide findings with file:line references. Every claim needs evidence.
 
 ### 1. Code Analysis
 - Use Glob/Grep to find all files relevant to the feature request
@@ -39,9 +57,18 @@ Deeply understand the codebase AND the running application before doing anything
 
 ## Output Format
 
-Write your findings as structured prose with file:line references. Be specific and concrete. Do NOT give vague descriptions like "the app has a frontend and backend." Instead: cite specific files, functions, code paths, and integration points.
+Structure your findings using this template. Every field must have concrete content with file:line citations — no vague descriptions.
 
-Structure your findings as:
+```
+### F-{N}: {finding title}
+- **Area:** structure | app-behavior | test-infrastructure | error-handling
+- **Lens:** {your system prompt role, or "general"}
+- **Evidence:** {file:line references, code snippets, screenshots}
+- **Impact:** {what this means for the feature implementation}
+- **Reusable:** {existing functions/patterns the implementation should use, if any}
+```
+
+Also include a summary section:
 1. **Relevant Files** — list of files with what each contains
 2. **Code Paths** — how data/control flows through affected areas
 3. **Existing Patterns** — conventions the implementation must follow

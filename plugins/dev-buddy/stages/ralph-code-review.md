@@ -18,37 +18,53 @@ Catch semantic drift, integration gaps, and missed intent that mechanical backpr
 - Missing edge cases not covered by unit tests
 - Architectural drift (implementation diverges from patterns identified in discovery)
 
+## Review Approach: Focused Lenses
+
+Each reviewer is assigned a **focused lens** — a narrow review scope based on their system prompt role. This creates genuine perspective diversity and makes the review task weak-model-compatible (narrow solution space per reviewer).
+
+**If you have a system prompt role**, use it to determine your primary lens:
+- **security-engineer** → Security lens: injection, auth, crypto, trust boundaries, input validation
+- **compliance-auditor** → Compliance lens: data handling, audit trails, access controls, policy adherence
+- **senior-developer / software-architect** → Correctness lens: AC tracing, intent matching, pattern adherence
+- **ux-architect / ui-designer** → UX lens: user-facing behavior, error messages, accessibility, flow completeness
+- **data-engineer** → Data lens: data flow integrity, schema consistency, null handling, idempotency
+- **unit-builder** → Integration lens: unit boundaries, interface contract adherence, dependency compatibility
+
+**If you have no system prompt role**, default to the Correctness lens.
+
+Always perform AC Tracing (required for all lenses), then focus on your assigned lens.
+
 ## Review Process
 
-### 1. AC Tracing
+### 1. AC Tracing (ALL reviewers)
 For each acceptance criterion, find the implementing code:
 - Cite specific file:line where the AC is implemented
 - If no implementing code found → FAIL (missing implementation)
 - If code exists but doesn't match AC intent → FAIL (intent mismatch)
 
-### 2. Intent Matching
-Does the code do what the AC MEANS, not just what the words say?
-- Check the misinterpretation field from requirements — is the code doing the wrong thing?
-- Verify the implementation serves the user's actual goal
+### 2. Contract Verification (ALL reviewers)
+For each unit, verify the implementation matches its Interface Contract:
+- Function signatures match the contract (types, parameters, return values)
+- Error conditions are handled as specified in the contract
+- Pre/post conditions are enforced
+- Test stubs from decomposition pass
 
-### 3. Integration Check
-Do the units work together?
-- Are interfaces between units compatible?
-- Is there missing glue code?
-- Are there race conditions or ordering issues?
+### 3. Lens-Specific Review (based on your assigned lens)
 
-### 4. Pattern Adherence
-Does the code follow existing patterns identified in discovery?
-- Naming conventions respected?
-- Error handling patterns followed?
-- Testing patterns matched?
+**Security lens:** Check for injection, auth bypass, insecure crypto, trust boundary violations, input validation gaps, OWASP Top 10 patterns.
 
-### 5. Edge Cases
-What scenarios are NOT tested that should be?
-- Error paths
-- Boundary conditions
-- Concurrent access
-- Empty/null states
+**Compliance lens:** Check data handling policies, audit trail completeness, access control enforcement, PII exposure, logging practices.
+
+**Correctness lens:** Check intent matching (misinterpretation field), pattern adherence (discovery patterns), algorithmic correctness, edge case handling.
+
+**UX lens:** Check user-facing behavior matches ACs, error messages are helpful, flows are complete, accessibility considerations, loading/empty states.
+
+**Data lens:** Check data flow integrity, schema consistency, null propagation, idempotency guarantees, timezone handling, deduplication correctness.
+
+**Integration lens:** Check unit boundaries, interface contract compatibility between dependent units, missing glue code, race conditions, ordering issues.
+
+### 4. Edge Cases (ALL reviewers, from your lens perspective)
+What scenarios are NOT tested that should be? Focus on edge cases visible through your lens.
 
 ## Verdict Format
 

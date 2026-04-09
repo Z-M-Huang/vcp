@@ -74,9 +74,30 @@ For each unit in dependency order where status is not `done` and not `failed`:
 
 Read the master plan's "Units of Work" table. Verify all dependency units are `done`. If a dependency is `failed`, skip this unit and report.
 
-### 3b. Read unit plan
+### 3b. Read unit plan and verify contract completeness
 
 Read `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md`.
+
+**Mechanical verification gate** — verify the unit plan has the required contract fields before dispatching a builder:
+
+```bash
+# Check Interface Contract section exists and is non-empty
+grep -A2 '## Interface Contract' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" | grep -c 'Function signatures\|Pre-conditions\|Post-conditions\|Error conditions'
+
+# Check Test Stubs section exists and has assertions
+grep -A5 '## Test Stubs' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" | grep -c 'expect\|assert\|should'
+
+# Check dependency contract compatibility (for units with dependencies)
+# For each dependency: verify this unit's expected inputs match the dependency's Interface Contract outputs
+```
+
+If the Interface Contract section is missing, empty, or lacks typed signatures: **do not dispatch the builder**. Instead:
+1. Report to user: "Unit {N} has incomplete interface contract — returning to decompose for contract strengthening"
+2. Update plan status back to `decompose` and return to `/dev-buddy-decompose` with feedback: "Unit {N} needs contract strengthening: {specific missing fields}"
+
+If Test Stubs are missing or have no concrete assertions: same flow — return to decompose.
+
+This is the **contract-first error correction** principle: fix contracts, don't build against incomplete specs.
 
 ### 3c. Resolve stage + role prompts
 
@@ -174,22 +195,34 @@ If all results are `OK`: proceed to Step 3e (backpressure).
 
 **If ANY backpressure fails:**
 
-1. Increment attempts counter in unit plan file using Edit tool:
+1. **Contract quality check (before retrying):** Analyze the failure output. Classify the root cause:
+   - **Contract gap:** The failure indicates the Interface Contract is incomplete or ambiguous (e.g., unspecified edge case, missing error condition, vague pre/post-condition). → Return to decompose for contract strengthening instead of retrying build.
+   - **Implementation error:** The failure is a straightforward bug within a well-specified contract (e.g., wrong variable name, off-by-one, missed condition). → Retry build with failure context.
+
+   To classify: check if the error relates to behavior not specified in the Interface Contract or Test Stubs. If the test stubs don't cover the failing scenario, the contract is incomplete.
+
+   **If contract gap detected:**
+   - Append to the unit plan file: `## Contract Gap Detected\n**Issue:** {description of missing contract specification}\n**Action:** Returning to decompose for contract strengthening`
+   - Update plan status to `decompose` and signal to the orchestrator to re-run `/dev-buddy-decompose` with feedback: "Unit {N} contract gap: {specific missing specification}"
+   - Do NOT count this as a build attempt.
+
+2. Increment attempts counter in unit plan file using Edit tool:
    - old_string: `**Attempts:** {current_N}`
    - new_string: `**Attempts:** {current_N + 1}`
 
-2. Append `## Attempt {N}` section to unit plan file using Edit tool (insert after the last section):
+3. Append `## Attempt {N}` section to unit plan file using Edit tool (insert after the last section):
    ```markdown
    ## Attempt {N}
    **Result:** fail
+   **Root Cause:** implementation_error
    **Failure Output:**
    {full error output from backpressure}
    **Next Action:** retry
    ```
 
-3. If under max attempts: go back to 3d (fresh implementer reads updated plan with failure context). Status remains `pending`.
+4. If under max attempts: go back to 3d (fresh implementer reads updated plan with failure context). Status remains `pending`.
 
-4. If at or over max attempts:
+5. If at or over max attempts:
    - Update the last Attempt's `**Next Action:** retry` to `**Next Action:** escalate` using Edit tool
    - Update unit plan file status using Edit tool:
      - old_string: `**Status:** pending`

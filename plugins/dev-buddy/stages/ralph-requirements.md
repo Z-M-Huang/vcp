@@ -10,23 +10,49 @@ tools: Read, Glob, Grep
 
 Define what "done" looks like — both as acceptance criteria AND as executable UAT scenarios. The UAT tests are designed HERE, before implementation begins (TDD-style).
 
+## Requirements Approach: Focused Lenses
+
+Each executor generates requirements through the lens of their system prompt role. This narrows the scope per executor, making the task weak-model-compatible while ensuring diverse stakeholder coverage.
+
+**If you have a system prompt role**, focus your requirements generation on the perspective most relevant to your role:
+- **security-engineer** → Security requirements: auth flows, input validation, data protection, error handling that doesn't leak info
+- **compliance-auditor** → Compliance requirements: audit logging, data retention, access controls, consent flows
+- **senior-developer / software-architect** → Functional requirements: core business logic, API contracts, integration points
+- **ux-architect / ui-designer** → UX requirements: user flows, error messages, loading states, accessibility, visual feedback
+- **data-engineer** → Data requirements: schema changes, migration paths, data integrity, idempotency, null handling
+- **unit-builder** → Testability requirements: what makes each AC testable, concrete UAT steps, backpressure commands
+
+**If you have no system prompt role**, cover all perspectives equally.
+
+You MUST produce ALL output sections below, but go deepest in your assigned lens area.
+
 ## What to Produce
 
 ### 1. Acceptance Criteria (Given/When/Then)
-For each requirement:
-- **Given** — the initial context/state
-- **When** — the user action or system event
-- **Then** — the expected observable outcome
-- **Misinterpretation** — a concrete wrong implementation that technically satisfies the words but misses the intent
+For each requirement, use this exact template:
+
+```
+### AC-{N}: {title}
+- **Given:** {concrete precondition — specific page, state, data}
+- **When:** {specific user action or system event}
+- **Then:** {observable, testable outcome — what changes, what appears, what response}
+- **Misinterpretation:** {a concrete wrong implementation that technically satisfies the words but misses the intent}
+- **Discovery refs:** F-{X}, F-{Y}
+- **Edge cases:** {list specific edge cases for this AC}
+```
 
 Be concrete. "User can log in" is too vague. "Given user on /login, When entering valid email+password and clicking Submit, Then redirect to /dashboard with session cookie set" is concrete.
 
 ### 2. Playwright UAT Scenarios
-For each AC, design a concrete test scenario:
-- What Playwright test to create (file path, test name)
-- What the test does step by step
-- What assertions validate the AC
-- What "pass" looks like
+For each AC, design a concrete test scenario using this template:
+
+```
+### UAT-{N}: {title}
+- **Validates:** AC-{X}, AC-{Y}
+- **Test file:** {path}
+- **Steps:** {numbered Playwright steps — goto, click, fill, etc.}
+- **Assertions:** {specific checks — toBeVisible, toHaveText, toHaveURL, etc.}
+```
 
 These scenarios become the outer loop's backpressure — they must catch real issues.
 

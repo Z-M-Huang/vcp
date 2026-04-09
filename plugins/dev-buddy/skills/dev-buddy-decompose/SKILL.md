@@ -109,8 +109,27 @@ Synthesize into a decomposition using the following structured format. This temp
 ```markdown
 ### Unit {N}: {title}
 
+#### Entropy
+{LOW | MED | HIGH}
+
 #### Acceptance Criteria
-- AC-{X}: {copy the specific AC text from master plan}
+- AC-{X}: {copy the specific AC text from master plan, including Given/When/Then}
+
+#### Interface Contract
+- **Function signatures:**
+  ```typescript
+  {typed function/method signatures this unit exposes or modifies}
+  ```
+- **Pre-conditions:** {what must be true before calling}
+- **Post-conditions:** {what is guaranteed after}
+- **Error conditions:** {enumerated error types, not generic "throws Error"}
+- **Side effects:** {external state changes, or "none (pure function)"}
+
+#### Test Stubs
+```typescript
+// test file: {path from Files to Touch}
+{executable test assertions — happy path + each error condition + edge case}
+```
 
 #### What to Implement
 - **Current state:** {what the code/app looks like now — from discovery findings}
@@ -134,7 +153,7 @@ Synthesize into a decomposition using the following structured format. This temp
 - Required by: Unit {P} (or "none")
 
 #### Done When
-{specific testable criteria — all backpressure passes}
+{specific testable criteria — all backpressure AND test stubs pass}
 ```
 
 Each unit must:
@@ -246,6 +265,24 @@ Agent(subagent_type: "general-purpose", prompt:
       implementation details that is NOT declared in 'Depends on'.
       Describe the specific coupling.
 
+   7. **CONTRACT COMPLETENESS** (critical): Every unit has an Interface Contract with:
+      - Typed function signatures (not 'any' or untyped)
+      - Pre-conditions and post-conditions (not empty)
+      - Error conditions (enumerated, not generic 'throws Error')
+      - Side effects (explicit, or 'none')
+      Flag any unit with missing or vague contract fields.
+
+   8. **TEST STUB QUALITY**: Every unit has Test Stubs with:
+      - At least one happy-path assertion with concrete input→output
+      - At least one error-case assertion per enumerated error condition
+      - Assertions use concrete values (not toBeTruthy/toBeDefined)
+      Flag stubs that are placeholders, lack concrete values, or miss error cases.
+
+   9. **CONTRACT COMPATIBILITY**: For units with dependencies, verify:
+      - Unit B's Interface Contract inputs match Unit A's Interface Contract outputs
+      - Error types are compatible across the dependency boundary
+      Flag any interface mismatch between dependent units.
+
    For each gate: PASS or FAIL with specific evidence.
    Final verdict: PASS (all gates pass) or FAIL (any gate fails).
    If FAIL, output:
@@ -274,7 +311,7 @@ Agent(subagent_type: "general-purpose", prompt:
 - **FAIL and iteration >= max_decomposition_iterations (exhaustion):**
   - If critical gates (1: AC COVERAGE or 2: NO DEPENDENCY CYCLES) are still failing: re-dispatch to Step 4 one final time with validator feedback (one last attempt before presenting to user). After this final attempt, proceed to Step 6f regardless of outcome.
   - Otherwise: proceed to Step 6f (exhaustion handling).
-- **Critical gate failures** (AC COVERAGE or NO DEPENDENCY CYCLES) always count as FAIL regardless of other gates.
+- **Critical gate failures** (AC COVERAGE, NO DEPENDENCY CYCLES, or CONTRACT COMPLETENESS) always count as FAIL regardless of other gates.
 
 ### 6e. Fresh-context simulation (runs in parallel with 6b, before 6c)
 
@@ -378,11 +415,18 @@ Populate each field by **transcribing from the approved synthesis** (Step 5/7). 
 
 **Parent:** ralph-{SLUG}
 **Status:** pending
+**Entropy:** {LOW | MED | HIGH}
 **Attempts:** 0
 **Max Attempts:** {max_build_attempts from config}
 
 ## Acceptance Criteria
 {transcribe the specific AC text from synthesis — include Given/When/Then from master plan's ## Requirements}
+
+## Interface Contract
+{transcribe from synthesis — typed function signatures, pre/post conditions, error conditions, side effects}
+
+## Test Stubs
+{transcribe from synthesis — executable test assertions with concrete input→output examples}
 
 ## What to Implement
 - **Current state:** {transcribe from synthesis — what the code/app looks like now}
@@ -406,15 +450,19 @@ Populate each field by **transcribing from the approved synthesis** (Step 5/7). 
 - Required by: {transcribe from synthesis}
 
 ## Done When
-{transcribe specific criteria from synthesis}
+{transcribe specific criteria from synthesis — all backpressure AND test stubs pass}
 ```
 
-**Post-Write verification:** After each unit file Write, confirm the Discovered Context section is non-empty:
+**Post-Write verification:** After each unit file Write, confirm critical sections are non-empty:
 ```bash
-grep -c '## Discovered Context' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" && \
+# Check Discovered Context
 grep -A1 '## Discovered Context' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" | tail -1 | grep -cv '^$'
+# Check Interface Contract
+grep -c '## Interface Contract' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md"
+# Check Test Stubs
+grep -c '## Test Stubs' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md"
 ```
-If the section is empty (second grep returns 0), re-Write the file with the missing content before proceeding to the next unit.
+If any section is empty or missing, re-Write the file with the missing content before proceeding to the next unit.
 
 ### 8b. Update master plan
 
