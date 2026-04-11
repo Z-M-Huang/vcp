@@ -26,6 +26,16 @@ Each executor generates requirements through the lens of their system prompt rol
 
 You MUST produce ALL output sections below, but go deepest in your assigned lens area.
 
+## Mandatory Output Format
+
+**The pipeline gate parser uses regex to detect ACs and UATs. If you deviate from these heading formats, the pipeline BLOCKS and your output is rejected.**
+
+- ACs: `### AC-{N}: {title}` — H3 heading, sequential integer, colon after number
+- UATs: `### UAT-{N}: {title}` — H3 heading, sequential integer, colon after number
+- Do NOT use bold text (`**AC-1.1**`), bullets, workstream prefixes, or any other format
+- Numbering is flat sequential (AC-1, AC-2, AC-3...), NOT grouped by workstream (AC-1.1, AC-1.2)
+- Group by workstream using H2 headings above the ACs if needed, but each AC/UAT heading MUST match the regex `### AC-\d+:` / `### UAT-\d+:`
+
 ## What to Produce
 
 ### 1. Acceptance Criteria (Given/When/Then)
@@ -37,6 +47,7 @@ For each requirement, use this exact template:
 - **When:** {specific user action or system event}
 - **Then:** {observable, testable outcome — what changes, what appears, what response}
 - **Misinterpretation:** {a concrete wrong implementation that technically satisfies the words but misses the intent}
+- **Partial implementation trap:** {a way this AC could appear "done" by building a component without connecting it to the rest of the system — e.g., creating a loader function but never calling it from the dispatch pipeline}
 - **Discovery refs:** F-{X}, F-{Y}
 - **Edge cases:** {list specific edge cases for this AC}
 ```
@@ -73,15 +84,29 @@ Structure your output as:
 
 ```
 ## Acceptance Criteria
-- AC-1: Given {context}, When {action}, Then {outcome}
-  Misinterpretation: {wrong implementation that technically passes}
-- AC-2: ...
+
+### AC-1: {title}
+- **Given:** {concrete precondition}
+- **When:** {specific action}
+- **Then:** {observable outcome}
+- **Misinterpretation:** {wrong implementation that technically passes}
+- **Partial implementation trap:** {appears done but not connected}
+- **Discovery refs:** F-{X}
+- **Edge cases:** {list}
+
+### AC-2: {title}
+...
 
 ## UAT Scenarios
-- UAT-1: {test file} — {scenario description}
-  Steps: {Playwright steps}
-  Validates: AC-1, AC-2
-- UAT-2: ...
+
+### UAT-1: {title}
+- **Validates:** AC-1, AC-2
+- **Test file:** {path}
+- **Steps:** {Playwright steps}
+- **Assertions:** {specific checks}
+
+### UAT-2: {title}
+...
 
 ## Edge Cases
 - EC-1: {scenario} — Expected: {behavior}
@@ -90,22 +115,27 @@ Structure your output as:
 - R-1: {risk} — Severity: {HIGH|MEDIUM|LOW} — Mitigation: {mitigation}
 ```
 
-## User Confirmation
+**CRITICAL:** ACs MUST use `### AC-N: {title}` H3 headings, NOT bullet points or bold text. UATs MUST use `### UAT-N: {title}` H3 headings. The pipeline gate parser requires this exact format.
 
-Executor output is a DRAFT. The orchestrator confirms each item with the user individually before writing to the plan file:
+## Contradiction Handling
 
-1. ALL ACs are presented in batches of up to 4 per AskUserQuestion call — user reviews the entire set first
-2. User is asked if additional ACs are needed
-3. If any ACs need changes or additions → collect feedback, re-run the stage with history + feedback, present revised ACs from the start
-4. Once all ACs are confirmed, same round-based flow for UAT scenarios
-5. UAT changes only restart the UAT portion — confirmed ACs are locked
+If Discovery's Source of Truth Audit found contradictions:
+1. List each contradiction at the top of your output
+2. For each: state which source governs and why, using the precedence order below
+3. Ensure ACs align with the governing source, NOT the contradicted one
+4. If you cannot resolve a contradiction, FLAG it for the user checkpoint
 
-Only confirmed ACs and UAT scenarios are written to the plan. The user never needs to open the plan file — all interaction flows through AskUserQuestion.
+### Source Precedence
+When authoritative sources conflict:
+`ADR > contract tests/specs > API docs/wiki > README/AGENTS.md`
+If precedence does not resolve the conflict, escalate to user checkpoint.
 
 ## Anti-Patterns
 
 - Do NOT write vague ACs ("should work well")
 - Do NOT skip the misinterpretation field — it prevents subtle bugs
+- Do NOT skip the partial implementation trap field — it prevents orphan code
 - Do NOT design UAT tests that only check happy paths
 - Do NOT ignore failure modes and edge cases
 - Do NOT leave risks without severity ratings and mitigations
+- Do NOT ignore contradictions from the Source of Truth Audit

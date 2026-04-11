@@ -76,6 +76,22 @@ Also include a summary section:
 5. **Reusable Utilities** — existing functions/helpers the implementation should use
 6. **Visual State** — screenshots or descriptions of current UI (if applicable)
 7. **Backpressure Commands** — test/typecheck/lint/build commands for the project
+8. **Source of Truth Contradictions** — conflicts between docs and code, or between docs
+
+### 5. Source of Truth Audit
+For the feature area, identify ALL authoritative documents:
+- ADRs (Architecture Decision Records)
+- Wiki pages defining behavior for the affected area
+- API specifications, contract tests
+- README/AGENTS.md institutional memory
+
+For each source found, document:
+- **Source:** {path or URL}
+- **Relevant decision:** {what it says about the affected area}
+- **Code alignment:** {does current code follow this? cite file:line}
+- **Contradictions:** {where code and docs disagree, or where docs disagree with each other}
+
+If no authoritative documents exist for the feature area, state that explicitly.
 
 ## Anti-Patterns
 
@@ -84,3 +100,4 @@ Also include a summary section:
 - Do NOT assume patterns without verifying them in the code
 - Do NOT ignore the running app if browser tools are available
 - Do NOT speculate about what code does — read it and verify
+- Do NOT skip the Source of Truth Audit when the project has ADRs, wiki, or specs

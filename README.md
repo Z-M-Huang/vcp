@@ -135,7 +135,7 @@ VCP breaks this cycle by making the AI aware of engineering principles *before* 
 <img src="assets/echo-chamber.png" alt="The Echo Chamber Problem" width="800">
 </div>
 
-When a single AI family writes and reviews code, it shares the same training biases, the same blind spots, and the same failure modes. A Claude model reviewing Claude-generated code — or GPT reviewing GPT — misses the same classes of bugs because the models share architectural lineage and training distributions. Cross-model review breaks this pattern: routing code through independent models from different providers catches issues that same-family review consistently overlooks. Dev Buddy makes this practical with configurable pipelines that enforce cross-model review at every stage.
+When a single AI family writes and reviews code, it shares the same training biases, the same blind spots, and the same failure modes. A Claude model reviewing Claude-generated code — or GPT reviewing GPT — misses the same classes of bugs because the models share architectural lineage and training distributions. Cross-model review breaks this pattern: routing code through independent models from different providers catches issues that same-family review consistently overlooks. Dev Buddy makes this practical with structured pipelines that enforce cross-model review at every stage.
 
 ---
 
@@ -145,99 +145,36 @@ When a single AI family writes and reviews code, it shares the same training bia
 <img src="assets/dev-buddy-pipeline.png" alt="Multi-AI Pipeline Orchestration" width="800">
 </div>
 
-One AI writing and reviewing its own code is like grading your own homework. Dev Buddy orchestrates **multiple AI models** through structured development pipelines — with task-based dependencies that literally prevent skipping stages.
+One AI writing and reviewing its own code is like grading your own homework. Dev Buddy implements a **Ralph loop** workflow — fresh context per iteration, specs on disk, iterate until correct. It orchestrates **multiple AI models** through 6 stages with task-based dependencies that literally prevent skipping stages.
 
-### User-Defined Pipelines
+### The 6 Stages
 
-Define any number of pipelines in `~/.vcp/dev-buddy.json` under `pipelines`:
+| Stage | What Happens | Multi-AI |
+|-------|-------------|----------|
+| **Discovery** | Explore codebase + running app. Map code paths, patterns, impact points. Source of truth audit. | Yes |
+| **Requirements + UAT** | Define ACs (Given/When/Then + misinterpretation + partial implementation trap). Design Playwright UAT scenarios. | Yes |
+| **Decomposition** | Break into ~50 LOC units. Each unit gets its own plan file with interface contracts, test stubs, and data flow traces. | Yes |
+| **Build** | Per-unit implementation with fresh context. Orchestrator independently runs backpressure. | Single |
+| **Code Review** | Flow tracing (point + path + intent). Stub/orphan detection. Cross-unit integration. | Yes |
+| **UAT** | Execute Playwright tests + all mechanical backpressure against running app. | Single |
 
-```json
-{
-  "pipelines": {
-    "feature": ["requirements", "planning", "plan-review", "implementation", "code-review"],
-    "bug-fix": ["rca", "requirements", "planning", "plan-review", "implementation", "code-review"],
-    "quick-fix": ["planning", "implementation", "code-review"]
-  }
-}
-```
+**Two nested loops + review gate:**
+- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), retry up to `max_build_attempts`. Code review can send units back for rework.
+- **Outer (UAT):** integration Ralph loop — real Playwright UAT against running app. Failures identify affected units and loop back through BUILD and CODE REVIEW.
+- **User checkpoints** after Discovery, Requirements, and Decompose — approve, reject, or provide additional context.
 
-Run any pipeline with `/dev-buddy-run <pipeline-name>`.
-
-> **Deprecated:** `/dev-buddy-feature-implement` and `/dev-buddy-bug-fix` will be removed in a future release. Use `/dev-buddy-run feature` and `/dev-buddy-run bug-fix` instead.
-
-### Cross-AI Review Gates
-
-Different AI models review each other's work at each phase. A typical pipeline:
+### Enforcement Stack
 
 ```
-Claude Opus plans ──→ Claude Sonnet reviews ──→ Claude Opus reviews ──→ Codex reviews
-                                                                            │
-                      Claude Sonnet implements ◀────────────────────────────┘
-                            │
-                      Claude Sonnet reviews ──→ Claude Opus reviews ──→ Codex reviews
+Layer 1: Unit plan + contracts   <- intent, data flow traces, authoritative sources
+Layer 2: Mechanical backpressure <- compilation, types, lint errors
+Layer 3: Orchestrator verify     <- subagent lies, missing sections, source violations
+Layer 4: Code review (multi-AI)  <- flow tracing, stub detection, drift probe
+Layer 5: UAT (Playwright)        <- real user scenario failures
+Layer 6: User checkpoint         <- everything above missed
+Layer 7: TaskManagement          <- process compliance (no skipping)
+Layer 8: Plan files on disk      <- state survival after compaction
 ```
-
-Each review is independent — reviewers don't see each other's verdicts. Cross-model review catches issues that single-AI self-review misses.
-
-### Data-Driven Enforcement
-
-Pipeline stages aren't instructions the AI might skip — they're **task dependencies** enforced by the system:
-
-| Instruction-Based (fragile) | Task-Based (VCP) |
-|-----------------------------|-------------------|
-| "Run Sonnet → Opus → Codex" | `blockedBy` prevents Codex until Opus completes |
-| AI can skip "redundant" steps | `TaskList()` only shows unblocked tasks |
-| No audit trail | Complete task history with metadata |
-| Hidden progress | Real-time task progress visible to user |
-
-### Team-Based Requirements
-
-The feature pipeline spawns 5 specialist agents that explore your codebase in parallel before a single line of code is planned:
-
-| Specialist | Focus |
-|------------|-------|
-| Technical Analyst | Existing codebase, patterns, dependencies, files to modify |
-| UX/Domain Analyst | User workflows, edge cases, accessibility |
-| Security Analyst | Threat model, OWASP relevance, non-functional security requirements |
-| Performance Analyst | Load impact, scalability, bottlenecks, caching |
-| Architecture Analyst | Design patterns, SOLID principles, maintainability |
-
-Their findings inform requirements gathering — producing richer, more complete specifications from the start.
-
-### Configurable Pipeline
-
-The pipeline is defined in `~/.vcp/dev-buddy.json` as ordered arrays of stages. Each stage specifies a type, provider, and model. Add, remove, or reorder stages. Swap AI providers per stage — API presets support both **Anthropic-compatible** and **OpenAI-compatible** endpoints via the `protocol` field. Use the web portal (`/dev-buddy-config`) or edit JSON directly.
-
-Each executor combines a **stage definition** (output format, process rules — bound to the stage type) with a **role prompt** (persona, expertise — swappable). Stage definitions auto-resolve from the stage type, ensuring consistent output schemas regardless of which role prompt is used.
-
-<details>
-<summary><strong>Example: feature pipeline with Codex final gates</strong> — click to expand</summary>
-
-```json
-{
-  "pipelines": {
-    "feature": ["requirements", "planning", "plan-review", "implementation", "code-review"],
-    "bug-fix": ["rca", "requirements", "planning", "plan-review", "implementation", "code-review"]
-  },
-  "stages": [
-    { "type": "requirements", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "planning", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "plan-review", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "plan-review", "provider": "my-codex-preset", "model": "o3" },
-    { "type": "implementation", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "sonnet" },
-    { "type": "code-review", "provider": "anthropic-subscription", "model": "opus" },
-    { "type": "code-review", "provider": "my-codex-preset", "model": "o3" }
-  ]
-}
-```
-
-</details>
-
-### Review Harness
-
-Review stages include a **false-positive analysis** step: each finding is evaluated for potential misinterpretation before being surfaced. Reviewers populate a `misinterpretation` field explaining why a finding might be wrong. User confirmation checkpoints pause the pipeline at review boundaries so you can accept, reject, or refine findings before proceeding.
 
 ### Quick Start
 
@@ -245,9 +182,8 @@ Review stages include a **false-positive analysis** step: each finding is evalua
 # Install dev-buddy alongside VCP
 /plugin install vcp@dev-buddy
 
-# Run any pipeline by name
-/dev-buddy-run feature Add user authentication with JWT
-/dev-buddy-run bug-fix Login fails when email contains a plus sign
+# Run the full Ralph workflow
+/dev-buddy-ralph Add user authentication with JWT
 
 # Configure pipeline stages and providers via web portal
 /dev-buddy-config

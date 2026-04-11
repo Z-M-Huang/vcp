@@ -26,17 +26,22 @@ List uncovered ACs in `requirements_coverage.missing[]`.
 ### For Code Reviews
 
 1. List ALL acceptance criteria from the user story
-2. For EACH acceptance criterion, verify it is implemented in the code
+2. For EACH acceptance criterion, verify at three levels:
+   - **Point check:** file:line where the core logic is implemented
+   - **Flow check:** if the unit plan has a Data Flow Trace, verify every hop (parameter exists, call site exists, data threaded through). If any hop is broken → FAIL
+   - **Intent check:** verify code matches AC meaning, Authoritative Sources constraints, and Partial Implementation Trap warnings
 3. Provide evidence: file path and line number where each AC is satisfied
 4. Flag any acceptance criteria NOT implemented
-5. If ANY acceptance criterion is missing, status MUST be `needs_changes`
+5. Classify each new function as connected (has call sites), stub (placeholder), or orphan (real logic, no callers). Orphan → FAIL unless wired in a later unit.
+6. If ANY acceptance criterion is missing or any flow hop is broken, status MUST be `needs_changes`
 
 Output as `acceptance_criteria_verification.details[]`:
 ```json
-{ "ac_id": "AC1", "status": "IMPLEMENTED", "evidence": "src/auth.ts:42", "notes": "" }
+{ "ac_id": "AC1", "status": "IMPLEMENTED", "evidence": "src/auth.ts:42", "flow_check": "PASS", "notes": "" }
 ```
 
 Valid statuses: `IMPLEMENTED`, `PARTIAL`, `NOT_IMPLEMENTED`.
+Valid flow_check: `PASS`, `FAIL`, `N/A` (no Data Flow Trace).
 
 ---
 

@@ -17,12 +17,12 @@ Ralph = 6 stages with two nested loops and multi-AI diversity
 ## The Ralph Loop
 
 ```
-DISCOVER ──> REQUIREMENTS ──> DECOMPOSE ──> BUILD ──> CODE REVIEW ──> UAT
-                                              ^           |             |
-                                              |           v             |
-                                              +--- needs_changes -------+
-                                              |                         |
-                                              +------ fail (loop back) -+
+DISCOVER ──> discover-review ──> REQUIREMENTS ──> requirements-review ──> DECOMPOSE ──> decompose-review ──> BUILD ──> CODE REVIEW ──> UAT
+                 |                                    |                                    |                   ^           |             |
+                 v                                    v                                    v                   |           v             |
+           user approval                        user approval                        user approval             +--- needs_changes -------+
+                                                                                                              |                         |
+                                                                                                              +------ fail (loop back) -+
 ```
 
 ### Inner Loop (BUILD)
@@ -35,8 +35,9 @@ Per unit of work:
 
 ### Review Gate (CODE REVIEW)
 Multi-executor dispatch:
-- Each reviewer independently traces ACs to code (file:line evidence)
-- Orchestrator synthesizes findings
+- Each reviewer traces ACs at three levels: point check (file:line), flow check (hop-by-hop path verification), intent check (authoritative source constraints)
+- Stub/orphan detection classifies new functions as connected, stub, or orphan
+- Orchestrator synthesizes findings and runs post-review source verification
 - Verdict: approved → UAT, needs_changes → back to BUILD, rejected → user
 
 ### Outer Loop (UAT)

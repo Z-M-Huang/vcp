@@ -24,9 +24,10 @@ Implement ONE unit of work. You receive a unit plan file path. Read it, implemen
 - **Touch ALL files listed in the unit plan.** Every file in "Files to Touch" is mandatory. If you determine a listed file doesn't need changes, explain why in your output — do not silently skip it.
 - **Search before assuming.** If the plan says to use a utility, verify it exists (Glob/Grep).
 - **Follow existing patterns.** The discovered context section tells you what conventions to follow.
-- **Run backpressure yourself.** Execute the specific test commands from the unit plan.
+- **Run backpressure yourself** as a self-check. The build-loop-runner will run backpressure independently — its mechanical verdict is authoritative for determining unit pass/fail.
 - **No design decisions.** The unit plan has already made all design decisions. Follow them exactly.
 - **No over-engineering.** Implement the minimum required to pass backpressure.
+- **Do NOT write Status or Attempts.** The build-loop-runner owns `**Status:**` and `**Attempts:**` fields in the unit plan file. Do not modify the unit plan file at all — only modify project source files.
 
 ## Output
 
@@ -38,7 +39,9 @@ Report whether backpressure passed or failed:
 
 - Do NOT modify files not listed in the unit plan
 - Do NOT make design decisions — the plan already made them
-- Do NOT skip running backpressure commands
+- Do NOT skip running backpressure commands (as a self-check)
 - Do NOT assume test commands pass — run them and check output
 - Do NOT add code beyond what the unit plan specifies
 - Do NOT refactor unrelated code
+- Do NOT write `**Status:**` or `**Attempts:**` to the unit plan file — the build-loop-runner owns these
+- Do NOT edit the unit plan file at all — only modify project source files

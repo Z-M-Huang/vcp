@@ -50,6 +50,35 @@ Define the PUBLIC interface this unit exposes or modifies. This is what dependen
 
 If the unit modifies an existing interface, show BEFORE and AFTER signatures.
 
+### Data Flow Trace
+For any AC that involves data moving through multiple components, document the
+complete path from trigger to final effect:
+
+- **Trigger:** {what initiates the flow — user action, API call, event, cron}
+- **Path:**
+  1. `src/triggers/engine.ts:fireTrigger()` — receives {data}, passes to step 2
+  2. `src/sessions/task-consumer.ts:handleMessage()` — receives {data}, passes to step 3
+  ...
+- **Data threaded:** {field names and types that must pass through each hop}
+
+If this unit adds a new field/parameter, list EVERY function in the path whose
+signature must be updated. If the path crosses into another unit's territory,
+cite the dependency.
+
+Skip this section for units that are self-contained (single file, no cross-component data flow).
+
+### Authoritative Sources
+List authoritative documents whose constraints bind this unit:
+
+- **Source:** {ADR, wiki page, API spec — path or URL}
+- **Binding constraint:** {what the source requires or prohibits}
+- **AC alignment:** {which AC reflects this constraint}
+
+Source precedence when conflicts arise:
+`ADR > contract tests/specs > API docs/wiki > README/AGENTS.md`
+
+Skip this section if discovery found no relevant authoritative documents for this unit.
+
 ### Test Stubs
 Executable test assertions the implementer MUST make pass. These are concrete input→output examples, not descriptions.
 
@@ -111,6 +140,9 @@ Before completing, verify:
 - [ ] Every unit has executable Test Stubs covering happy path + error cases
 - [ ] Every unit has an Entropy rating (LOW/MED/HIGH)
 - [ ] Interface Contracts between dependent units are compatible (Unit B's inputs match Unit A's outputs)
+- [ ] Units with cross-component ACs (referencing ≥2 source files) have a Data Flow Trace
+- [ ] Units referencing ADRs/wiki/specs have an Authoritative Sources block
+- [ ] ACs are copied as full Given/When/Then text, not just AC-N IDs
 
 ## Anti-Patterns
 

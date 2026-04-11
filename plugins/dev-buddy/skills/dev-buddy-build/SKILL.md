@@ -9,253 +9,42 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, Tas
 
 Implement each unit of work with fresh context per iteration. Orchestrator independently runs backpressure.
 
-**Standalone usage:** `/dev-buddy-build` — reads the most recent `ralph-*.md` plan file and builds all pending units.
+**Standalone:** `/dev-buddy-build` — reads the most recent `ralph-*.md` plan file and builds all pending units.
 
-**Orchestrator usage:** Called by `/dev-buddy-ralph` with plan path already established.
-
----
-
-## Step 1: Find the plan file
-
-If no plan file path is in current context, find the most recent one:
-```bash
-ls -t "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-*.md" 2>/dev/null | head -1
-```
-
-Read the master plan file. The `## Units of Work` table must exist with at least one unit. If not, tell the user to run `/dev-buddy-decompose` first.
-
-Extract the slug from the filename: `ralph-{SLUG}.md` → `{SLUG}`.
-
-Load config for `max_build_attempts`:
-```bash
-bun -e "
-import { loadDevBuddyConfig } from '${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts';
-const config = loadDevBuddyConfig();
-console.log(JSON.stringify({ max_build_attempts: config.max_build_attempts }));
-"
-```
+**Orchestrated:** Dispatched by `build-loop-runner.ts` during the Ralph pipeline (not called directly by `/dev-buddy-ralph`).
 
 ---
 
-## Step 2: Load stage executor
+## Execution Modes
 
-```bash
-bun -e "
-import { loadDevBuddyConfig } from '${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts';
-import { readPresets } from '${CLAUDE_PLUGIN_ROOT}/scripts/preset-utils.ts';
-const config = loadDevBuddyConfig();
-const presets = readPresets();
-const stage = config.stages['ralph-build'];
-console.log(JSON.stringify(stage.executors.map((e, i) => ({
-  index: i,
-  system_prompt: e.system_prompt,
-  preset: e.preset,
-  model: e.model,
-  type: presets.presets[e.preset]?.type || 'unknown',
-  timeout_ms: presets.presets[e.preset]?.timeout_ms
-}))));
-"
-```
+### Standalone Mode
 
-Single executor only — `ralph-build` is a singleton stage.
+When invoked directly via `/dev-buddy-build`, this skill reads the most recent `ralph-*.md` plan file and builds all pending units. It queries the state machine, dispatches implementation, runs backpressure, and evaluates results.
 
----
+### Orchestrated Mode (via build-loop-runner.ts)
 
-## Step 3: Build loop
+When dispatched by the mechanical build loop runner, the executor receives a single unit plan via stdin. The executor's job is **implementation only**:
 
-For each unit in dependency order where status is not `done` and not `failed`:
+1. **Read the unit plan** — it contains everything needed (interface contract, data flow trace, authoritative sources, files to touch, backpressure commands)
+2. **Implement** — touch ONLY the files listed in the unit plan
+3. **Report results** — describe what was implemented
 
-**Status handling on entry:**
-- `pending` → normal flow (3a through 3f). If `## Attempt` sections exist in the unit file, this is a resumed unit — the implementer will see prior failure context.
-- `done` → skip
-- `failed` → skip (already escalated)
+**The executor does NOT:**
+- Write `**Status:**` or `**Attempts:**` to the unit file — the build-loop-runner owns these fields mechanically
+- Decide pass/fail — the runner runs backpressure independently and determines the outcome
+- Query the state machine — the runner already determined which unit to build
+- Edit the unit plan file itself — only project source files
 
-### 3a. Check dependencies
+The build-loop-runner handles the full loop: state machine queries, executor dispatch (via `stage-runner.ts` to the configured preset), mechanical backpressure, status writes, and retry logic.
 
-Read the master plan's "Units of Work" table. Verify all dependency units are `done`. If a dependency is `failed`, skip this unit and report.
+### How It Works (Both Modes)
 
-### 3b. Read unit plan and verify contract completeness
+For each pending unit in dependency order:
 
-Read `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md`.
+1. **Verify contract** — check interface contract and test stubs are complete; if incomplete, return to decompose for contract strengthening. Unit plans also contain **Data Flow Trace** (hop-by-hop wiring instructions) and **Authoritative Sources** (binding constraints from ADRs/wiki).
+2. **Dispatch implementer** — fresh-context executor receives only the unit plan file content
+3. **Verify files touched** — mechanically check every file in "Files to Touch" was created/modified
+4. **Run backpressure** — runner independently runs unit test, typecheck, and lint commands
+5. **Evaluate** — on pass, mark unit `done`; on fail, retry up to `max_build_attempts`
 
-**Mechanical verification gate** — verify the unit plan has the required contract fields before dispatching a builder:
-
-```bash
-# Check Interface Contract section exists and is non-empty
-grep -A2 '## Interface Contract' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" | grep -c 'Function signatures\|Pre-conditions\|Post-conditions\|Error conditions'
-
-# Check Test Stubs section exists and has assertions
-grep -A5 '## Test Stubs' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md" | grep -c 'expect\|assert\|should'
-
-# Check dependency contract compatibility (for units with dependencies)
-# For each dependency: verify this unit's expected inputs match the dependency's Interface Contract outputs
-```
-
-If the Interface Contract section is missing, empty, or lacks typed signatures: **do not dispatch the builder**. Instead:
-1. Report to user: "Unit {N} has incomplete interface contract — returning to decompose for contract strengthening"
-2. Update plan status back to `decompose` and return to `/dev-buddy-decompose` with feedback: "Unit {N} needs contract strengthening: {specific missing fields}"
-
-If Test Stubs are missing or have no concrete assertions: same flow — return to decompose.
-
-This is the **contract-first error correction** principle: fix contracts, don't build against incomplete specs.
-
-### 3c. Resolve stage + role prompts
-
-```bash
-bun -e "
-import { loadStageDefinition, composePrompt, getSystemPrompt } from '${CLAUDE_PLUGIN_ROOT}/scripts/system-prompts.ts';
-const stage = loadStageDefinition('ralph-build', '${CLAUDE_PLUGIN_ROOT}/stages');
-const role = getSystemPrompt('{SYSTEM_PROMPT}', '${CLAUDE_PLUGIN_ROOT}/system-prompts/built-in');
-if (stage && role) console.log(composePrompt(stage, role));
-else console.log('ERROR: Could not resolve prompts');
-"
-```
-
-### 3d. Dispatch fresh-context implementer
-
-**Before dispatch — record file state baseline** for each file in "Files to Touch":
-```bash
-# For each file in "Files to Touch":
-stat -c '%Y' "{file_path}" 2>/dev/null || echo "MISSING"
-```
-Store the timestamps (or "MISSING") as the baseline for this attempt.
-
-The implementer prompt is the composed stage+role prompt PLUS the full unit plan file content.
-
-**Subscription executor:** `Agent(subagent_type: "general-purpose", model: {model}, prompt: {composed_prompt + unit_plan_content})`
-
-**API/CLI executor:** `Bash(run_in_background: true)` with one-shot-runner.ts:
-```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/one-shot-runner.ts" \
-  --type {api|cli} --output-id ralph-build-unit-{N} \
-  --preset "{PRESET}" --model "{MODEL}" \
-  --stage-type ralph-build --system-prompt {SYSTEM_PROMPT} \
-  --cwd "${CLAUDE_PROJECT_DIR}" --task-stdin <<'{DELIM}'
-{unit_plan_content}
-{DELIM}
-```
-
-### 3d.1. Verify all files were touched
-
-After the implementer finishes, BEFORE running backpressure, mechanically verify every file listed in the unit plan's "## Files to Touch" section against the pre-dispatch baseline:
-
-```bash
-# For EACH file in "Files to Touch":
-# Files tagged "new | create" — must now exist:
-test -f "{file_path}" && echo "OK: {file_path} created" || echo "FAIL: {file_path} NOT CREATED"
-
-# Files tagged "existing | modify" — must exist AND have changed since baseline:
-test -f "{file_path}" || echo "FAIL: {file_path} MISSING"
-CURRENT_TS=$(stat -c '%Y' "{file_path}" 2>/dev/null)
-if [ "$CURRENT_TS" = "{baseline_timestamp}" ]; then
-  echo "FAIL: {file_path} NOT MODIFIED (timestamp unchanged since baseline)"
-fi
-```
-
-Collect all results. If ANY result is `FAIL`:
-- Do NOT run backpressure
-- Go directly to Step 3f's failure path with the verification output as the "Failure Output"
-- The next implementer attempt will see exactly which files were missed in the Attempt section
-
-If all results are `OK`: proceed to Step 3e (backpressure).
-
-### 3e. Orchestrator independently runs backpressure (only after 3d.1 passes)
-
-**Never trust subagent self-reports.** After the implementer finishes, run the backpressure commands from the unit plan yourself:
-
-```bash
-{unit_test_command}
-```
-```bash
-{typecheck_command}
-```
-```bash
-{lint_command}
-```
-
-### 3f. Evaluate results
-
-**If ALL backpressure passes:**
-
-1. Update unit plan file status using Edit tool:
-   - old_string: `**Status:** pending`
-   - new_string: `**Status:** done`
-
-2. Verify the edit took effect:
-   ```bash
-   grep '^\*\*Status:\*\* done' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-{N}.md"
-   ```
-   If grep returns no match, re-read the file to find the actual status line and retry the Edit with the correct old_string.
-
-3. Update master plan "Units of Work" table using Edit tool: change this unit's status cell from `pending` to `done`.
-
-4. If running under orchestrator: `TaskUpdate(T-unit-N, status: "completed")`
-
-5. Continue to next unit.
-
-**If ANY backpressure fails:**
-
-1. **Contract quality check (before retrying):** Analyze the failure output. Classify the root cause:
-   - **Contract gap:** The failure indicates the Interface Contract is incomplete or ambiguous (e.g., unspecified edge case, missing error condition, vague pre/post-condition). → Return to decompose for contract strengthening instead of retrying build.
-   - **Implementation error:** The failure is a straightforward bug within a well-specified contract (e.g., wrong variable name, off-by-one, missed condition). → Retry build with failure context.
-
-   To classify: check if the error relates to behavior not specified in the Interface Contract or Test Stubs. If the test stubs don't cover the failing scenario, the contract is incomplete.
-
-   **If contract gap detected:**
-   - Append to the unit plan file: `## Contract Gap Detected\n**Issue:** {description of missing contract specification}\n**Action:** Returning to decompose for contract strengthening`
-   - Update plan status to `decompose` and signal to the orchestrator to re-run `/dev-buddy-decompose` with feedback: "Unit {N} contract gap: {specific missing specification}"
-   - Do NOT count this as a build attempt.
-
-2. Increment attempts counter in unit plan file using Edit tool:
-   - old_string: `**Attempts:** {current_N}`
-   - new_string: `**Attempts:** {current_N + 1}`
-
-3. Append `## Attempt {N}` section to unit plan file using Edit tool (insert after the last section):
-   ```markdown
-   ## Attempt {N}
-   **Result:** fail
-   **Root Cause:** implementation_error
-   **Failure Output:**
-   {full error output from backpressure}
-   **Next Action:** retry
-   ```
-
-4. If under max attempts: go back to 3d (fresh implementer reads updated plan with failure context). Status remains `pending`.
-
-5. If at or over max attempts:
-   - Update the last Attempt's `**Next Action:** retry` to `**Next Action:** escalate` using Edit tool
-   - Update unit plan file status using Edit tool:
-     - old_string: `**Status:** pending`
-     - new_string: `**Status:** failed`
-   - Update master plan "Units of Work" table: unit status → `failed` using Edit tool
-   - If running under orchestrator: `TaskUpdate(T-unit-N, status: "blocked")`
-   - Ask user via AskUserQuestion what to do with the failed unit
-
-### 3g. After build loop finishes
-
-**Completion guard:** Before advancing, verify all units are done:
-
-1. Re-read the master plan's "Units of Work" table.
-2. If ALL units are `done`: proceed to advance the plan status below.
-3. If ANY unit is `failed`: do NOT advance. Ask user via AskUserQuestion: "Unit(s) {list} failed after max attempts. Retry them, skip them, or abort?"
-   - If user says retry: reset those units to `pending` (Edit unit plan file and master plan table), reset their attempts to 0, go back to the build loop.
-   - If user says skip: leave them as `failed`, proceed to advance (code review will see them as `failed` and report).
-   - If user says abort: stop the pipeline.
-
-**Advance to review:**
-
-Update plan status to `review` using Edit tool: replace `**Status:** build` with `**Status:** review`.
-
-If running under the orchestrator, update tasks:
-- `TaskUpdate(T-build, status: "completed")`
-- `TaskUpdate(T-review, status: "in_progress")`
-
----
-
-## Known Constraints
-
-1. **Fresh context is critical.** Each build attempt uses a fresh subagent. Do not accumulate context across iterations — the unit plan file on disk carries all necessary state.
-
-2. **Tool restriction:** Build executors get all 6 tools (`--allowed-tools` is omitted). This is intentional — build needs Write, Edit, and Bash.
-
-3. **Sequential TaskOutput polling:** Do NOT issue multiple TaskOutput calls in the same message.
+The state machine tracks per-unit attempts, status, and contract gap detection.

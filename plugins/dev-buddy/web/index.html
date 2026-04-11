@@ -642,7 +642,8 @@
                       <option x-bind:value="m" x-text="m"></option>
                     </template>
                   </select>
-                  <label style="display: flex; align-items: center; gap: 4px; font-size: 0.82rem; color: var(--text-secondary); margin: 0; white-space: nowrap;">
+                  <label x-show="!(stageDefinitions[stageType]?.singleton === true)"
+                    style="display: flex; align-items: center; gap: 4px; font-size: 0.82rem; color: var(--text-secondary); margin: 0; white-space: nowrap;">
                     <input type="checkbox" x-model="exec.parallel"
                       x-bind:disabled="stageConfig.executors.length > 1 && idx === stageConfig.executors.length - 1">
                     Parallel

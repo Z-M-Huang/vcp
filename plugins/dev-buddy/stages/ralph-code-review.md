@@ -37,10 +37,22 @@ Always perform AC Tracing (required for all lenses), then focus on your assigned
 ## Review Process
 
 ### 1. AC Tracing (ALL reviewers)
-For each acceptance criterion, find the implementing code:
-- Cite specific file:line where the AC is implemented
+For each acceptance criterion, verify at THREE levels:
+
+**Level 1 — Point check:** Cite specific file:line where the AC's core logic is implemented.
 - If no implementing code found → FAIL (missing implementation)
+
+**Level 2 — Flow check:** If the unit plan has a Data Flow Trace section, verify EVERY hop in the path:
+- Does each function in the path receive the data from the previous hop? (parameter exists, type matches)
+- Does each function pass the data to the next hop? (function call exists, argument provided)
+- Is any hop broken? (parameter missing, field dropped, call absent)
+- If any hop broken → FAIL (flow break at hop N: {description})
+- If no Data Flow Trace but AC involves cross-component data → FLAG (untraced flow)
+
+**Level 3 — Intent check:** Does the code match the AC's full intent?
 - If code exists but doesn't match AC intent → FAIL (intent mismatch)
+- If the unit plan has Authoritative Sources, verify the implementation honors each binding constraint
+- Check against the Misinterpretation and Partial Implementation Trap fields from requirements
 
 ### 2. Contract Verification (ALL reviewers)
 For each unit, verify the implementation matches its Interface Contract:
@@ -48,6 +60,7 @@ For each unit, verify the implementation matches its Interface Contract:
 - Error conditions are handled as specified in the contract
 - Pre/post conditions are enforced
 - Test stubs from decomposition pass
+- If the unit plan LACKS an Interface Contract → FLAG (missing contract — review manually)
 
 ### 3. Lens-Specific Review (based on your assigned lens)
 
@@ -91,10 +104,28 @@ What scenarios are NOT tested that should be? Focus on edge cases visible throug
 - **needs_changes** — fixable issues found, specify affected units and fixes
 - **rejected** — fundamental design issue, escalate to user
 
+### 5. Stub Detection (ALL reviewers)
+For each new function added in the implementation, classify:
+- **Connected:** called from existing code paths (Grep for call sites)
+- **Stub:** returns hardcoded values, has TODO, empty body, throws NotImplemented
+- **Orphan:** real logic but no call site in changed or existing files
+
+Orphan or stub functions → FAIL unless the unit plan explicitly marks them as
+"wired in a later unit" with a dependency reference.
+
+### 6. Cross-Unit Integration (integration-lens reviewers)
+For units with dependencies:
+- Verify Unit B's imports match Unit A's actual exports (not just planned exports)
+- Verify data types flow correctly across unit boundaries
+- Check for implicit contracts — where Unit B assumes a return value Unit A
+  doesn't guarantee in its Interface Contract
+
 ## Anti-Patterns
 
 - Do NOT give "looks good" without tracing every AC to code
 - Do NOT skip the intent matching step (check misinterpretation fields)
+- Do NOT skip flow checks when Data Flow Traces exist in unit plans
 - Do NOT ignore integration between units
 - Do NOT approve without checking edge cases
 - Do NOT write findings without specific file:line references
+- Do NOT approve orphan functions without verifying they have call sites

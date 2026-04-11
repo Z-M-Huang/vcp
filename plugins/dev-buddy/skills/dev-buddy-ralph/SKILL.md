@@ -7,299 +7,225 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, Tas
 
 # Ralph Loop — Feature Development Orchestrator
 
-Chains 6 stage skills through the Ralph loop architecture: discover → requirements → decompose → build → code review → UAT, with two nested loops and multi-AI diversity.
+Chains 6 stage skills through the Ralph loop: discover → requirements → decompose → build → code review → UAT.
 
 **Usage:** `/dev-buddy-ralph <feature description>`
 
 **Config:** `~/.vcp/dev-buddy.json` — use `/dev-buddy-config` web portal or edit manually.
 
-Each stage is a standalone skill that can also be invoked independently. This orchestrator manages initialization, TaskManagement, and the loop logic that connects them.
+---
+
+## Core Invariant
+
+**Plan file + state machine = source of truth. Tasks = derived projection.**
+
+ALWAYS query the state machine first, THEN update tasks to match. Tasks provide visibility and resume capability. The state machine drives all decisions.
 
 ---
 
-## Resume Protocol (after context compaction)
+## Initialization
 
-If you have lost context (conversation compressed), immediately:
-1. Call `TaskList()` to see all tasks and their statuses
-2. Read the master plan file (path is in the first task's description: `ralph-{SLUG}`)
-3. Check plan `**Status:**` — this is the source of truth for which stage to run
-4. Find the task matching the current plan status. If it is `completed` but the plan status indicates it should run again (loop-back from code review or UAT), reset it to `in_progress`
-5. Use the Skill tool to invoke the skill named in the task description (e.g., "invoke /dev-buddy-build")
-6. After the skill returns, run the VERIFY commands from the task description
-7. If any VERIFY check fails: fix the issue with Edit tool, re-run VERIFY
-8. Determine next action based on plan status:
-   - Status advanced forward (e.g., build→review): `TaskUpdate` current task to `completed`, go to step 1
-   - Status looped back (e.g., review→build): reset downstream tasks to `pending`, go to step 1
-   - Status is `done`: `TaskUpdate` current task to `completed`, report success to user
+On first run:
+
+1. **Generate slug** from the feature description (lowercase, hyphens, no special chars).
+
+2. **Create plan directory and file:**
+   ```bash
+   mkdir -p "${CLAUDE_PROJECT_DIR}/.vcp/plan"
+   ```
+   Write initial plan at `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md` with `**Status:** discover`.
+
+3. **Create 6 pipeline stage tasks** with dependency chain:
+
+   Use TaskCreate for each, then TaskUpdate to set `addBlockedBy`. Track the returned task IDs.
+
+   | # | Subject | blockedBy | metadata |
+   |---|---------|-----------|----------|
+   | 1 | Ralph: Discovery | — | `{type:'stage', stage:'discover', slug, plan}` |
+   | 2 | Ralph: Requirements | [1] | `{type:'stage', stage:'requirements', slug, plan}` |
+   | 3 | Ralph: Decomposition | [2] | `{type:'stage', stage:'decompose', slug, plan}` |
+   | 4 | Ralph: Development | [3] | `{type:'stage', stage:'build', slug, plan}` |
+   | 5 | Ralph: Code Review | [4] | `{type:'stage', stage:'review', slug, plan}` |
+   | 6 | Ralph: UAT | [5] | `{type:'stage', stage:'uat', slug, plan}` |
+
+   Where `plan` = absolute path to the plan file, `slug` = generated slug.
+
+   **Task 4 (Development) is a passthrough milestone.** It has no work of its own — it exists to preserve the 6-stage linear chain. It will be blocked by all unit tasks after decompose.
+
+   Each task description should include:
+   - What the stage does (one line)
+   - The state machine query command: `bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" --plan "{plan}" --action next`
+   - Resume instruction: "Read plan file, query state machine, continue loop."
+
+4. **Register task IDs** in the state file for resume persistence:
+   ```bash
+   bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
+     --plan "{plan}" --action register-task --ref "stage:{stage}" --task-id "{id}"
+   ```
+   Run once per task (6 calls total).
+
+5. **Enter the main orchestration loop.**
 
 ---
 
-## Step 1: Initialize
+## Main Orchestration Loop
 
-Extract the feature description from the arguments after the skill trigger.
+1. **Query the state machine** for the next action:
+   ```bash
+   bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
+     --plan "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md" --action next
+   ```
 
-### 1a. Load config
+2. **Process the returned `actions` array in order.** Each action has a `type`:
 
-```bash
-bun -e "
-import { loadDevBuddyConfig } from '${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.ts';
-const config = loadDevBuddyConfig();
-console.log(JSON.stringify({
-  stages: Object.fromEntries(Object.entries(config.stages).map(([k, v]) => [k, { executor_count: v.executors.length }])),
-  max_iterations: config.max_iterations,
-  max_build_attempts: config.max_build_attempts,
-  max_outer_iterations: config.max_outer_iterations,
-}));
-"
-```
+   - **`update_tasks`** — For each operation, resolve `ref` (e.g., `"stage:discover"`, `"unit:3"`) to a task ID using the state file's `taskIds` map, then call TaskUpdate with the specified status.
 
-### 1b. Generate slug
+   - **`invoke_skill`** — Route by `stageType`:
 
-Generate a URL-safe slug from the feature description (first 4-5 words, lowercase, hyphens):
-```bash
-bun -e "console.log(process.argv[1].toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40))" -- "{first 4-5 words of feature}"
-```
-Store as `{SLUG}`.
+     **Build stage** (`stageType: "ralph-build"`): Do NOT use the Skill tool. Instead, invoke `build-loop-runner.ts` via Bash — it owns the entire inner build loop mechanically:
+     ```bash
+     bun "${CLAUDE_PLUGIN_ROOT}/scripts/build-loop-runner.ts" \
+       --plan "{plan}" --cwd "${CLAUDE_PROJECT_DIR}"
+     ```
+     The script loops internally: queries the state machine, dispatches each unit to the configured executor via `stage-runner.ts`, runs backpressure, writes unit status, and continues until all units are done (or blocked/failed). It returns a single JSON blob:
+     ```json
+     {"event": "build_loop_complete", "taskOperations": [...], "units": [...], "summary": "..."}
+     ```
+     After the script returns:
+     1. **Replay `taskOperations`** — For each op, resolve the `ref` to a task ID via the state file's `taskIds` map, then call TaskUpdate with the specified status.
+     2. **Check `event`**: `build_loop_complete` → re-query the state machine. `build_loop_blocked` → report `blocked.reason` to user. `build_loop_error` → report `error.message` to user.
 
-### 1c. Initialize plan directory
+     **All other stages**: Use the Skill tool to call the named skill (e.g., `/dev-buddy-discover`). If `unitId` and `unitPath` are present, pass this context to the skill.
 
-```bash
-mkdir -p "${CLAUDE_PROJECT_DIR}/.vcp/plan"
-if ! grep -qF '.vcp/plan/' "${CLAUDE_PROJECT_DIR}/.gitignore" 2>/dev/null; then
-  echo '.vcp/plan/' >> "${CLAUDE_PROJECT_DIR}/.gitignore"
-fi
-```
+   - **`user_checkpoint`** — Present stage output and ask user for approval (see **User Checkpoint Handling** below).
 
-### 1d. Create master plan file
+   - **`write_plan`** — Apply the `edits` array to the plan file using the Edit tool. Each edit has `old_string` and `new_string`.
 
-Use the Write tool to create `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md`:
+   - **`run_backpressure`** — Run the listed shell commands via Bash and report pass/fail results.
 
-```markdown
-# Ralph: {Feature Title}
+   - **`done`** — Pipeline complete. Mark all remaining in_progress tasks as completed. Report the summary to the user.
 
-**Status:** discover
-**Created:** {today's date}
+   - **`error`** / **`blocked`** — Stop and report to the user.
+
+3. **Post-invocation status verification** (after `invoke_skill` for discover/requirements/decompose):
+   1. Read the plan file, extract `**Status:**`
+   2. The stage skill MUST write the `*-review` status (e.g., `discover-review`). If the skill wrote the wrong status, correct it before re-querying.
+
+4. **Post-decomposition unit plan validation** (BLOCKING GATE — after decompose skill writes `decompose-review`):
+
+   Before proceeding to the user checkpoint, validate ALL unit files mechanically:
+   ```bash
+   for f in ${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-*.md; do
+     for section in "### Entropy" "### Acceptance Criteria" "### Interface Contract" \
+                    "### Test Stubs" "### What to Implement" "### Files to Touch" \
+                    "### Backpressure" "### Done When"; do
+       count=$(grep -c "$section" "$f" 2>/dev/null || echo 0)
+       if [ "$count" -eq 0 ]; then echo "MISSING: $section in $(basename $f)"; fi
+     done
+   done
+   ```
+
+   Also check `## Entropy` and `## Interface Contract` (some LLMs use H2 instead of H3).
+
+   **If ANY required section is missing:**
+   1. Do NOT proceed to `decompose-review` user checkpoint
+   2. Write the plan status back to `decompose`
+   3. Write a `## Feedback` section listing the missing sections per unit file
+   4. Re-query the state machine (triggers decomposition re-run with feedback)
+
+   This is a **hard failure**, not a warning. It prevents the primary failure mode where the decomposition LLM produces abbreviated unit files without contracts or test stubs.
+
+5. **Post-review source verification** (after code review returns `approved`, before transitioning to UAT):
+
+   If any unit files contain `### Authoritative Sources` blocks:
+   1. Read all Authoritative Sources blocks from unit files
+   2. For each binding constraint, READ the referenced source document
+   3. Read the implementing code at the file:line cited in the code review's AC Tracing
+   4. Verify the implementation honors the binding constraint
+   5. If any constraint appears violated, downgrade the code review verdict to `needs_changes` with a specific finding: "Authoritative source {X} requires {Y}, but code does {Z}"
+
+6. **Repeat** from step 1 until the state machine returns `done`, `error`, or `blocked`.
 
 ---
 
-## Discovery
-(pending)
+## User Checkpoint Handling
 
-## Requirements
-(pending)
+When the state machine returns a `user_checkpoint` action (for `discover-review`, `requirements-review`, or `decompose-review`):
 
-## Units of Work
-(pending)
+The stage skill already obtained user approval via AskUserQuestion before writing the `-review` status. **Auto-advance without re-asking:**
 
-## Code Review
-(pending)
+1. Write `action.approveStatus` to the plan's `**Status:**` line. Mark the current stage task as completed.
+2. If this was **decompose-review**: trigger **Unit Task Creation** (below) before re-querying.
+3. Otherwise: re-query the state machine.
 
-## UAT Results
-(pending)
-```
-
-### 1e. Create stage tasks
-
-```
-TaskCreate("Stage: Discovery — invoke /dev-buddy-discover — ralph-{SLUG}
-VERIFY BEFORE COMPLETING:
-  grep -v '(pending)' .vcp/plan/ralph-{SLUG}.md | grep -q '## Discovery'
-  grep '^\*\*Status:\*\* requirements' .vcp/plan/ralph-{SLUG}.md", status: "in_progress")
-
-TaskCreate("Stage: Requirements + UAT — invoke /dev-buddy-requirements — ralph-{SLUG}
-VERIFY BEFORE COMPLETING:
-  grep -v '(pending)' .vcp/plan/ralph-{SLUG}.md | grep -q '## Requirements'
-  grep -c '### AC-' .vcp/plan/ralph-{SLUG}.md | grep -v '^0$'
-  grep -c '### UAT-' .vcp/plan/ralph-{SLUG}.md | grep -v '^0$'
-  grep '^\*\*Status:\*\* decompose' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-discover])
-
-TaskCreate("Stage: Decompose — invoke /dev-buddy-decompose — ralph-{SLUG}
-VERIFY BEFORE COMPLETING:
-  ls .vcp/plan/ralph/{SLUG}/unit-*.md
-  grep -v '(pending)' .vcp/plan/ralph-{SLUG}.md | grep -q '## Units of Work'
-  grep '^\*\*Status:\*\* build' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-requirements])
-
-TaskCreate("Stage: Build — invoke /dev-buddy-build — ralph-{SLUG}
-VERIFY BEFORE COMPLETING:
-  grep -c '^\*\*Status:\*\* pending' .vcp/plan/ralph/{SLUG}/unit-*.md | grep '^0$'
-  grep '^\*\*Status:\*\* review' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-decompose])
-
-TaskCreate("Stage: Code Review — invoke /dev-buddy-code-review — ralph-{SLUG}
-VERIFY BEFORE COMPLETING:
-  grep '^\*\*Verdict:\*\*' .vcp/plan/ralph-{SLUG}.md
-  grep '^\*\*Status:\*\* uat\|^\*\*Status:\*\* build' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-build])
-
-TaskCreate("Stage: UAT — invoke /dev-buddy-uat — ralph-{SLUG}
-VERIFY BEFORE COMPLETING:
-  grep '## UAT Results' .vcp/plan/ralph-{SLUG}.md | grep -v '(pending)'
-  grep '^\*\*Status:\*\* done\|^\*\*Status:\*\* build' .vcp/plan/ralph-{SLUG}.md", status: "pending", blocked_by: [T-review])
-```
-
-Note: Build tasks (T-unit-N) are created during decomposition when units are known.
-Each task description includes the skill to invoke and VERIFY commands — these survive context compaction and serve as both breadcrumbs and completion checklists.
+**Do NOT call AskUserQuestion here** — the user already approved in the stage skill. Re-asking creates a redundant gate.
 
 ---
 
-## Step 2: DISCOVER
+## Unit Task Creation (Post-Decompose Approval)
 
-Use the Skill tool to invoke `/dev-buddy-discover`.
+After decompose-review is approved and the Decomposition task is marked completed:
 
-After the skill returns — run VERIFY from task description:
-1. Confirm `## Discovery` section is no longer `(pending)` in plan file
-2. Confirm `**Status:**` is `requirements`:
+1. **List units:**
    ```bash
-   grep '^\*\*Status:\*\* requirements' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
+     --plan "{plan}" --action list-units
    ```
-3. If status was not updated: fix with Edit tool, then re-verify
-4. `TaskUpdate(T-discover, status: "completed")`
-5. `TaskUpdate(T-requirements, status: "in_progress")`
+   Returns JSON: `{ "units": [{ "id": 1, "title": "...", "status": "pending", "dependsOn": [2] }, ...] }`
+
+2. **Create one task per unit** via TaskCreate:
+   - Subject: `"Unit {id}: {title}"`
+   - Description: `"Build unit {id}. Plan: .vcp/plan/ralph/{SLUG}/unit-{id}.md"`
+   - Metadata: `{type: 'unit', unitId: id, slug: '{SLUG}', plan: '{plan path}'}`
+
+3. **Set inter-unit dependencies** — For each unit with `dependsOn`, call TaskUpdate with `addBlockedBy` mapping `dependsOn` unit IDs to their corresponding task IDs.
+
+4. **Block the Development milestone** — TaskUpdate the Development task (task 4) with `addBlockedBy: [all unit task IDs]`. This ensures Development cannot complete until all units are built.
+
+5. **Register unit task IDs:**
+   ```bash
+   bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
+     --plan "{plan}" --action register-task --ref "unit:{id}" --task-id "{taskId}"
+   ```
+
+6. **Re-enter the main loop.** The state machine will now return build actions with specific `unitId`/`unitPath` for each unit.
 
 ---
 
-## Step 3: REQUIREMENTS + UAT DESIGN
+## Loop-back Handling
 
-Use the Skill tool to invoke `/dev-buddy-requirements`.
+When the state machine returns `write_plan` that changes status from `review` or `uat` back to `build`:
 
-After the skill returns — run VERIFY from task description:
-1. Confirm `## Requirements` section is no longer `(pending)` in plan file
-2. Confirm ACs and UATs exist:
-   ```bash
-   grep -c '### AC-' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
-   grep -c '### UAT-' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
-   ```
-3. Confirm `**Status:**` is `decompose`:
-   ```bash
-   grep '^\*\*Status:\*\* decompose' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
-   ```
-4. If status was not updated: fix with Edit tool, then re-verify
-5. `TaskUpdate(T-requirements, status: "completed")`
-6. `TaskUpdate(T-decompose, status: "in_progress")`
+1. **Stage tasks stay `in_progress`** — Do NOT mark Code Review or UAT tasks as completed. They stay `in_progress` through the entire loop-back cycle.
+
+2. **Re-enter the main loop** — The state machine will handle the loop-back internally. It will return build actions with specific units that need rebuilding.
+
+3. **If units were reset to pending** (the review/UAT skill reset affected unit plan files):
+   - Call `--action list-units` to get current unit statuses
+   - For any unit that is `pending` but whose task was already completed: create a new rework task
+     - Subject: `"Unit {id}: {title} (rework)"`
+     - Metadata: `{type: 'unit', unitId: id, slug, plan, reworkIteration: N}`
+   - Register new task IDs via `--action register-task`
+
+4. **Continue the main loop** — The state machine drives all branching logic. Tasks reflect state.
 
 ---
 
-## Step 4: DECOMPOSE
+## Resume Protocol
 
-Use the Skill tool to invoke `/dev-buddy-decompose`.
+After context compaction:
 
-After the skill returns — run VERIFY from task description:
-1. Confirm unit plan files exist:
+1. **TaskList()** — See all tasks with their status and metadata.
+
+2. **Read the state file** — Query the state machine to get `taskIds` mapping:
    ```bash
-   ls "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-"*.md
+   bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
+     --plan "{plan}" --action next
    ```
-2. Confirm `## Units of Work` table is no longer `(pending)` in plan file
-3. Confirm `**Status:**` is `build`:
-   ```bash
-   grep '^\*\*Status:\*\* build' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
-   ```
-4. If status was not updated: fix with Edit tool, then re-verify
-5. `TaskUpdate(T-decompose, status: "completed")`
-6. All unit tasks created with dependencies
+   The returned `state.taskIds` contains the ref→taskId mapping.
 
----
+3. **If state file is missing or stale**: Rebuild the mapping from TaskList metadata — match tasks by `type`, `stage`/`unitId`, and `slug`.
 
-## Step 5: BUILD (Inner Ralph Loop)
+4. **Read the plan file** for current `**Status:**`.
 
-Use the Skill tool to invoke `/dev-buddy-build`.
-
-On entry:
-- `TaskUpdate(T-build, status: "in_progress")`
-
-After the skill returns — run VERIFY from task description:
-1. Check all unit files are done:
-   ```bash
-   grep -l '^\*\*Status:\*\* pending' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-"*.md 2>/dev/null
-   ```
-   If any are still pending but master plan Units table shows them as done, update the unit files.
-2. Verify plan status:
-   ```bash
-   grep '^\*\*Status:\*\* review' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
-   ```
-   If not `review`: update with Edit tool.
-3. `TaskUpdate(T-build, status: "completed")`
-4. `TaskUpdate(T-review, status: "in_progress")`
-
----
-
-## Step 6: CODE REVIEW (Review Gate)
-
-Use the Skill tool to invoke `/dev-buddy-code-review`.
-
-### Verdict handling (orchestrator's responsibility):
-
-**approved** → proceed to Step 7.
-
-**needs_changes** → loop back to Step 5 (BUILD for affected units only). Max: `max_iterations` from config.
-
-**rejected** → stop and report to user.
-
-After the skill returns — run VERIFY from task description:
-1. Verify verdict is recorded:
-   ```bash
-   grep '^\*\*Verdict:\*\*' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
-   ```
-2. Verify plan status matches verdict:
-   ```bash
-   grep '^\*\*Status:\*\*' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
-   ```
-   - If approved: expected `uat`. If not: fix with Edit.
-   - If needs_changes: expected `build`. If not: fix with Edit.
-3. If status doesn't match: fix with Edit tool
-4. Update tasks per verdict:
-   - approved:
-     - `TaskUpdate(T-review, status: "completed")`
-     - `TaskUpdate(T-uat, status: "in_progress")`
-   - needs_changes (loop back):
-     - `TaskUpdate(T-build, status: "in_progress")`
-     - Do NOT complete T-review — leave it in_progress for the next review round
-     - Go back to Step 5
-
----
-
-## Step 7: UAT (Outer Ralph Loop)
-
-Use the Skill tool to invoke `/dev-buddy-uat`.
-
-### Result handling (orchestrator's responsibility):
-
-**ALL pass** → done.
-
-**ANY fail** → loop back to Step 5. Max: `max_outer_iterations` from config.
-
-After the skill returns — run VERIFY from task description:
-1. Verify UAT results recorded:
-   ```bash
-   grep '## UAT Results' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md" | grep -v '(pending)'
-   ```
-2. Verify plan status:
-   ```bash
-   grep '^\*\*Status:\*\*' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
-   ```
-   - If all pass: expected `done`. If not: fix with Edit.
-   - If any fail: expected `build`. If not: fix with Edit.
-3. Update tasks per result:
-   - all pass:
-     - `TaskUpdate(T-uat, status: "completed")`
-     - Report success to user
-   - any fail (loop back):
-     - `TaskUpdate(T-build, status: "in_progress")`
-     - `TaskUpdate(T-review, status: "pending")`
-     - Do NOT complete T-uat — leave it in_progress for the next UAT round
-     - Go back to Step 5
-
----
-
-## Loop Summary
-
-```
-Step 2: /dev-buddy-discover
-Step 3: /dev-buddy-requirements
-Step 4: /dev-buddy-decompose
-Step 5: /dev-buddy-build ◄──────────────────────┐
-Step 6: /dev-buddy-code-review                   │
-         ├─ approved → Step 7                    │
-         ├─ needs_changes → back to Step 5 ──────┤
-         └─ rejected → stop                      │
-Step 7: /dev-buddy-uat                           │
-         ├─ all pass → done                      │
-         └─ any fail → back to Step 5 ───────────┘
-```
+5. **Re-enter the main loop** at step 1 (query state machine). The state machine reads the plan file and returns the correct next action.
