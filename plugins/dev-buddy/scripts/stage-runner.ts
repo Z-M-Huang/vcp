@@ -214,6 +214,7 @@ function dispatchExecutor(
     let timedOut = false;
     let proc: ReturnType<typeof spawn>;
     const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
 
     if (preset.type === 'subscription') {
       // Subscription: claude -p
@@ -231,7 +232,7 @@ function dispatchExecutor(
       args.push(task);
 
       proc = spawn('claude', args, {
-        stdio: ['inherit', 'pipe', 'inherit'],
+        stdio: ['inherit', 'pipe', 'pipe'],
         cwd,
       });
     } else if (preset.type === 'api') {
@@ -252,7 +253,7 @@ function dispatchExecutor(
       }
 
       proc = spawn(args[0], args.slice(1), {
-        stdio: ['pipe', 'pipe', 'inherit'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         cwd,
       });
       proc.stdin!.write(task);
@@ -272,7 +273,7 @@ function dispatchExecutor(
       ];
 
       proc = spawn(args[0], args.slice(1), {
-        stdio: ['pipe', 'pipe', 'inherit'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         cwd,
       });
       // CLI one-shot needs effective task with tool restriction appended
@@ -287,9 +288,12 @@ function dispatchExecutor(
       return;
     }
 
-    // Collect stdout
+    // Collect stdout and stderr — drain immediately to avoid backpressure deadlock
     if (proc.stdout) {
       proc.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    }
+    if (proc.stderr) {
+      proc.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
     }
 
     // Wall-clock timeout
@@ -308,6 +312,16 @@ function dispatchExecutor(
 
     proc.on('close', (code) => {
       clearTimeout(timer);
+
+      // Log captured stderr to file (debug-gated); never leaks to parent Bash tool
+      const stderr = Buffer.concat(stderrChunks).toString('utf-8');
+      if (stderr.trim()) {
+        vcpLog(cwd, {
+          source: 'stage-runner', event: 'executor_stderr', decision: 'info',
+          details: `executor=${executorIndex} stderr=${stderr.slice(0, 100_000)}`,
+        }, debugEnabled).catch(() => {});
+      }
+
       if (timedOut) {
         resolve({ executor_index: executorIndex, status: 'rejected', error: 'Timed out' });
         return;
@@ -347,7 +361,9 @@ function dispatchExecutor(
       }
 
       if (code !== 0) {
-        resolve({ executor_index: executorIndex, status: 'rejected', error: `Exit code ${code}: ${stdout.slice(0, 500)}` });
+        // Include stderr excerpt so fatal errors not on stdout are still visible
+        const stderrExcerpt = stderr.trim() ? ` stderr=${stderr.slice(0, 500)}` : '';
+        resolve({ executor_index: executorIndex, status: 'rejected', error: `Exit code ${code}: ${stdout.slice(0, 500)}${stderrExcerpt}` });
       } else {
         resolve({ executor_index: executorIndex, status: 'fulfilled', result: stdout || '' });
       }
@@ -611,8 +627,13 @@ async function main(): Promise<void> {
 // Guard: only run main when invoked directly (not imported by tests)
 const isDirectRun = process.argv[1]?.endsWith('stage-runner.ts');
 if (isDirectRun) {
-  main().catch((err) => {
-    console.error(`[stage-runner] Fatal: ${(err as Error).message}`);
+  main().catch(async (err) => {
+    const msg = (err as Error).message;
+    const debug = await isDebugEnabled().catch(() => false);
+    await vcpLog(process.cwd(), {
+      source: 'stage-runner', event: 'fatal', decision: 'error', details: msg,
+    }, debug).catch(() => {});
+    console.error(`[stage-runner] Fatal: ${msg}`);
     process.exit(2);
   });
 }

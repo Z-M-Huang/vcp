@@ -297,6 +297,8 @@ interface ApiPathDeps {
       exitCode: number | null;
       /** null when stream mode — stdout goes directly to terminal via 'inherit'. */
       stdout: ReadableStream<Uint8Array> | null;
+      /** Piped in pipeline mode (outputId set), inherited in stream mode. */
+      stderr?: ReadableStream<Uint8Array> | null;
       kill(signal?: number | string): void;
     };
     exited: Promise<void>;
@@ -326,10 +328,12 @@ const defaultApiDeps: ApiPathDeps = {
       ...(args.systemPrompt ? ['--system-prompt', args.systemPrompt] : []),
       ...(args.allowedTools ? ['--allowed-tools', args.allowedTools] : []),
     ];
+    // Stream mode (direct /dev-buddy-once): inherit stderr so user sees errors/progress.
+    // Pipeline mode (stage-runner with outputId): pipe stderr to prevent context bloat.
     const proc = Bun.spawn(spawnArgs, {
       stdin: 'pipe',
       stdout: useStream ? 'inherit' : 'pipe',
-      stderr: 'inherit',
+      stderr: useStream ? 'inherit' : 'pipe',
     });
     // Write task to stdin — avoids argv size limits (E2BIG) and ps exposure
     proc.stdin.write(args.task);
@@ -361,6 +365,9 @@ async function runApiPath(
   // Only collect stdout when piped (non-stream mode)
   const stdoutPromise = isStreamMode ? null : new Response(proc.stdout).text();
 
+  // Always collect stderr (piped) — drain immediately to avoid backpressure
+  const stderrPromise = proc.stderr ? new Response(proc.stderr).text() : Promise.resolve('');
+
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     // Wait for process to complete with a wall-clock timeout
@@ -385,6 +392,15 @@ async function runApiPath(
         }, graceMs);
       });
       return makeError('api_execution', 'api-task-runner process timed out', 3);
+    }
+
+    // Log captured stderr to file (debug-gated); never leaks to parent Bash tool
+    const stderrText = await stderrPromise;
+    if (stderrText.trim()) {
+      await deps.log(args.cwd, {
+        source: 'one-shot-runner', event: 'api_stderr', decision: 'info',
+        details: `preset=${args.preset} stderr=${stderrText.slice(0, 100_000)}`,
+      }, debugEnabled).catch(() => {});
     }
 
     // Stream mode: agent output already went to terminal. Map exit code to result.
@@ -495,10 +511,11 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
     details: `command=${preset.command} model=${args.model}`,
   }, debugEnabled);
 
-  // When outputId is set, pipe stdout for capture; otherwise inherit for terminal visibility.
+  // Pipeline mode (outputId set): pipe stdout+stderr for capture, prevent context bloat.
+  // Direct mode (no outputId, e.g. /dev-buddy-once): inherit stdout+stderr for terminal visibility.
   const captureOutput = !!outputId;
   const stdioConfig: [string, string, string] = captureOutput
-    ? ['inherit', 'pipe', 'inherit']   // pipe stdout, inherit stderr (avoids hang)
+    ? ['inherit', 'pipe', 'pipe']
     : ['inherit', 'inherit', 'inherit'];
 
   // Platform-aware command execution
@@ -507,6 +524,7 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
     const isWindows = os.platform() === 'win32';
     let proc: ReturnType<typeof spawn>;
     const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
 
     if (isWindows) {
       // CWE-78 prevention: escape args for cmd.exe
@@ -526,9 +544,12 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
       });
     }
 
-    // Collect stdout when piped
+    // Collect stdout when piped, and always collect stderr — drain immediately
     if (captureOutput && proc.stdout) {
       proc.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    }
+    if (proc.stderr) {
+      proc.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
     }
 
     // Wall-clock timeout
@@ -547,6 +568,16 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
 
     proc.on('close', (code) => {
       clearTimeout(timer);
+
+      // Log captured stderr to file (debug-gated); never leaks to parent Bash tool
+      const cliStderr = Buffer.concat(stderrChunks).toString('utf-8');
+      if (cliStderr.trim()) {
+        vcpLog(args.cwd, {
+          source: 'one-shot-runner', event: 'cli_stderr', decision: 'info',
+          details: `preset=${args.preset} stderr=${cliStderr.slice(0, 100_000)}`,
+        }, debugEnabled).catch(() => {});
+      }
+
       if (timedOut) {
         resolve(makeError('cli_execution', 'CLI tool timed out', 3));
         return;
@@ -563,7 +594,9 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
           resolve(makeComplete(args.preset, args.model, 'CLI task completed successfully'));
         }
       } else {
-        resolve(makeError('cli_execution', `CLI tool exited with code ${code}`, 2));
+        // Include stderr excerpt so fatal errors not on stdout are still visible
+        const stderrExcerpt = cliStderr.trim() ? ` stderr=${cliStderr.slice(0, 500)}` : '';
+        resolve(makeError('cli_execution', `CLI tool exited with code ${code}${stderrExcerpt}`, 2));
       }
     });
   });

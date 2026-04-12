@@ -10,6 +10,14 @@ tools: Read, Glob, Grep
 
 Define what "done" looks like — both as acceptance criteria AND as executable UAT scenarios. The UAT tests are designed HERE, before implementation begins (TDD-style).
 
+## Constraints
+
+- **READ-ONLY stage.** You MUST NOT create, modify, or delete any files.
+- Do NOT use Write, Edit, or Bash tools. You only have access to: Read, Glob, Grep.
+- Do NOT make code changes, create files, run commands, install packages, or modify configuration.
+- Do NOT update the plan file — the orchestrator handles plan updates.
+- Your ONLY job is to produce analysis/output text. The orchestrator writes it to the plan.
+
 ## Requirements Approach: Focused Lenses
 
 Each executor generates requirements through the lens of their system prompt role. This focuses each executor's perspective, making the task weak-model-compatible while ensuring diverse stakeholder coverage. Every discovery finding must be addressed — each executor covers ALL findings but goes deepest in their lens area.
@@ -141,3 +149,5 @@ If precedence does not resolve the conflict, escalate to user checkpoint.
 - Do NOT ignore contradictions from the Source of Truth Audit
 - Do NOT drop or deprioritize discovery findings — every finding must map to at least one AC
 - Do NOT reduce scope to make the task "manageable" or "focused" — if the scope is large, produce more ACs
+- Do NOT create, modify, or delete any files — this is a read-only analysis stage
+- Do NOT run shell commands — you do not have Bash access

@@ -57,7 +57,7 @@ export function createDefaultPresets(): PresetConfig {
   try {
     fs.chmodSync(CONFIG_DIR, 0o700);
   } catch (err) {
-    console.warn(`[preset-utils] chmod(0o700) on config dir failed: ${(err as Error).message}`);
+    // chmod failures are non-fatal — silent to avoid leaking to parent stderr
   }
   const defaultConfig: PresetConfig = {
     version: '2.0',
@@ -73,7 +73,7 @@ export function createDefaultPresets(): PresetConfig {
   try {
     fs.chmodSync(PRESETS_PATH, 0o600);
   } catch (err) {
-    console.warn(`[preset-utils] chmod(0o600) on presets file failed: ${(err as Error).message}`);
+    // chmod failures are non-fatal — silent to avoid leaking to parent stderr
   }
   return defaultConfig;
 }
@@ -105,14 +105,14 @@ export function writePresets(config: PresetConfig): void {
   try {
     fs.chmodSync(CONFIG_DIR, 0o700);
   } catch (err) {
-    console.warn(`[preset-utils] chmod(0o700) on config dir failed: ${(err as Error).message}`);
+    // chmod failures are non-fatal — silent to avoid leaking to parent stderr
   }
   fs.writeFileSync(PRESETS_PATH, JSON.stringify(config, null, 2), 'utf-8');
   // Set restrictive permissions on presets file (contains API keys)
   try {
     fs.chmodSync(PRESETS_PATH, 0o600);
   } catch (err) {
-    console.warn(`[preset-utils] chmod(0o600) on presets file failed: ${(err as Error).message}`);
+    // chmod failures are non-fatal — silent to avoid leaking to parent stderr
   }
 }
 

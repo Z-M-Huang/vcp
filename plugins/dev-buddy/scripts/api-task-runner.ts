@@ -956,12 +956,13 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  main().catch((err) => {
-    if (err instanceof Error) {
-      console.error(`[api-task-runner] Error: ${err.message}`);
-    } else {
-      console.error('[api-task-runner] Unknown error:', err);
-    }
+  main().catch(async (err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    const debug = await isDebugEnabled().catch(() => false);
+    await vcpLog(process.cwd(), {
+      source: 'api-task-runner', event: 'fatal', decision: 'error', details: msg,
+    }, debug).catch(() => {});
+    console.error(`[api-task-runner] Fatal: ${msg}`);
     process.exit(2);
   });
 }

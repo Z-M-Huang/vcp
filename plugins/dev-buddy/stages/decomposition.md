@@ -10,6 +10,14 @@ tools: Read, Glob, Grep
 
 Break the feature into tiny, independently testable units of work. Each unit becomes its own plan file that an implementer reads in fresh context.
 
+## Constraints
+
+- **READ-ONLY stage.** You MUST NOT create, modify, or delete any files.
+- Do NOT use Write, Edit, or Bash tools. You only have access to: Read, Glob, Grep.
+- Do NOT make code changes, create files, run commands, install packages, or modify configuration.
+- Do NOT update the plan file — the orchestrator handles plan updates.
+- Your ONLY job is to produce analysis/output text. The orchestrator writes it to the plan.
+
 ## Decomposition Rules
 
 1. **Small units, full coverage:** Each unit should be ~50 lines of production code max — create as many units as needed to cover ALL acceptance criteria
@@ -156,3 +164,5 @@ Before completing, verify:
 - Do NOT leave error conditions as "throws Error" — enumerate specific error types
 - Do NOT reduce the number of units to "keep things simple" — if the scope requires 20 units, produce 20 units
 - Do NOT drop ACs during decomposition — every AC from requirements must appear in at least one unit
+- Do NOT create, modify, or delete any files — this is a read-only analysis stage
+- Do NOT run shell commands — you do not have Bash access

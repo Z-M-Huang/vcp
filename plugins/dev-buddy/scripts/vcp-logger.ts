@@ -63,9 +63,8 @@ export async function vcpLog(
     // chmod is a no-op on Windows — that's acceptable
     try {
       await chmod(logFile, 0o600);
-    } catch (chmodErr) {
-      // Log chmod failures as warnings, not silently ignored
-      console.warn(`[vcp-logger] chmod(0o600) on log file failed: ${(chmodErr as Error).message}`);
+    } catch {
+      // chmod failures are non-fatal — silent to avoid leaking to parent stderr
     }
   } catch {
     // Never let logging failure break execution

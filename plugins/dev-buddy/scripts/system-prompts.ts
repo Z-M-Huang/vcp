@@ -62,18 +62,6 @@ export interface StagePrompt {
   filePath: string;
 }
 
-// ─── Stage-Rule Markers for Legacy Detection ────────────────────────────────
-
-/** Patterns that indicate a role prompt still contains stage rules. */
-const STAGE_RULE_MARKERS = [
-  '## Output Format',
-  '## Output Contract',
-  '"fix_type"',
-  'must_fix|advisory',
-  '## Completion Requirements',
-  '## Pre-Write Verification',
-];
-
 // ─── Frontmatter Parsing ────────────────────────────────────────────────────
 
 /**
@@ -325,20 +313,10 @@ export function loadStageDefinition(stageType: string, stagesDir: string): Stage
  * Stage definition goes first (establishes the output contract),
  * role prompt follows (adds perspective and expertise).
  *
- * Emits a warning to stderr if the role prompt contains stage-rule markers,
- * indicating it may be a legacy combined prompt that should be stripped.
+ * Silently skips legacy stage-rule marker detection (previously emitted to stderr,
+ * which leaked to parent Bash tool). Markers are non-fatal — no action needed.
  */
 export function composePrompt(stage: StagePrompt, role: SystemPrompt): string {
-  // Check for legacy stage-rule markers in the role prompt
-  for (const marker of STAGE_RULE_MARKERS) {
-    if (role.content.includes(marker)) {
-      console.error(
-        `[system-prompts] WARNING: Role prompt '${role.name}' contains stage-rule marker '${marker}'. ` +
-        `This content should be in the stage definition, not the role prompt.`
-      );
-      break; // One warning is enough
-    }
-  }
 
   return `${stage.content}\n\n---\n\n${role.content}`;
 }

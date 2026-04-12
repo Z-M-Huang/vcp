@@ -536,7 +536,7 @@ export function loadDevBuddyConfig(): DevBuddyConfig {
       fs.copyFileSync(CONFIG_PATH, backupPath);
     }
     atomicWriteFile(CONFIG_PATH, v5);
-    console.error(`[Pipeline] Auto-migrated config from v4 to v5. Backup at ${backupPath}`);
+    // Migration message intentionally omitted — backup file documents migration
     return v5;
   }
 
@@ -550,7 +550,6 @@ export function loadDevBuddyConfig(): DevBuddyConfig {
       fs.copyFileSync(CONFIG_PATH, backupPath);
     }
     atomicWriteFile(CONFIG_PATH, v5);
-    console.error(`[Pipeline] Auto-migrated config from v3-inline to v5. Backup at ${backupPath}`);
     return v5;
   }
 
@@ -563,7 +562,6 @@ export function loadDevBuddyConfig(): DevBuddyConfig {
       fs.copyFileSync(CONFIG_PATH, backupPath);
     }
     atomicWriteFile(CONFIG_PATH, v5);
-    console.error(`[Pipeline] Auto-migrated config from v3-named to v5. Backup at ${backupPath}`);
     return v5;
   }
 
@@ -576,7 +574,6 @@ export function loadDevBuddyConfig(): DevBuddyConfig {
     fs.copyFileSync(CONFIG_PATH, backupPath);
   }
   atomicWriteFile(CONFIG_PATH, v5);
-  console.error(`[Pipeline] Auto-migrated config from v2 to v5. Backup at ${backupPath}`);
   return v5;
 }
 

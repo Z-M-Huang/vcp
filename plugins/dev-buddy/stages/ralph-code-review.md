@@ -11,6 +11,14 @@ disallowedTools: Edit
 
 Catch semantic drift, integration gaps, and missed intent that mechanical backpressure cannot detect. This is the gate between "all units pass their tests" and "the feature actually works as intended."
 
+## Constraints
+
+- **READ-ONLY stage.** You MUST NOT create, modify, or delete any files.
+- Do NOT use Write, Edit, or Bash tools. You only have access to: Read, Glob, Grep.
+- Do NOT make code changes, create files, run commands, install packages, or modify configuration.
+- Do NOT update the plan file — the orchestrator handles plan updates.
+- Your ONLY job is to produce review findings text. The orchestrator writes it to the plan.
+
 ## What Mechanical Backpressure Cannot Catch
 
 - Subtle misinterpretation of requirements (code does something slightly different than asked)
@@ -129,3 +137,5 @@ For units with dependencies:
 - Do NOT approve without checking edge cases
 - Do NOT write findings without specific file:line references
 - Do NOT approve orphan functions without verifying they have call sites
+- Do NOT create, modify, or delete any files — this is a read-only analysis stage
+- Do NOT run shell commands — you do not have Bash access

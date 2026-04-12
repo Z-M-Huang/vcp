@@ -198,6 +198,7 @@ async function dispatchBuildUnitDefault(
   planPath: string,
   cwd: string,
   action: SkillAction,
+  debugEnabled: boolean,
 ): Promise<UnitBuildDispatchResult> {
   const unitContent = fs.readFileSync(action.unitPath!, 'utf-8');
   const task = [
@@ -214,6 +215,7 @@ async function dispatchBuildUnitDefault(
 
   return new Promise<UnitBuildDispatchResult>((resolve) => {
     const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     const proc = spawn('bun', [
       stageRunnerPath,
       '--stage-type', 'ralph-build',
@@ -221,11 +223,12 @@ async function dispatchBuildUnitDefault(
       '--cwd', cwd,
       '--task-stdin',
     ], {
-      stdio: ['pipe', 'pipe', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       cwd,
     });
 
     proc.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    proc.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
     proc.stdin!.write(task);
     proc.stdin!.end();
 
@@ -240,6 +243,16 @@ async function dispatchBuildUnitDefault(
 
     proc.on('close', (code) => {
       const stdout = Buffer.concat(stdoutChunks).toString('utf-8').trim();
+
+      // Log captured stderr to file (debug-gated); never leaks to parent Bash tool
+      const stderr = Buffer.concat(stderrChunks).toString('utf-8');
+      if (stderr.trim()) {
+        vcpLog(cwd, {
+          source: 'build-loop-runner', event: 'stage_runner_stderr', decision: 'info',
+          details: `stderr=${stderr.slice(0, 100_000)}`,
+        }, debugEnabled).catch(() => {});
+      }
+
       // Parse JSON defensively — stage-runner may crash and emit to stderr only
       try {
         const parsed = JSON.parse(stdout);
@@ -259,11 +272,13 @@ async function dispatchBuildUnitDefault(
           });
         }
       } catch {
+        // Include stderr excerpt so fatal errors not on stdout are visible
+        const stderrExcerpt = stderr.trim() ? ` stderr=${stderr.slice(0, 500)}` : '';
         resolve({
           event: 'error',
           stage: 'ralph-build',
           phase: 'dispatch_failed',
-          error: `stage-runner exited ${code}, stdout not parseable: ${stdout.slice(0, 500)}`,
+          error: `stage-runner exited ${code}, stdout not parseable: ${stdout.slice(0, 500)}${stderrExcerpt}`,
         });
       }
     });
@@ -304,6 +319,7 @@ export async function runBuildLoop(
   args: { planPath: string; cwd: string },
   overrides?: BuildLoopOverrides,
 ): Promise<BuildLoopRunnerResult> {
+  const debug = await isDebugEnabled();
   const dispatchFn = overrides?.dispatchFn ?? dispatchBuildUnitDefault;
   const backpressureFn = overrides?.backpressureFn ?? runBackpressure;
 
@@ -428,7 +444,7 @@ export async function runBuildLoop(
     });
 
     // Dispatch build executor
-    const dispatch = await dispatchFn(args.planPath, args.cwd, buildAction);
+    const dispatch = await dispatchFn(args.planPath, args.cwd, buildAction, debug);
 
     // Re-read unit file (executor may have modified project files)
     const refreshedContent = fs.readFileSync(buildAction.unitPath!, 'utf-8');

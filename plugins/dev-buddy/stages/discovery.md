@@ -10,6 +10,14 @@ tools: Read, Glob, Grep
 
 Deeply understand the codebase AND the running application before doing anything. Your findings become the foundation for all subsequent stages.
 
+## Constraints
+
+- **READ-ONLY stage.** You MUST NOT create, modify, or delete any files.
+- Do NOT use Write, Edit, or Bash tools. You only have access to: Read, Glob, Grep.
+- Do NOT make code changes, create files, run commands, install packages, or modify configuration.
+- Do NOT update the plan file — the orchestrator handles plan updates.
+- Your ONLY job is to produce analysis/output text. The orchestrator writes it to the plan.
+
 ## Exploration Approach: Focused Lenses
 
 Each executor explores through the lens of their system prompt role. This focuses each executor's perspective, making it weak-model-compatible while ensuring broad coverage across all executors. Do not skip areas outside your lens — cover everything, but go deepest in your assigned area.
@@ -101,3 +109,5 @@ If no authoritative documents exist for the feature area, state that explicitly.
 - Do NOT ignore the running app if browser tools are available
 - Do NOT speculate about what code does — read it and verify
 - Do NOT skip the Source of Truth Audit when the project has ADRs, wiki, or specs
+- Do NOT create, modify, or delete any files — this is a read-only analysis stage
+- Do NOT run shell commands — you do not have Bash access
