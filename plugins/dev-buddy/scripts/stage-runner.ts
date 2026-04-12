@@ -27,7 +27,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import { loadDevBuddyConfig } from './pipeline-config.ts';
+import { loadDevBuddyConfig, atomicWriteFile } from './pipeline-config.ts';
 import { readPresets } from './preset-utils.ts';
 import { loadStageDefinition, getSystemPrompt, composePrompt, discoverSystemPrompts } from './system-prompts.ts';
 import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
@@ -70,6 +70,124 @@ interface StageRunnerError {
 interface Segment {
   parallel: boolean;
   executors: Array<{ executor: StageExecutor; index: number }>;
+}
+
+// ─── STAGE PROGRESS TRACKING ───────────────────────────────────────────────
+
+interface ExecutorProgress {
+  index: number;
+  preset: string;
+  model: string;
+  system_prompt: string;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  duration_s?: number;
+}
+
+interface StageProgressState {
+  stage: string;
+  pid: number;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  outcome: 'success' | 'error' | 'fatal' | null;
+  total: number;
+  completed: number;
+  failed: number;
+  executors: ExecutorProgress[];
+}
+
+/**
+ * Stage-level progress tracker. Writes an atomic JSON file as each executor
+ * transitions through pending → running → done|failed.
+ *
+ * Every public method is non-throwing — progress tracking failure never
+ * affects stage execution.
+ */
+class StageProgress {
+  private state: StageProgressState;
+  private filePath: string;
+  private multiExecutor: boolean;
+
+  constructor(stageType: string, executors: Array<{ index: number; executor: StageExecutor }>, cwd: string) {
+    this.filePath = path.join(cwd, '.vcp', 'plan', '.state', `stage-progress-${stageType}-${process.pid}.json`);
+    this.multiExecutor = executors.length > 1;
+    this.state = {
+      stage: stageType,
+      pid: process.pid,
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      finished_at: null,
+      outcome: null,
+      total: executors.length,
+      completed: 0,
+      failed: 0,
+      executors: executors.map(({ index, executor }) => ({
+        index,
+        preset: executor.preset,
+        model: executor.model,
+        system_prompt: executor.system_prompt,
+        status: 'pending' as const,
+      })),
+    };
+    this.writeSnapshot();
+  }
+
+  markRunning(index: number): void {
+    try {
+      const entry = this.state.executors.find(e => e.index === index);
+      if (entry) entry.status = 'running';
+      this.writeSnapshot();
+    } catch { /* non-throwing */ }
+  }
+
+  markDone(index: number, durationS: number): void {
+    try {
+      const entry = this.state.executors.find(e => e.index === index);
+      if (entry) {
+        entry.status = 'done';
+        entry.duration_s = durationS;
+      }
+      this.state.completed++;
+      this.writeSnapshot();
+      if (this.multiExecutor) {
+        const done = this.state.completed + this.state.failed;
+        process.stderr.write(`[${done}/${this.state.total}] executor ${index} (${entry?.preset}/${entry?.model}/${entry?.system_prompt}) done (${durationS}s)\n`);
+      }
+    } catch { /* non-throwing */ }
+  }
+
+  markFailed(index: number, durationS: number): void {
+    try {
+      const entry = this.state.executors.find(e => e.index === index);
+      if (entry) {
+        entry.status = 'failed';
+        entry.duration_s = durationS;
+      }
+      this.state.failed++;
+      this.writeSnapshot();
+      if (this.multiExecutor) {
+        const done = this.state.completed + this.state.failed;
+        process.stderr.write(`[${done}/${this.state.total}] executor ${index} (${entry?.preset}/${entry?.model}/${entry?.system_prompt}) failed (${durationS}s)\n`);
+      }
+    } catch { /* non-throwing */ }
+  }
+
+  writeTerminal(outcome: 'success' | 'error' | 'fatal'): void {
+    try {
+      this.state.finished_at = new Date().toISOString();
+      this.state.outcome = outcome;
+      this.writeSnapshot();
+    } catch { /* non-throwing */ }
+  }
+
+  getFilePath(): string { return this.filePath; }
+
+  private writeSnapshot(): void {
+    try {
+      this.state.updated_at = new Date().toISOString();
+      atomicWriteFile(this.filePath, this.state);
+    } catch { /* non-throwing — progress failure must not abort stage */ }
+  }
 }
 
 // ─── OUTPUT HELPERS ─────────────────────────────────────────────────────────
@@ -276,8 +394,13 @@ function dispatchExecutor(
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd,
       });
-      // CLI one-shot needs effective task with tool restriction appended
-      let effectiveTask = task;
+      // CLI presets can't structurally enforce a system prompt (no --system-prompt
+      // flag equivalent in arbitrary CLI tools). Prepend the composed prompt (stage
+      // definition + role) so the CLI executor receives the same constraints and
+      // role identity as subscription/API executors.
+      let effectiveTask = composedPrompt
+        ? `${composedPrompt}\n\n---\n\n${task}`
+        : task;
       if (allowedTools) {
         effectiveTask += `\n\nIMPORTANT: You may ONLY use these tools: ${allowedTools}.`;
       }
@@ -383,6 +506,40 @@ function killSiblings(procs: Array<ReturnType<typeof spawn>>): void {
       try { p.kill('SIGKILL'); } catch { /* already dead */ }
     }
   }, KILL_GRACE_MS);
+}
+
+// ─── EXECUTOR WITH PROGRESS ────────────────────────────────────────────────
+
+/**
+ * Dispatch an executor and update progress tracking as a side effect.
+ * Does NOT catch dispatch exceptions — they propagate to the caller.
+ * All progress methods are non-throwing, so they cannot alter control flow.
+ */
+async function runExecutorWithProgress(
+  executor: StageExecutor,
+  index: number,
+  preset: Preset,
+  composedPrompt: string,
+  task: string,
+  allowedTools: string,
+  cwd: string,
+  debugEnabled: boolean,
+  progress: StageProgress,
+): Promise<DispatchResult> {
+  progress.markRunning(index);
+  const startTime = Date.now();
+
+  const result = await dispatchExecutor(
+    executor, index, preset, composedPrompt, task, allowedTools, cwd, debugEnabled,
+  );
+
+  const durationS = Math.round((Date.now() - startTime) / 1000);
+  if (result.status === 'fulfilled') {
+    progress.markDone(index, durationS);
+  } else {
+    progress.markFailed(index, durationS);
+  }
+  return result;
 }
 
 // ─── CLI ARG PARSING ────────────────────────────────────────────────────────
@@ -527,6 +684,14 @@ async function main(): Promise<void> {
   const isSynthesizer = (idx: number) =>
     stageConfig.executors.length > 1 && idx === stageConfig.executors.length - 1;
 
+  // 5b. Initialize progress tracking
+  const progress = new StageProgress(
+    stageType,
+    resolvedExecutors.map(r => ({ index: r.index, executor: r.executor })),
+    cwd,
+  );
+  _activeProgress = progress;
+
   // 6. Execute segments in order
   for (const segment of segments) {
     // Build task for this segment — synthesizer gets prior outputs as context
@@ -541,9 +706,9 @@ async function main(): Promise<void> {
       // Parallel dispatch
       const promises = segment.executors.map(({ executor, index }) => {
         const resolved = resolvedExecutors[index];
-        return dispatchExecutor(
+        return runExecutorWithProgress(
           executor, index, resolved.preset, resolved.composedPrompt,
-          segmentTask, allowedTools, cwd, debugEnabled,
+          segmentTask, allowedTools, cwd, debugEnabled, progress,
         );
       });
 
@@ -571,15 +736,16 @@ async function main(): Promise<void> {
       }
 
       if (hasFatal && allOutputs.length === 0) {
+        progress.writeTerminal('error');
         emitError('dispatch', 'All parallel executors in segment failed', 2, allOutputs);
       }
     } else {
       // Sequential dispatch (single executor)
       const { executor, index } = segment.executors[0];
       const resolved = resolvedExecutors[index];
-      const result = await dispatchExecutor(
+      const result = await runExecutorWithProgress(
         executor, index, resolved.preset, resolved.composedPrompt,
-        segmentTask, allowedTools, cwd, debugEnabled,
+        segmentTask, allowedTools, cwd, debugEnabled, progress,
       );
 
       if (result.status === 'fulfilled' && result.result !== undefined) {
@@ -597,6 +763,7 @@ async function main(): Promise<void> {
         }, debugEnabled);
         // If synthesizer failed, that's fatal
         if (isSynthesizer(index)) {
+          progress.writeTerminal('error');
           emitError('synthesis', `Synthesizer executor failed: ${result.error}`, 2, allOutputs);
         }
       }
@@ -619,15 +786,20 @@ async function main(): Promise<void> {
     details: `stage=${stageType} outputs=${allOutputs.length} synthesis=${synthesis ? 'yes' : 'no'}`,
   }, debugEnabled);
 
+  progress.writeTerminal('success');
   emitSuccess(stageType, allOutputs, synthesis);
 }
 
 // ─── ENTRY POINT ────────────────────────────────────────────────────────────
 
+// Module-level progress reference for fatal handler access
+let _activeProgress: StageProgress | null = null;
+
 // Guard: only run main when invoked directly (not imported by tests)
 const isDirectRun = process.argv[1]?.endsWith('stage-runner.ts');
 if (isDirectRun) {
   main().catch(async (err) => {
+    _activeProgress?.writeTerminal('fatal');
     const msg = (err as Error).message;
     const debug = await isDebugEnabled().catch(() => false);
     await vcpLog(process.cwd(), {
@@ -645,13 +817,17 @@ export {
   segmentExecutors,
   parseArgs,
   dispatchExecutor,
+  runExecutorWithProgress,
   emitSuccess,
   emitError,
   killSiblings,
+  StageProgress,
   main,
   type ExecutorOutput,
   type StageRunnerOutput,
   type StageRunnerError,
+  type StageProgressState,
+  type ExecutorProgress,
   type Segment,
   type StageRunnerArgs,
   type DispatchResult,
