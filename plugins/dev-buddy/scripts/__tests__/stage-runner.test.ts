@@ -86,6 +86,35 @@ describe('buildStageTask', () => {
     expect(result).not.toContain('Unit 1: Form component');
   });
 
+  test('decomposition stage extracts full Requirements section even with H2 subheadings', () => {
+    const tmp = makeTmpDir();
+    const planPath = path.join(tmp, 'plan.md');
+    writeFileSync(planPath, [
+      '# Feature: Auth',
+      '',
+      '## Discovery',
+      '',
+      'Found auth module at src/auth.ts.',
+      '',
+      '## Requirements',
+      '',
+      '## Acceptance Criteria',
+      '',
+      '### AC-1: Login form validates email',
+      '- **Given:** user on /login',
+      '',
+      '## UAT Scenarios',
+      '',
+      '### UAT-1: Login flow',
+      '- **Validates:** AC-1',
+    ].join('\n'));
+
+    const result = buildStageTask('decomposition', 'Build a login page', planPath);
+    expect(result).toContain('AC-1: Login form validates email');
+    expect(result).toContain('UAT-1: Login flow');
+    expect(result).toContain('Prior Requirements');
+  });
+
   test('missing plan file returns feature description only for requirements/decompose', () => {
     const result = buildStageTask('ralph-requirements', 'Build a login page', '/nonexistent/plan.md');
     expect(result).toBe('Build a login page');

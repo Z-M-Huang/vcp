@@ -103,14 +103,25 @@ function buildStageTask(stageType: string, featureDescription: string, planPath:
     // Plan file may not exist on first discovery run
   }
 
+  // Known plan-level sections — only these act as extraction boundaries.
+  // Arbitrary H2 subheadings within a section (e.g. "## Acceptance Criteria"
+  // inside "## Requirements") must NOT truncate extraction.
+  const PLAN_SECTIONS = ['## Discovery', '## Requirements', '## Units of Work', '## Feedback', '## UAT Results'];
   const extractSection = (heading: string): string => {
     if (!planContent) return '';
     const regex = new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm');
     const match = planContent.match(regex);
     if (!match || match.index === undefined) return '';
     const start = match.index + match[0].length;
-    const nextH2 = planContent.indexOf('\n## ', start);
-    return planContent.slice(start, nextH2 === -1 ? undefined : nextH2).trim();
+    let nextBoundary = -1;
+    for (const section of PLAN_SECTIONS) {
+      if (section === heading) continue;
+      const idx = planContent.indexOf('\n' + section, start);
+      if (idx !== -1 && (nextBoundary === -1 || idx < nextBoundary)) {
+        nextBoundary = idx;
+      }
+    }
+    return planContent.slice(start, nextBoundary === -1 ? undefined : nextBoundary).trim();
   };
 
   let context = featureDescription;
@@ -506,7 +517,7 @@ async function main(): Promise<void> {
     const segmentHasSynthesizer = segment.executors.some(e => isSynthesizer(e.index));
     let segmentTask = stageTask;
     if (segmentHasSynthesizer && allOutputs.length > 0) {
-      segmentTask = stageTask + '\n\n---\n\n## Executor Outputs to Synthesize\n\n' +
+      segmentTask = stageTask + '\n\n---\n\n## Executor Outputs to Synthesize\n\nIMPORTANT: Merge ALL outputs below into a single comprehensive result. Do NOT drop, deprioritize, or omit any items from any executor. Every AC, finding, unit, or requirement from every executor must appear in your synthesis. If executors produce conflicting items, include both and note the conflict — do not resolve by dropping one side.\n\n' +
         allOutputs.map((o, i) => `### Output ${i + 1} (${o.system_prompt} via ${o.preset}/${o.model})\n\n${o.result}`).join('\n\n');
     }
 

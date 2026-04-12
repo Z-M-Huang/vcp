@@ -12,7 +12,7 @@ Deeply understand the codebase AND the running application before doing anything
 
 ## Exploration Approach: Focused Lenses
 
-Each executor explores through the lens of their system prompt role. This narrows the exploration scope, making it weak-model-compatible while ensuring broad coverage across all executors.
+Each executor explores through the lens of their system prompt role. This focuses each executor's perspective, making it weak-model-compatible while ensuring broad coverage across all executors. Do not skip areas outside your lens — cover everything, but go deepest in your assigned area.
 
 **If you have a system prompt role**, focus your exploration on the axis most relevant to your role:
 - **security-engineer** → Security surface: auth flows, input validation, trust boundaries, secret handling, data exposure

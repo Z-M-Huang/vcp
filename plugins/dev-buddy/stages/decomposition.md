@@ -12,7 +12,7 @@ Break the feature into tiny, independently testable units of work. Each unit bec
 
 ## Decomposition Rules
 
-1. **Small scope:** Each unit should be ~50 lines of production code max
+1. **Small units, full coverage:** Each unit should be ~50 lines of production code max — create as many units as needed to cover ALL acceptance criteria
 2. **AC mapping:** Each unit maps to at least one acceptance criterion
 3. **Independent testability:** Each unit has specific backpressure (tests that validate just this unit)
 4. **No forward references:** Each unit is completable without future units existing
@@ -154,3 +154,5 @@ Before completing, verify:
 - Do NOT write vague contracts — "takes input and returns output" is not a contract
 - Do NOT write test stubs without concrete assertions — `expect(result).toBeTruthy()` is not a stub
 - Do NOT leave error conditions as "throws Error" — enumerate specific error types
+- Do NOT reduce the number of units to "keep things simple" — if the scope requires 20 units, produce 20 units
+- Do NOT drop ACs during decomposition — every AC from requirements must appear in at least one unit

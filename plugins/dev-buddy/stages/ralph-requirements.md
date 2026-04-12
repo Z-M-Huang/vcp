@@ -12,7 +12,7 @@ Define what "done" looks like — both as acceptance criteria AND as executable 
 
 ## Requirements Approach: Focused Lenses
 
-Each executor generates requirements through the lens of their system prompt role. This narrows the scope per executor, making the task weak-model-compatible while ensuring diverse stakeholder coverage.
+Each executor generates requirements through the lens of their system prompt role. This focuses each executor's perspective, making the task weak-model-compatible while ensuring diverse stakeholder coverage. Every discovery finding must be addressed — each executor covers ALL findings but goes deepest in their lens area.
 
 **If you have a system prompt role**, focus your requirements generation on the perspective most relevant to your role:
 - **security-engineer** → Security requirements: auth flows, input validation, data protection, error handling that doesn't leak info
@@ -83,7 +83,7 @@ These scenarios become the outer loop's backpressure — they must catch real is
 Structure your output as:
 
 ```
-## Acceptance Criteria
+### Acceptance Criteria
 
 ### AC-1: {title}
 - **Given:** {concrete precondition}
@@ -97,7 +97,7 @@ Structure your output as:
 ### AC-2: {title}
 ...
 
-## UAT Scenarios
+### UAT Scenarios
 
 ### UAT-1: {title}
 - **Validates:** AC-1, AC-2
@@ -108,10 +108,10 @@ Structure your output as:
 ### UAT-2: {title}
 ...
 
-## Edge Cases
+### Edge Cases
 - EC-1: {scenario} — Expected: {behavior}
 
-## Risks
+### Risks
 - R-1: {risk} — Severity: {HIGH|MEDIUM|LOW} — Mitigation: {mitigation}
 ```
 
@@ -139,3 +139,5 @@ If precedence does not resolve the conflict, escalate to user checkpoint.
 - Do NOT ignore failure modes and edge cases
 - Do NOT leave risks without severity ratings and mitigations
 - Do NOT ignore contradictions from the Source of Truth Audit
+- Do NOT drop or deprioritize discovery findings — every finding must map to at least one AC
+- Do NOT reduce scope to make the task "manageable" or "focused" — if the scope is large, produce more ACs
