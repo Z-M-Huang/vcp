@@ -929,7 +929,37 @@ describe('OpenAIRunner', () => {
     globalThis.fetch = originalFetch;
   });
 
-  /** Helper to create a mock fetch that returns canned responses. */
+  /** Convert a mock response to SSE text for the streaming OpenAI runner. */
+  function toSSE(resp: {
+    content?: string | null;
+    tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+    finish_reason: string;
+  }): string {
+    const lines: string[] = [];
+    if (resp.content) {
+      lines.push(`data: ${JSON.stringify({
+        choices: [{ index: 0, delta: { role: 'assistant', content: resp.content }, finish_reason: null }],
+      })}`);
+    }
+    if (resp.tool_calls?.length) {
+      for (let i = 0; i < resp.tool_calls.length; i++) {
+        const tc = resp.tool_calls[i];
+        lines.push(`data: ${JSON.stringify({
+          choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{
+            index: i, id: tc.id, type: tc.type,
+            function: { name: tc.function.name, arguments: tc.function.arguments },
+          }] }, finish_reason: null }],
+        })}`);
+      }
+    }
+    lines.push(`data: ${JSON.stringify({
+      choices: [{ index: 0, delta: {}, finish_reason: resp.finish_reason }],
+    })}`);
+    lines.push('data: [DONE]');
+    return lines.join('\n\n') + '\n';
+  }
+
+  /** Helper to create a mock fetch that returns canned SSE streaming responses. */
   function mockFetch(responses: Array<{
     content?: string | null;
     tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
@@ -941,16 +971,7 @@ describe('OpenAIRunner', () => {
       callIndex++;
       return {
         ok: true,
-        json: async () => ({
-          choices: [{
-            message: {
-              content: resp.content ?? null,
-              tool_calls: resp.tool_calls ?? undefined,
-            },
-            finish_reason: resp.finish_reason,
-          }],
-        }),
-        text: async () => '',
+        text: async () => toSSE(resp),
       };
     }) as typeof fetch;
     return () => callIndex; // Returns call count accessor
@@ -1033,10 +1054,7 @@ describe('OpenAIRunner', () => {
       capturedBody = JSON.parse(init?.body as string);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1053,10 +1071,7 @@ describe('OpenAIRunner', () => {
       capturedBody = JSON.parse(init?.body as string);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1122,10 +1137,7 @@ describe('OpenAIRunner', () => {
       capturedBody = JSON.parse(init?.body as string);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1144,10 +1156,7 @@ describe('OpenAIRunner', () => {
       capturedBody = JSON.parse(init?.body as string);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1162,10 +1171,7 @@ describe('OpenAIRunner', () => {
       capturedUrl = url as string;
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1185,10 +1191,7 @@ describe('OpenAIRunner', () => {
       capturedUrl = url as string;
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1200,7 +1203,6 @@ describe('OpenAIRunner', () => {
   test('no choices in response returns error', async () => {
     globalThis.fetch = (async () => ({
       ok: true,
-      json: async () => ({ choices: [] }),
       text: async () => '',
     })) as typeof fetch;
 
@@ -1241,10 +1243,7 @@ describe('OpenAIRunner', () => {
       capturedHeaders = Object.fromEntries((init?.headers as any) ? Object.entries(init!.headers as Record<string, string>) : []);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1259,10 +1258,7 @@ describe('OpenAIRunner', () => {
       capturedBody = JSON.parse(init?.body as string);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1281,10 +1277,7 @@ describe('OpenAIRunner', () => {
       capturedBody = JSON.parse(init?.body as string);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1299,10 +1292,7 @@ describe('OpenAIRunner', () => {
       capturedBody = JSON.parse(init?.body as string);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1534,16 +1524,43 @@ describe('OpenAIRunner --allowed-tools', () => {
     presetName: 'test-openai',
   };
 
+  /** Convert a mock response to SSE text for the streaming OpenAI runner. */
+  function toSSE(resp: {
+    content?: string | null;
+    tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+    finish_reason: string;
+  }): string {
+    const lines: string[] = [];
+    if (resp.content) {
+      lines.push(`data: ${JSON.stringify({
+        choices: [{ index: 0, delta: { role: 'assistant', content: resp.content }, finish_reason: null }],
+      })}`);
+    }
+    if (resp.tool_calls?.length) {
+      for (let i = 0; i < resp.tool_calls.length; i++) {
+        const tc = resp.tool_calls[i];
+        lines.push(`data: ${JSON.stringify({
+          choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{
+            index: i, id: tc.id, type: tc.type,
+            function: { name: tc.function.name, arguments: tc.function.arguments },
+          }] }, finish_reason: null }],
+        })}`);
+      }
+    }
+    lines.push(`data: ${JSON.stringify({
+      choices: [{ index: 0, delta: {}, finish_reason: resp.finish_reason }],
+    })}`);
+    lines.push('data: [DONE]');
+    return lines.join('\n\n') + '\n';
+  }
+
   test('sends only allowed tools in request body', async () => {
     let capturedBody: any = null;
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(init?.body as string);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1562,10 +1579,7 @@ describe('OpenAIRunner --allowed-tools', () => {
       capturedBody = JSON.parse(init?.body as string);
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 
@@ -1587,28 +1601,19 @@ describe('OpenAIRunner --allowed-tools', () => {
       if (callIndex === 1) {
         return {
           ok: true,
-          json: async () => ({
-            choices: [{
-              message: {
-                content: null,
-                tool_calls: [{
-                  id: 'tc-blocked',
-                  type: 'function',
-                  function: { name: 'write_file', arguments: JSON.stringify({ file_path: '/tmp/x', content: 'bad' }) },
-                }],
-              },
-              finish_reason: 'tool_calls',
+          text: async () => toSSE({
+            tool_calls: [{
+              id: 'tc-blocked',
+              type: 'function',
+              function: { name: 'write_file', arguments: JSON.stringify({ file_path: '/tmp/x', content: 'bad' }) },
             }],
+            finish_reason: 'tool_calls',
           }),
-          text: async () => '',
         };
       }
       return {
         ok: true,
-        json: async () => ({
-          choices: [{ message: { content: 'OK understood' }, finish_reason: 'stop' }],
-        }),
-        text: async () => '',
+        text: async () => toSSE({ content: 'OK understood', finish_reason: 'stop' }),
       };
     }) as typeof fetch;
 

@@ -583,6 +583,80 @@ export class OpenAIRunner implements AgentRunner {
     }
   }
 
+  /**
+   * Parse an SSE streaming response into the same structure as a non-streaming choice.
+   * Accumulates content, tool_calls, and finish_reason from delta chunks.
+   */
+  private async parseStreamResponse(resp: Response): Promise<{
+    content: string | null;
+    tool_calls: OpenAIToolCall[];
+    finish_reason: string;
+  }> {
+    let content = '';
+    const toolCallMap = new Map<number, { id: string; name: string; arguments: string }>();
+    let finishReason = 'stop';
+    let chunkCount = 0;
+
+    const text = await resp.text();
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data: ') || trimmed === 'data: [DONE]') continue;
+
+      let chunk: any;
+      try { chunk = JSON.parse(trimmed.slice(6)); } catch { continue; }
+
+      chunkCount++;
+      const delta = chunk.choices?.[0]?.delta;
+      if (!delta) {
+        // Final chunk may only carry finish_reason without a delta
+        const fr = chunk.choices?.[0]?.finish_reason;
+        if (fr) finishReason = fr;
+        continue;
+      }
+
+      if (delta.content) content += delta.content;
+
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          const existing = toolCallMap.get(idx);
+          if (!existing) {
+            toolCallMap.set(idx, {
+              id: tc.id ?? '',
+              name: tc.function?.name ?? '',
+              arguments: tc.function?.arguments ?? '',
+            });
+          } else {
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name = tc.function.name;
+            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+          }
+        }
+      }
+
+      const fr = chunk.choices?.[0]?.finish_reason;
+      if (fr) finishReason = fr;
+    }
+
+    if (chunkCount === 0) {
+      throw new Error('OpenAI API returned no choices');
+    }
+
+    const toolCalls: OpenAIToolCall[] = [...toolCallMap.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, tc]) => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: { name: tc.name, arguments: tc.arguments },
+      }));
+
+    return {
+      content: content || null,
+      tool_calls: toolCalls,
+      finish_reason: finishReason,
+    };
+  }
+
   private async agentLoop(task: string, options: AgentRunOptions): Promise<string> {
     const messages: OpenAIMessage[] = [];
     if (options.systemPromptContent) {
@@ -612,6 +686,7 @@ export class OpenAIRunner implements AgentRunner {
         messages,
         tools: effectiveOpenAITools,
         max_tokens: effectiveMaxTokens,
+        stream: true,
       };
       if (this.preset.reasoning_effort) {
         body.reasoning_effort = this.preset.reasoning_effort;
@@ -634,23 +709,21 @@ export class OpenAIRunner implements AgentRunner {
         throw new Error(`OpenAI API returned ${resp.status}: ${text.slice(0, 500)}`);
       }
 
-      const data = await resp.json() as any;
-      const choice = data.choices?.[0];
-      if (!choice) throw new Error('OpenAI API returned no choices');
+      const parsed = await this.parseStreamResponse(resp);
 
       // Add assistant message to conversation history
       const assistantMsg: OpenAIMessage = {
         role: 'assistant',
-        content: choice.message.content ?? null,
+        content: parsed.content,
       };
-      if (choice.message.tool_calls?.length) {
-        assistantMsg.tool_calls = choice.message.tool_calls;
+      if (parsed.tool_calls.length) {
+        assistantMsg.tool_calls = parsed.tool_calls;
       }
       messages.push(assistantMsg);
 
       // If model wants to call tools, execute them and continue the loop
-      if (choice.finish_reason === 'tool_calls' && choice.message.tool_calls?.length) {
-        for (const tc of choice.message.tool_calls) {
+      if (parsed.finish_reason === 'tool_calls' && parsed.tool_calls.length) {
+        for (const tc of parsed.tool_calls) {
           // Defense-in-depth: reject tool calls not in the allowed set
           if (!allowedOpenAINames.has(tc.function.name)) {
             messages.push({
@@ -668,7 +741,7 @@ export class OpenAIRunner implements AgentRunner {
       }
 
       // Model is done (finish_reason: 'stop', 'end_turn', or other non-tool reasons)
-      return choice.message.content ?? 'Task completed (no text response)';
+      return parsed.content ?? 'Task completed (no text response)';
     }
 
     throw new Error(`OpenAI agent loop exceeded ${OPENAI_MAX_ITERATIONS} iterations`);
