@@ -13,7 +13,7 @@ export interface ApiPreset {
   models: string[];
   /** Custom timeout in milliseconds per task. Default: 300000 (5 minutes). */
   timeout_ms?: number;
-  /** API protocol to use. 'anthropic' uses Claude Agent SDK; 'openai' uses OpenAI-compatible API. Default: 'anthropic'. */
+  /** API protocol to use. Determines which Vercel AI SDK provider constructor is used. Default: 'anthropic'. */
   protocol?: 'anthropic' | 'openai';
   /** Reasoning effort level for OpenAI-compatible models that support it. Only used when protocol is 'openai'. */
   reasoning_effort?: '' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';

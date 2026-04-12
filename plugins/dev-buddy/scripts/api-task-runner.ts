@@ -2,8 +2,8 @@
 /**
  * API Task Runner — lightweight per-invocation script for API preset tasks.
  *
- * Routes to AnthropicRunner (V2 Agent SDK) or OpenAIRunner (function-calling agent loop)
- * based on preset.protocol. Both implement the AgentRunner interface for capability parity.
+ * Uses Vercel AI SDK's generateText() with agentool for tool execution.
+ * Routes to the correct provider constructor based on preset.protocol.
  *
  * Each invocation is an independent process — multiple instances can run in parallel
  * without shared state, ports, or file locks.
@@ -18,11 +18,13 @@
  *   3 - Timeout
  */
 
-import fs from 'fs';
 import path from 'path';
+import { generateText, stepCountIs } from 'ai';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createBash, createRead, createWrite, createEdit, createGlob, createGrep } from 'agentool';
 import { readPresets, maskApiKey } from './preset-utils.ts';
 import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
 import type { ApiPreset } from '../types/presets.ts';
 
@@ -31,39 +33,8 @@ import type { ApiPreset } from '../types/presets.ts';
 /** Default per-task timeout: 5 minutes (300s). */
 export const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 
-/** Max iterations for OpenAI agent loop. */
-export const OPENAI_MAX_ITERATIONS = 100;
-
-/** Max tokens for OpenAI completions. */
-const OPENAI_MAX_TOKENS = 16384;
-
-/** Default per-command timeout for bash tool: 120 seconds. */
-const BASH_DEFAULT_TIMEOUT_MS = 120_000;
-
-/** Max per-command timeout for bash tool: 600 seconds. */
-const BASH_MAX_TIMEOUT_MS = 600_000;
-
-/** Max output size from tool results (100KB). */
-const TOOL_OUTPUT_MAX_BYTES = 100_000;
-
-/** Max glob results returned. */
-const GLOB_MAX_RESULTS = 200;
-
-/** Grep tool timeout: 30 seconds. */
-const GREP_TIMEOUT_MS = 30_000;
-
-/** Env vars safe to inherit into the Agent SDK subprocess. */
-export const ENV_ALLOWLIST = [
-  // Cross-platform essentials
-  'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
-  'TMPDIR', 'TEMP', 'TMP',
-  // Windows
-  'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'HOMEDRIVE', 'HOMEPATH',
-  // Network/proxy (enterprise environments)
-  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
-  // TLS/certs
-  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
-];
+/** Max agent loop steps for generateText. */
+export const MAX_AGENT_STEPS = 100;
 
 // ================== AGENT RUNNER INTERFACE ==================
 
@@ -90,416 +61,129 @@ export interface AgentRunner {
 
 // ================== TOOL DEFINITIONS ==================
 
-/** Canonical tool registry — single source of truth for Anthropic↔OpenAI name mapping. */
-export const TOOL_REGISTRY: ReadonlyArray<{ anthropic: string; openai: string }> = [
-  { anthropic: 'Read',  openai: 'read_file' },
-  { anthropic: 'Write', openai: 'write_file' },
-  { anthropic: 'Edit',  openai: 'edit_file' },
-  { anthropic: 'Bash',  openai: 'bash' },
-  { anthropic: 'Glob',  openai: 'glob' },
-  { anthropic: 'Grep',  openai: 'grep' },
+/**
+ * Canonical tool registry — single source of truth for PascalCase name to agentool key mapping.
+ * PascalCase names are the stable external API (used in --allowed-tools and stage definitions).
+ */
+export const TOOL_REGISTRY: ReadonlyArray<{ name: string; key: string }> = [
+  { name: 'Read',  key: 'read' },
+  { name: 'Write', key: 'write' },
+  { name: 'Edit',  key: 'edit' },
+  { name: 'Bash',  key: 'bash' },
+  { name: 'Glob',  key: 'glob' },
+  { name: 'Grep',  key: 'grep' },
 ];
 
-/**
- * Tool names for the Anthropic Claude Agent SDK (PascalCase).
- * Derived from TOOL_REGISTRY — do not modify directly.
- */
-export const ANTHROPIC_TOOL_NAMES = TOOL_REGISTRY.map(t => t.anthropic);
+/** PascalCase tool names for --allowed-tools filtering. */
+export const TOOL_NAMES = TOOL_REGISTRY.map(t => t.name);
 
 /**
- * Resolve allowed OpenAI tool names from --allowed-tools (PascalCase).
- * Returns all OpenAI names when allowedTools is empty/undefined.
+ * Resolve PascalCase --allowed-tools to agentool key names.
+ * Returns all keys when allowedTools is empty/undefined.
  */
-export function resolveOpenAIAllowed(allowedTools?: string[]): Set<string> {
-  if (!allowedTools?.length) return new Set(TOOL_REGISTRY.map(t => t.openai));
+export function resolveAllowedTools(allowedTools?: string[]): Set<string> {
+  if (!allowedTools?.length) return new Set(TOOL_REGISTRY.map(t => t.key));
   const allowed = new Set(allowedTools);
   return new Set(
-    TOOL_REGISTRY.filter(t => allowed.has(t.anthropic)).map(t => t.openai)
+    TOOL_REGISTRY.filter(t => allowed.has(t.name)).map(t => t.key)
   );
 }
 
-/** OpenAI function calling types. */
-export interface OpenAIMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: string | null;
-  tool_calls?: OpenAIToolCall[];
-  tool_call_id?: string;
-}
-
-export interface OpenAIToolCall {
-  id: string;
-  type: 'function';
-  function: { name: string; arguments: string };
-}
-
-export interface OpenAITool {
-  type: 'function';
-  function: { name: string; description: string; parameters: Record<string, unknown> };
-}
-
 /**
- * OpenAI function definitions — maps to the same 6 capabilities as ANTHROPIC_TOOL_NAMES.
- * Adding a tool here requires adding the matching PascalCase name to ANTHROPIC_TOOL_NAMES above.
+ * Build the tool set for generateText from agentool factories.
+ * Filters based on --allowed-tools PascalCase names.
  */
-export const OPENAI_TOOLS: OpenAITool[] = [
-  {
-    type: 'function',
-    function: {
-      name: 'read_file',
-      description: 'Read the contents of a file at the given path.',
-      parameters: {
-        type: 'object',
-        properties: {
-          file_path: { type: 'string', description: 'Absolute or relative path to the file' },
-        },
-        required: ['file_path'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'write_file',
-      description: 'Write content to a file, creating parent directories if needed.',
-      parameters: {
-        type: 'object',
-        properties: {
-          file_path: { type: 'string', description: 'Absolute or relative path to the file' },
-          content: { type: 'string', description: 'The content to write' },
-        },
-        required: ['file_path', 'content'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'edit_file',
-      description: 'Replace an exact string in a file. The old_string must appear exactly once.',
-      parameters: {
-        type: 'object',
-        properties: {
-          file_path: { type: 'string', description: 'Path to the file to edit' },
-          old_string: { type: 'string', description: 'The exact string to find and replace' },
-          new_string: { type: 'string', description: 'The replacement string' },
-        },
-        required: ['file_path', 'old_string', 'new_string'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'bash',
-      description: 'Execute a shell command and return stdout + stderr.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'The shell command to execute' },
-          timeout_ms: { type: 'number', description: 'Per-command timeout in ms (default 120000, max 600000)' },
-        },
-        required: ['command'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'glob',
-      description: 'Find files matching a glob pattern.',
-      parameters: {
-        type: 'object',
-        properties: {
-          pattern: { type: 'string', description: 'Glob pattern (e.g. "**/*.ts")' },
-          path: { type: 'string', description: 'Directory to search in (default: cwd)' },
-        },
-        required: ['pattern'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'grep',
-      description: 'Search file contents for a pattern using grep.',
-      parameters: {
-        type: 'object',
-        properties: {
-          pattern: { type: 'string', description: 'Search pattern (basic regex)' },
-          path: { type: 'string', description: 'Directory or file to search (default: cwd)' },
-          glob_filter: { type: 'string', description: 'File name pattern to filter (e.g. "*.ts")' },
-        },
-        required: ['pattern'],
-      },
-    },
-  },
-];
+export function buildToolSet(allowedTools?: string[]): Record<string, ReturnType<typeof createBash>> {
+  const allowed = resolveAllowedTools(allowedTools);
 
-// ================== TOOL EXECUTION ==================
+  const all: Record<string, ReturnType<typeof createBash>> = {
+    read: createRead(),
+    write: createWrite(),
+    edit: createEdit(),
+    bash: createBash(),
+    glob: createGlob(),
+    grep: createGrep(),
+  };
 
-/**
- * Execute a tool call from the OpenAI function-calling loop.
- * Errors are returned as strings (never thrown) — the model sees the error and can adjust.
- */
-export async function executeToolCall(name: string, args: Record<string, unknown>): Promise<string> {
-  try {
-    switch (name) {
-      case 'read_file': {
-        const filePath = args.file_path as string;
-        if (!filePath) return 'Error: file_path is required';
-        return fs.readFileSync(filePath, 'utf-8');
-      }
-
-      case 'write_file': {
-        const filePath = args.file_path as string;
-        const content = args.content as string;
-        if (!filePath) return 'Error: file_path is required';
-        if (content === undefined || content === null) return 'Error: content is required';
-        const dir = path.dirname(filePath);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(filePath, content);
-        return 'OK';
-      }
-
-      case 'edit_file': {
-        const filePath = args.file_path as string;
-        const oldString = args.old_string as string;
-        const newString = args.new_string as string;
-        if (!filePath) return 'Error: file_path is required';
-        if (!oldString) return 'Error: old_string is required';
-        if (newString === undefined || newString === null) return 'Error: new_string is required';
-
-        const fileContent = fs.readFileSync(filePath, 'utf-8');
-        const occurrences = fileContent.split(oldString).length - 1;
-        if (occurrences === 0) {
-          return `Error: old_string not found in ${filePath}`;
-        }
-        if (occurrences > 1) {
-          return `Error: old_string found ${occurrences} times in ${filePath} — must be unique`;
-        }
-        const updated = fileContent.replace(oldString, newString);
-        fs.writeFileSync(filePath, updated);
-        return 'OK';
-      }
-
-      case 'bash': {
-        const command = args.command as string;
-        if (!command) return 'Error: command is required';
-        const rawTimeout = typeof args.timeout_ms === 'number' ? args.timeout_ms : BASH_DEFAULT_TIMEOUT_MS;
-        const cmdTimeout = Math.min(Math.max(rawTimeout, 1000), BASH_MAX_TIMEOUT_MS);
-
-        const proc = Bun.spawn(['sh', '-c', command], {
-          stdout: 'pipe',
-          stderr: 'pipe',
-        });
-
-        // Race command execution against timeout — Bun stream reads may block
-        // even after proc.kill(), so we use Promise.race to ensure we return promptly.
-        const execPromise = (async () => {
-          const [stdout, stderr] = await Promise.all([
-            new Response(proc.stdout).text(),
-            new Response(proc.stderr).text(),
-          ]);
-          await proc.exited;
-          return { stdout, stderr, exitCode: proc.exitCode };
-        })();
-
-        const timeoutPromise = new Promise<'timeout'>((resolve) => {
-          setTimeout(() => {
-            try { proc.kill(9); } catch { /* already done */ }
-            resolve('timeout');
-          }, cmdTimeout);
-        });
-
-        const raceResult = await Promise.race([execPromise, timeoutPromise]);
-
-        if (raceResult === 'timeout') {
-          return `Error: command timed out after ${cmdTimeout}ms`;
-        }
-
-        const { stdout, stderr, exitCode } = raceResult;
-        let output = '';
-        if (stdout) output += stdout;
-        if (stderr) output += (output ? '\n--- stderr ---\n' : '') + stderr;
-        if (!output) output = `(exit code: ${exitCode})`;
-
-        return output.length > TOOL_OUTPUT_MAX_BYTES
-          ? output.slice(0, TOOL_OUTPUT_MAX_BYTES) + '\n... (truncated)'
-          : output;
-      }
-
-      case 'glob': {
-        const pattern = args.pattern as string;
-        if (!pattern) return 'Error: pattern is required';
-        const searchPath = (args.path as string) || process.cwd();
-
-        const glob = new Bun.Glob(pattern);
-        const results: string[] = [];
-        for (const match of glob.scanSync({ cwd: searchPath })) {
-          results.push(match);
-          if (results.length >= GLOB_MAX_RESULTS) break;
-        }
-        return results.length > 0 ? results.join('\n') : '(no matches)';
-      }
-
-      case 'grep': {
-        const pattern = args.pattern as string;
-        if (!pattern) return 'Error: pattern is required';
-        const searchPath = (args.path as string) || '.';
-        const globFilter = args.glob_filter as string | undefined;
-
-        const grepArgs = ['grep', '-rn'];
-        if (globFilter) grepArgs.push(`--include=${globFilter}`);
-        grepArgs.push(pattern, searchPath);
-
-        const proc = Bun.spawn(grepArgs, {
-          stdout: 'pipe',
-          stderr: 'pipe',
-        });
-
-        const timer = setTimeout(() => { try { proc.kill(); } catch { /* already done */ } }, GREP_TIMEOUT_MS);
-
-        try {
-          const [stdout, stderr] = await Promise.all([
-            new Response(proc.stdout).text(),
-            new Response(proc.stderr).text(),
-          ]);
-          await proc.exited;
-
-          // grep exit codes: 0 = matches found, 1 = no matches, 2+ = error
-          if (proc.exitCode !== null && proc.exitCode >= 2) {
-            return `Error: grep failed: ${stderr.trim() || `exit code ${proc.exitCode}`}`;
-          }
-
-          if (!stdout.trim()) return '(no matches)';
-          return stdout.length > TOOL_OUTPUT_MAX_BYTES
-            ? stdout.slice(0, TOOL_OUTPUT_MAX_BYTES) + '\n... (truncated)'
-            : stdout;
-        } finally {
-          clearTimeout(timer);
-        }
-      }
-
-      default:
-        return `Error: Unknown tool "${name}"`;
-    }
-  } catch (err) {
-    return `Error: ${(err as Error).message}`;
+  const filtered: Record<string, ReturnType<typeof createBash>> = {};
+  for (const [key, tool] of Object.entries(all)) {
+    if (allowed.has(key)) filtered[key] = tool;
   }
+  return filtered;
 }
 
-// ================== ENV CONSTRUCTION ==================
+// ================== GATEWAY COMPAT ==================
 
 /**
- * Build the base env object from the ENV_ALLOWLIST.
- * Inherits allowlisted host vars only — no provider-specific vars.
- */
-export function buildBaseEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const key of ENV_ALLOWLIST) {
-    if (process.env[key]) {
-      env[key] = process.env[key]!;
-    }
-  }
-  return env;
-}
-
-/**
- * Build the env object for a V2 Agent SDK session from an API preset.
- * Inherits allowlisted host vars + sets Anthropic credentials and model aliases.
- * The env option replaces the entire subprocess env (clean isolation).
- */
-export function buildSessionEnv(preset: ApiPreset, modelOverride?: string): Record<string, string> {
-  const model = modelOverride ?? preset.models[0]; // Case-sensitive — passed unmodified
-  const env = buildBaseEnv();
-
-  // Provider credentials + model aliases (override any inherited values)
-  env.ANTHROPIC_BASE_URL = preset.base_url;
-  env.ANTHROPIC_API_KEY = preset.api_key;
-  env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model;
-  env.ANTHROPIC_DEFAULT_SONNET_MODEL = model;
-  env.ANTHROPIC_DEFAULT_OPUS_MODEL = model;
-  env.CLAUDE_CODE_SUBAGENT_MODEL = 'sonnet'; // Alias — resolved via ANTHROPIC_DEFAULT_SONNET_MODEL
-
-  return env;
-}
-
-// ================== SESSION RESULT COLLECTION ==================
-
-/** Minimal interface for anything that provides a message stream + close. */
-export interface StreamSource {
-  stream(): AsyncIterable<Record<string, unknown>>;
-  close(): void;
-}
-
-/**
- * Collect the result from a message stream with wall-clock timeout.
- * Works with both V2 session objects and query() adapters.
+ * Custom fetch wrapper for Anthropic-protocol gateways that return non-compliant responses.
  *
- * Uses Promise.race so timeout fires even if stream() yields nothing.
- * On timeout, source.close() kills the orphaned stream consumer.
+ * Problem: @ai-sdk/anthropic validates response JSON with Zod. Anthropic's API includes
+ * a `signature` field on `type: "thinking"` content blocks, but third-party gateways
+ * (e.g., Bailian) omit it, causing Zod validation to fail.
+ *
+ * Fix: intercept the response, strip any thinking blocks that lack a `signature` field.
+ * This is safe because thinking blocks are model-internal reasoning — they don't affect
+ * the generated text or tool calls that the SDK extracts.
  */
-export async function collectSessionResult(
-  session: StreamSource,
-  timeoutMs: number = DEFAULT_TASK_TIMEOUT_MS,
-): Promise<{ result: string | null; error: string | null; timedOut?: boolean }> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
+export async function gatewayCompatFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const response = await fetch(input, init);
 
-  type CollectResult = { result: string | null; error: string | null; timedOut?: boolean };
-
-  async function inner(): Promise<CollectResult> {
-    for await (const msg of session.stream()) {
-      if (msg.type === 'result') {
-        if (msg.subtype === 'success') {
-          return { result: msg.result, error: null };
-        } else {
-          return { result: null, error: `${msg.subtype}: ${(msg as any).errors?.join(', ') || 'unknown'}` };
-        }
-      }
-    }
-    return { result: null, error: 'stream ended without result message' };
+  // Only patch successful JSON responses (SSE streams don't need patching —
+  // the SDK's stream parser is more lenient than the batch JSON validator).
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!response.ok || !contentType.includes('application/json')) {
+    return response;
   }
 
-  const timeout = new Promise<CollectResult>((resolve) => {
-    timer = setTimeout(() => {
-      resolve({ result: null, error: `task timed out after ${timeoutMs / 1000}s`, timedOut: true });
-    }, timeoutMs);
-  });
-
+  const body = await response.text();
+  let json: any;
   try {
-    const result = await Promise.race([inner(), timeout]);
-    if (result.timedOut) {
-      try { session.close(); } catch { /* already closed or errored */ }
-    }
-    return result;
-  } finally {
-    if (timer !== null) clearTimeout(timer);
+    json = JSON.parse(body);
+  } catch {
+    // Not valid JSON — return as-is and let the SDK handle the error.
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   }
+
+  // Patch: filter out thinking blocks without a signature field.
+  if (Array.isArray(json.content)) {
+    json.content = json.content.filter(
+      (block: any) => block.type !== 'thinking' || typeof block.signature === 'string',
+    );
+  }
+
+  return new Response(JSON.stringify(json), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
-// ================== ANTHROPIC RUNNER ==================
+// ================== UNIFIED RUNNER ==================
 
-export class AnthropicRunner implements AgentRunner {
-  private queryFn: typeof query;
-  constructor(private preset: ApiPreset, queryFn?: typeof query) {
-    this.queryFn = queryFn ?? query;
+/**
+ * Unified runner using Vercel AI SDK's generateText() with agentool tools.
+ * Handles both 'anthropic' and 'openai' protocols via different provider constructors.
+ */
+export class UnifiedRunner implements AgentRunner {
+  private generateTextFn: typeof generateText;
+  constructor(private preset: ApiPreset, generateTextFn?: typeof generateText) {
+    this.generateTextFn = generateTextFn ?? generateText;
   }
 
   async run(task: string, options: AgentRunOptions): Promise<AgentRunResult> {
-    const env = buildSessionEnv(this.preset, options.model);
+    const protocol = this.preset.protocol ?? 'anthropic';
 
-    // Debug logging: 4 individual writes (not batched — guaranteed writes on crash)
-    await vcpLog(options.cwd, {
-      source: 'api-task-runner', event: 'session_env', decision: 'info',
-      details: JSON.stringify(Object.fromEntries(
-        Object.entries(env).map(([k, v]) =>
-          k === 'ANTHROPIC_API_KEY' ? [k, maskApiKey(v)] : [k, v]
-        )
-      )),
-    }, options.debugEnabled);
+    // Debug logging (3 entries)
     await vcpLog(options.cwd, {
       source: 'api-task-runner', event: 'session_config', decision: 'info',
-      details: `protocol=anthropic model=${options.model} preset=${options.presetName} permissionMode=default`,
+      details: `protocol=${protocol} model=${options.model} preset=${options.presetName} base_url=${this.preset.base_url} key=${maskApiKey(this.preset.api_key)}`,
     }, options.debugEnabled);
     await vcpLog(options.cwd, {
       source: 'api-task-runner', event: 'session_system_prompt', decision: 'info',
@@ -510,254 +194,84 @@ export class AnthropicRunner implements AgentRunner {
       details: task,
     }, options.debugEnabled);
 
-    let session: StreamSource | null = null;
     try {
-      await vcpLog(options.cwd, {
-        source: 'api-task-runner', event: 'session_create', decision: 'info',
-        details: `preset=${options.presetName} model=${options.model} key=${maskApiKey(this.preset.api_key)}`,
-      }, options.debugEnabled);
+      const model = this.createModel(protocol, options.model);
+      const tools = buildToolSet(options.allowedTools);
 
-      // Filter tools based on --allowed-tools (PascalCase names)
-      const effectiveTools = options.allowedTools?.length
-        ? ANTHROPIC_TOOL_NAMES.filter(t => options.allowedTools!.includes(t))
-        : [...ANTHROPIC_TOOL_NAMES];
+      const abortController = new AbortController();
+      const timer = setTimeout(() => abortController.abort(), options.timeoutMs);
 
-      const q = this.queryFn({
-        prompt: task,
-        options: {
-          model: 'sonnet', // Alias — resolved to provider model via ANTHROPIC_DEFAULT_SONNET_MODEL env var
-          env,
-          permissionMode: 'default',
-          allowedTools: effectiveTools,
-          ...(options.systemPromptContent && {
-            systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: options.systemPromptContent },
+      try {
+        const result = await this.generateTextFn({
+          model,
+          tools,
+          stopWhen: stepCountIs(MAX_AGENT_STEPS),
+          system: options.systemPromptContent,
+          prompt: task,
+          maxOutputTokens: this.resolveMaxOutputTokens(),
+          abortSignal: abortController.signal,
+          ...(this.preset.reasoning_effort && {
+            providerOptions: { openai: { reasoningEffort: this.preset.reasoning_effort } },
           }),
-        },
-      });
+        });
 
-      // Wrap Query as session-like object for collectSessionResult compatibility
-      session = { stream: () => q, close: () => q.close() };
-      const result = await collectSessionResult(session, options.timeoutMs);
-      return {
-        result: result.result,
-        error: result.error,
-        timedOut: result.timedOut ?? false,
-      };
-    } catch (err) {
-      return { result: null, error: (err as Error).message, timedOut: false };
-    } finally {
-      if (session) { try { session.close(); } catch { /* best effort */ } }
-    }
-  }
-}
-
-// ================== OPENAI RUNNER ==================
-
-export class OpenAIRunner implements AgentRunner {
-  constructor(private preset: ApiPreset) {}
-
-  async run(task: string, options: AgentRunOptions): Promise<AgentRunResult> {
-    // Debug logging: 3 entries (no subprocess env for OpenAI — uses fetch directly)
-    await vcpLog(options.cwd, {
-      source: 'api-task-runner', event: 'session_config', decision: 'info',
-      details: `protocol=openai model=${options.model} preset=${options.presetName} base_url=${this.preset.base_url} key=${maskApiKey(this.preset.api_key)} maxIterations=${OPENAI_MAX_ITERATIONS}`,
-    }, options.debugEnabled);
-    await vcpLog(options.cwd, {
-      source: 'api-task-runner', event: 'session_system_prompt', decision: 'info',
-      details: options.systemPromptContent ?? 'none',
-    }, options.debugEnabled);
-    await vcpLog(options.cwd, {
-      source: 'api-task-runner', event: 'session_task', decision: 'info',
-      details: task,
-    }, options.debugEnabled);
-
-    try {
-      const result = await this.agentLoop(task, options);
-      return { result, error: null, timedOut: false };
+        return {
+          result: result.text || 'Task completed (no text response)',
+          error: null,
+          timedOut: false,
+        };
+      } finally {
+        clearTimeout(timer);
+      }
     } catch (err) {
       const msg = (err as Error).message;
-      if (msg.includes('timed out')) {
-        return { result: null, error: msg, timedOut: true };
+      if ((err as Error).name === 'AbortError' || msg.includes('abort')) {
+        return { result: null, error: `task timed out after ${options.timeoutMs / 1000}s`, timedOut: true };
       }
       return { result: null, error: msg, timedOut: false };
     }
   }
 
-  /**
-   * Parse an SSE streaming response into the same structure as a non-streaming choice.
-   * Accumulates content, tool_calls, and finish_reason from delta chunks.
-   */
-  private async parseStreamResponse(resp: Response): Promise<{
-    content: string | null;
-    tool_calls: OpenAIToolCall[];
-    finish_reason: string;
-  }> {
-    let content = '';
-    const toolCallMap = new Map<number, { id: string; name: string; arguments: string }>();
-    let finishReason = 'stop';
-    let chunkCount = 0;
-
-    const text = await resp.text();
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data: ') || trimmed === 'data: [DONE]') continue;
-
-      let chunk: any;
-      try { chunk = JSON.parse(trimmed.slice(6)); } catch { continue; }
-
-      chunkCount++;
-      const delta = chunk.choices?.[0]?.delta;
-      if (!delta) {
-        // Final chunk may only carry finish_reason without a delta
-        const fr = chunk.choices?.[0]?.finish_reason;
-        if (fr) finishReason = fr;
-        continue;
-      }
-
-      if (delta.content) content += delta.content;
-
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const idx = tc.index ?? 0;
-          const existing = toolCallMap.get(idx);
-          if (!existing) {
-            toolCallMap.set(idx, {
-              id: tc.id ?? '',
-              name: tc.function?.name ?? '',
-              arguments: tc.function?.arguments ?? '',
-            });
-          } else {
-            if (tc.id) existing.id = tc.id;
-            if (tc.function?.name) existing.name = tc.function.name;
-            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-          }
-        }
-      }
-
-      const fr = chunk.choices?.[0]?.finish_reason;
-      if (fr) finishReason = fr;
+  private createModel(protocol: string, modelId: string) {
+    if (protocol === 'openai') {
+      // @ai-sdk/openai expects baseURL to include /v1 (default: https://api.openai.com/v1).
+      // The web portal strips /v1 on save, so presets store URLs WITHOUT /v1.
+      // Normalize: strip any trailing /v1, then re-append to ensure exactly one.
+      // MUST use .chat() — .responses() is the default since AI SDK v5,
+      // but third-party OpenAI-compatible gateways only implement /chat/completions.
+      const baseURL = this.preset.base_url.replace(/\/v1\/?$/, '') + '/v1';
+      return createOpenAI({ apiKey: this.preset.api_key, baseURL }).chat(modelId);
     }
-
-    if (chunkCount === 0) {
-      throw new Error('OpenAI API returned no choices');
-    }
-
-    const toolCalls: OpenAIToolCall[] = [...toolCallMap.entries()]
-      .sort(([a], [b]) => a - b)
-      .map(([, tc]) => ({
-        id: tc.id,
-        type: 'function' as const,
-        function: { name: tc.name, arguments: tc.arguments },
-      }));
-
-    return {
-      content: content || null,
-      tool_calls: toolCalls,
-      finish_reason: finishReason,
-    };
+    // Anthropic: @ai-sdk/anthropic expects baseURL to include /v1
+    // (default: https://api.anthropic.com/v1, SDK appends /messages).
+    // The web portal strips /v1 on save, so presets store URLs WITHOUT /v1.
+    // Normalize: strip any trailing /v1, then re-append to ensure exactly one.
+    // Uses gatewayCompatFetch to handle third-party gateways that return
+    // non-compliant thinking blocks (missing `signature` field).
+    const baseURL = this.preset.base_url.replace(/\/v1\/?$/, '') + '/v1';
+    return createAnthropic({
+      apiKey: this.preset.api_key,
+      baseURL,
+      fetch: gatewayCompatFetch,
+    })(modelId);
   }
 
-  private async agentLoop(task: string, options: AgentRunOptions): Promise<string> {
-    const messages: OpenAIMessage[] = [];
-    if (options.systemPromptContent) {
-      messages.push({ role: 'system', content: options.systemPromptContent });
+  private resolveMaxOutputTokens(): number | undefined {
+    if (typeof this.preset.max_output_tokens === 'number' && this.preset.max_output_tokens > 0) {
+      return this.preset.max_output_tokens;
     }
-    messages.push({ role: 'user', content: task });
-
-    // Normalize base URL: strip trailing /v1 or /v1/ to avoid /v1/v1/chat/completions
-    const baseUrl = this.preset.base_url.replace(/\/v1\/?$/, '');
-    const deadline = Date.now() + options.timeoutMs;
-
-    // Filter OpenAI tools based on --allowed-tools (PascalCase → snake_case via registry)
-    const allowedOpenAINames = resolveOpenAIAllowed(options.allowedTools);
-    const effectiveOpenAITools = OPENAI_TOOLS.filter(t => allowedOpenAINames.has(t.function.name));
-
-    for (let i = 0; i < OPENAI_MAX_ITERATIONS; i++) {
-      if (Date.now() >= deadline) {
-        throw new Error(`OpenAI session timed out after ${options.timeoutMs / 1000}s`);
-      }
-
-      // Use preset max_output_tokens with defensive type check and fallback to constant
-      const effectiveMaxTokens = typeof this.preset.max_output_tokens === 'number' && this.preset.max_output_tokens > 0
-        ? this.preset.max_output_tokens
-        : OPENAI_MAX_TOKENS;
-      const body: Record<string, unknown> = {
-        model: options.model,
-        messages,
-        tools: effectiveOpenAITools,
-        max_tokens: effectiveMaxTokens,
-        stream: true,
-      };
-      if (this.preset.reasoning_effort) {
-        body.reasoning_effort = this.preset.reasoning_effort;
-      }
-
-      const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.preset.api_key}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        // Safety net — deadline check at loop top fires first for expired deadlines.
-        // Min 1000ms prevents AbortSignal.timeout(0) edge case.
-        signal: AbortSignal.timeout(Math.max(deadline - Date.now(), 1000)),
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => '');
-        throw new Error(`OpenAI API returned ${resp.status}: ${text.slice(0, 500)}`);
-      }
-
-      const parsed = await this.parseStreamResponse(resp);
-
-      // Add assistant message to conversation history
-      const assistantMsg: OpenAIMessage = {
-        role: 'assistant',
-        content: parsed.content,
-      };
-      if (parsed.tool_calls.length) {
-        assistantMsg.tool_calls = parsed.tool_calls;
-      }
-      messages.push(assistantMsg);
-
-      // If model wants to call tools, execute them and continue the loop
-      if (parsed.finish_reason === 'tool_calls' && parsed.tool_calls.length) {
-        for (const tc of parsed.tool_calls) {
-          // Defense-in-depth: reject tool calls not in the allowed set
-          if (!allowedOpenAINames.has(tc.function.name)) {
-            messages.push({
-              role: 'tool', tool_call_id: tc.id,
-              content: `Error: Tool '${tc.function.name}' is not allowed. Available: ${[...allowedOpenAINames].join(', ')}`,
-            });
-            continue;
-          }
-          let toolArgs: Record<string, unknown> = {};
-          try { toolArgs = JSON.parse(tc.function.arguments); } catch { /* empty args */ }
-          const result = await executeToolCall(tc.function.name, toolArgs);
-          messages.push({ role: 'tool', tool_call_id: tc.id, content: result });
-        }
-        continue;
-      }
-
-      // Model is done (finish_reason: 'stop', 'end_turn', or other non-tool reasons)
-      return parsed.content ?? 'Task completed (no text response)';
-    }
-
-    throw new Error(`OpenAI agent loop exceeded ${OPENAI_MAX_ITERATIONS} iterations`);
+    return (this.preset.protocol ?? 'anthropic') === 'openai' ? 16384 : undefined;
   }
 }
 
 // ================== RUNNER FACTORY ==================
 
 /**
- * Create the appropriate runner based on preset protocol.
- * If adding a 3rd protocol, add a new case here.
+ * Create the appropriate runner based on preset.
+ * Both protocols are handled by UnifiedRunner via different provider constructors.
  */
 export function createRunner(preset: ApiPreset): AgentRunner {
-  const protocol = preset.protocol ?? 'anthropic';
-  if (protocol === 'openai') return new OpenAIRunner(preset);
-  return new AnthropicRunner(preset);
+  return new UnifiedRunner(preset);
 }
 
 // ================== OUTPUT HELPERS ==================

@@ -1,29 +1,19 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
+import { describe, test, expect } from 'bun:test';
 import {
-  buildBaseEnv,
-  buildSessionEnv,
-  collectSessionResult,
   parseArgs,
-  ENV_ALLOWLIST,
   DEFAULT_TASK_TIMEOUT_MS,
-  ANTHROPIC_TOOL_NAMES,
-  OPENAI_TOOLS,
-  OPENAI_MAX_ITERATIONS,
+  MAX_AGENT_STEPS,
   TOOL_REGISTRY,
-  resolveOpenAIAllowed,
+  TOOL_NAMES,
+  resolveAllowedTools,
+  buildToolSet,
   createRunner,
-  executeToolCall,
-  AnthropicRunner,
-  OpenAIRunner,
-  type StreamSource,
+  UnifiedRunner,
 } from '../api-task-runner.ts';
-import type { AgentRunner, AgentRunOptions } from '../api-task-runner.ts';
+import type { AgentRunner, AgentRunOptions, AgentRunResult } from '../api-task-runner.ts';
 import type { ApiPreset } from '../../types/presets.ts';
 
-// ================== buildSessionEnv ==================
+// ================== TEST FIXTURES ==================
 
 /** Test-only fake preset — not a real credential. */
 const FAKE_KEY = 'FAKE-TEST-KEY-NOT-REAL';
@@ -31,7 +21,7 @@ const FAKE_KEY = 'FAKE-TEST-KEY-NOT-REAL';
 const mockPreset: ApiPreset = {
   type: 'api',
   name: 'test-api',
-  base_url: 'https://api.example.com/anthropic',
+  base_url: 'https://api.example.com/v1',
   api_key: FAKE_KEY,
   models: ['MiniMax-M2.5', 'ModelB'],
 };
@@ -45,245 +35,138 @@ const mockOpenAIPreset: ApiPreset = {
   protocol: 'openai',
 };
 
-describe('buildSessionEnv', () => {
-  test('sets all 6 ANTHROPIC env vars from preset', () => {
-    const env = buildSessionEnv(mockPreset);
-    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.example.com/anthropic');
-    expect(env.ANTHROPIC_API_KEY).toBe(FAKE_KEY);
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('MiniMax-M2.5');
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('MiniMax-M2.5');
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('MiniMax-M2.5');
-    // CLAUDE_CODE_SUBAGENT_MODEL is set to 'sonnet' (alias) — resolved at runtime
-    // via ANTHROPIC_DEFAULT_SONNET_MODEL to the actual provider model
-    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
+const defaultRunOptions: AgentRunOptions = {
+  model: 'MiniMax-M2.5',
+  timeoutMs: 30_000,
+  cwd: '/tmp',
+  debugEnabled: false,
+  presetName: 'test-api',
+};
+
+// ================== DEFAULT_TASK_TIMEOUT_MS ==================
+
+describe('DEFAULT_TASK_TIMEOUT_MS', () => {
+  test('is 300 seconds', () => {
+    expect(DEFAULT_TASK_TIMEOUT_MS).toBe(300_000);
+  });
+});
+
+// ================== MAX_AGENT_STEPS ==================
+
+describe('MAX_AGENT_STEPS', () => {
+  test('is 100', () => {
+    expect(MAX_AGENT_STEPS).toBe(100);
+  });
+});
+
+// ================== TOOL_NAMES ==================
+
+describe('TOOL_NAMES', () => {
+  test('contains 6 PascalCase tool names', () => {
+    expect(TOOL_NAMES).toHaveLength(6);
+    expect(TOOL_NAMES).toEqual(['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep']);
   });
 
-  test('preserves model name case sensitivity', () => {
-    const env = buildSessionEnv(mockPreset);
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('MiniMax-M2.5');
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).not.toBe('minimax-m2.5');
+  test('is derived from TOOL_REGISTRY', () => {
+    expect(TOOL_NAMES).toEqual(TOOL_REGISTRY.map(t => t.name));
+  });
+});
+
+// ================== TOOL_REGISTRY ==================
+
+describe('TOOL_REGISTRY', () => {
+  test('has 6 entries', () => {
+    expect(TOOL_REGISTRY).toHaveLength(6);
   });
 
-  test('uses models[0] when no override', () => {
-    const env = buildSessionEnv(mockPreset);
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('MiniMax-M2.5');
-  });
-
-  test('uses override when provided', () => {
-    const env = buildSessionEnv(mockPreset, 'ModelB');
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('ModelB');
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('ModelB');
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('ModelB');
-    // CLAUDE_CODE_SUBAGENT_MODEL always 'sonnet' — resolved via ANTHROPIC_DEFAULT_SONNET_MODEL
-    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
-  });
-
-  test('sets provider credentials', () => {
-    const env = buildSessionEnv(mockPreset, 'ModelB');
-    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.example.com/anthropic');
-    expect(env.ANTHROPIC_API_KEY).toBe(FAKE_KEY);
-  });
-
-  test('override is case-sensitive', () => {
-    const env = buildSessionEnv(mockPreset, 'modelb');
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('modelb');
-  });
-
-  test('inherits PATH from host env', () => {
-    const env = buildSessionEnv(mockPreset);
-    if (process.env.PATH) {
-      expect(env.PATH).toBe(process.env.PATH);
+  test('each entry has name and key', () => {
+    for (const entry of TOOL_REGISTRY) {
+      expect(typeof entry.name).toBe('string');
+      expect(typeof entry.key).toBe('string');
+      expect(entry.name.length).toBeGreaterThan(0);
+      expect(entry.key.length).toBeGreaterThan(0);
     }
   });
 
-  test('inherits Windows vars when present', () => {
-    const originalUserProfile = process.env.USERPROFILE;
-    const originalAppData = process.env.APPDATA;
-    process.env.USERPROFILE = 'C:\\Users\\test';
-    process.env.APPDATA = 'C:\\Users\\test\\AppData\\Roaming';
-    try {
-      const env = buildSessionEnv(mockPreset);
-      expect(env.USERPROFILE).toBe('C:\\Users\\test');
-      expect(env.APPDATA).toBe('C:\\Users\\test\\AppData\\Roaming');
-    } finally {
-      if (originalUserProfile) process.env.USERPROFILE = originalUserProfile;
-      else delete process.env.USERPROFILE;
-      if (originalAppData) process.env.APPDATA = originalAppData;
-      else delete process.env.APPDATA;
-    }
+  test('names are unique', () => {
+    const names = TOOL_REGISTRY.map(t => t.name);
+    expect(new Set(names).size).toBe(names.length);
   });
 
-  test('inherits proxy vars when present', () => {
-    const originalProxy = process.env.HTTPS_PROXY;
-    process.env.HTTPS_PROXY = 'http://proxy:8080';
-    try {
-      const env = buildSessionEnv(mockPreset);
-      expect(env.HTTPS_PROXY).toBe('http://proxy:8080');
-    } finally {
-      if (originalProxy) process.env.HTTPS_PROXY = originalProxy;
-      else delete process.env.HTTPS_PROXY;
-    }
+  test('keys are unique', () => {
+    const keys = TOOL_REGISTRY.map(t => t.key);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
-  test('inherits TLS cert vars when present', () => {
-    const original = process.env.NODE_EXTRA_CA_CERTS;
-    process.env.NODE_EXTRA_CA_CERTS = '/path/to/certs.pem';
-    try {
-      const env = buildSessionEnv(mockPreset);
-      expect(env.NODE_EXTRA_CA_CERTS).toBe('/path/to/certs.pem');
-    } finally {
-      if (original) process.env.NODE_EXTRA_CA_CERTS = original;
-      else delete process.env.NODE_EXTRA_CA_CERTS;
-    }
-  });
-
-  test('does not leak non-allowlisted env vars', () => {
-    const original = process.env.SECRET_TOKEN;
-    process.env.SECRET_TOKEN = 'super-secret';
-    try {
-      const env = buildSessionEnv(mockPreset);
-      expect(env.SECRET_TOKEN).toBeUndefined();
-    } finally {
-      if (original) process.env.SECRET_TOKEN = original;
-      else delete process.env.SECRET_TOKEN;
-    }
-  });
-
-  test('omits allowlisted vars that are not set on host', () => {
-    const original = process.env.SSL_CERT_FILE;
-    delete process.env.SSL_CERT_FILE;
-    try {
-      const env = buildSessionEnv(mockPreset);
-      expect(env.SSL_CERT_FILE).toBeUndefined();
-    } finally {
-      if (original) process.env.SSL_CERT_FILE = original;
+  test('names are PascalCase, keys are lowercase', () => {
+    for (const entry of TOOL_REGISTRY) {
+      expect(entry.name[0]).toBe(entry.name[0].toUpperCase());
+      expect(entry.key).toBe(entry.key.toLowerCase());
     }
   });
 });
 
-// ================== buildBaseEnv ==================
+// ================== resolveAllowedTools ==================
 
-describe('buildBaseEnv', () => {
-  test('returns object with PATH from host if set', () => {
-    if (process.env.PATH) {
-      const env = buildBaseEnv();
-      expect(env.PATH).toBe(process.env.PATH);
-    }
+describe('resolveAllowedTools', () => {
+  test('returns all 6 keys when no filter', () => {
+    const result = resolveAllowedTools();
+    expect(result.size).toBe(6);
+    expect(result).toContain('read');
+    expect(result).toContain('write');
+    expect(result).toContain('edit');
+    expect(result).toContain('bash');
+    expect(result).toContain('glob');
+    expect(result).toContain('grep');
   });
 
-  test('does not set ANTHROPIC_* vars', () => {
-    const env = buildBaseEnv();
-    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+  test('returns all 6 keys for empty array', () => {
+    expect(resolveAllowedTools([]).size).toBe(6);
   });
 
-  test('does not set CODEX_API_KEY or OPENAI_BASE_URL', () => {
-    const env = buildBaseEnv();
-    expect(env.CODEX_API_KEY).toBeUndefined();
-    expect(env.OPENAI_BASE_URL).toBeUndefined();
+  test('filters to matching PascalCase names', () => {
+    const result = resolveAllowedTools(['Read', 'Grep']);
+    expect(result.size).toBe(2);
+    expect(result).toContain('read');
+    expect(result).toContain('grep');
   });
 
-  test('does not set CLAUDE_CODE_SUBAGENT_MODEL', () => {
-    const env = buildBaseEnv();
-    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
+  test('ignores unknown PascalCase names', () => {
+    const result = resolveAllowedTools(['Read', 'Unknown', 'Grep']);
+    expect(result.size).toBe(2);
+    expect(result).toContain('read');
+    expect(result).toContain('grep');
   });
 
-  test('does not leak non-allowlisted env vars', () => {
-    const original = process.env.MY_SECRET_TOKEN;
-    process.env.MY_SECRET_TOKEN = 'super-secret';
-    try {
-      const env = buildBaseEnv();
-      expect(env.MY_SECRET_TOKEN).toBeUndefined();
-    } finally {
-      if (original) process.env.MY_SECRET_TOKEN = original;
-      else delete process.env.MY_SECRET_TOKEN;
-    }
+  test('returns empty set when all names are unknown', () => {
+    const result = resolveAllowedTools(['Foo', 'Bar']);
+    expect(result.size).toBe(0);
   });
 });
 
-// ================== collectSessionResult ==================
+// ================== buildToolSet ==================
 
-describe('collectSessionResult', () => {
-  /** Create a mock session with a controllable async generator. */
-  function mockSession(messages: Array<Record<string, unknown>>) {
-    let closed = false;
-    return {
-      stream: async function* () {
-        for (const msg of messages) {
-          if (closed) return;
-          yield msg;
-        }
-      },
-      close: () => { closed = true; },
-      _isClosed: () => closed,
-    };
-  }
-
-  /** Create a mock session that never yields (simulates stalled stream). */
-  function stalledSession() {
-    let closed = false;
-    return {
-      stream: async function* () {
-        await new Promise<void>((resolve) => {
-          const check = setInterval(() => {
-            if (closed) { clearInterval(check); resolve(); }
-          }, 10);
-        });
-      },
-      close: () => { closed = true; },
-      _isClosed: () => closed,
-    };
-  }
-
-  test('returns result on success', async () => {
-    const session = mockSession([
-      { type: 'assistant', message: 'thinking...' },
-      { type: 'result', subtype: 'success', result: 'Hello world' },
-    ]);
-    const result = await collectSessionResult(session);
-    expect(result.result).toBe('Hello world');
-    expect(result.error).toBeNull();
-    expect(result.timedOut).toBeUndefined();
+describe('buildToolSet', () => {
+  test('returns 6 tools when no filter', () => {
+    const tools = buildToolSet();
+    expect(Object.keys(tools)).toHaveLength(6);
+    expect(Object.keys(tools).sort()).toEqual(['bash', 'edit', 'glob', 'grep', 'read', 'write']);
   });
 
-  test('returns error on failure', async () => {
-    const session = mockSession([
-      { type: 'result', subtype: 'error', errors: ['bad request'] },
-    ]);
-    const result = await collectSessionResult(session);
-    expect(result.result).toBeNull();
-    expect(result.error).toBe('error: bad request');
+  test('filters to matching PascalCase names', () => {
+    const tools = buildToolSet(['Read', 'Glob', 'Grep']);
+    expect(Object.keys(tools)).toHaveLength(3);
+    expect(Object.keys(tools).sort()).toEqual(['glob', 'grep', 'read']);
   });
 
-  test('returns error when stream ends without result', async () => {
-    const session = mockSession([
-      { type: 'assistant', message: 'thinking...' },
-    ]);
-    const result = await collectSessionResult(session);
-    expect(result.result).toBeNull();
-    expect(result.error).toBe('stream ended without result message');
+  test('returns empty object when all names are unknown', () => {
+    const tools = buildToolSet(['Foo']);
+    expect(Object.keys(tools)).toHaveLength(0);
   });
 
-  test('wall-clock timeout fires on stalled stream', async () => {
-    const session = stalledSession();
-    const result = await collectSessionResult(session, 100); // 100ms timeout
-    expect(result.result).toBeNull();
-    expect(result.error).toContain('timed out');
-    expect(result.timedOut).toBe(true);
-    expect(session._isClosed()).toBe(true); // session.close() called
-  });
-
-  test('timeout does not fire on fast success', async () => {
-    const session = mockSession([
-      { type: 'result', subtype: 'success', result: 'fast' },
-    ]);
-    const result = await collectSessionResult(session, 5000);
-    expect(result.result).toBe('fast');
-    expect(result.timedOut).toBeUndefined();
-    expect(session._isClosed()).toBe(false); // session NOT closed
+  test('returns empty object for empty set (all filtered out)', () => {
+    const tools = buildToolSet(['NonExistent']);
+    expect(Object.keys(tools)).toHaveLength(0);
   });
 });
 
@@ -472,183 +355,6 @@ describe('parseArgs', () => {
   });
 });
 
-// ================== ENV_ALLOWLIST ==================
-
-describe('ENV_ALLOWLIST', () => {
-  test('includes cross-platform essentials', () => {
-    expect(ENV_ALLOWLIST).toContain('PATH');
-    expect(ENV_ALLOWLIST).toContain('HOME');
-  });
-
-  test('includes Windows vars', () => {
-    expect(ENV_ALLOWLIST).toContain('USERPROFILE');
-    expect(ENV_ALLOWLIST).toContain('APPDATA');
-    expect(ENV_ALLOWLIST).toContain('SystemRoot');
-  });
-
-  test('includes proxy vars', () => {
-    expect(ENV_ALLOWLIST).toContain('HTTPS_PROXY');
-    expect(ENV_ALLOWLIST).toContain('NO_PROXY');
-  });
-
-  test('includes TLS cert vars', () => {
-    expect(ENV_ALLOWLIST).toContain('NODE_EXTRA_CA_CERTS');
-    expect(ENV_ALLOWLIST).toContain('SSL_CERT_FILE');
-  });
-
-  test('does not include dangerous vars', () => {
-    expect(ENV_ALLOWLIST).not.toContain('DATABASE_URL');
-  });
-});
-
-// ================== DEFAULT_TASK_TIMEOUT_MS ==================
-
-describe('DEFAULT_TASK_TIMEOUT_MS', () => {
-  test('is 5 minutes (300,000ms)', () => {
-    expect(DEFAULT_TASK_TIMEOUT_MS).toBe(300_000);
-  });
-});
-
-// ================== ANTHROPIC_TOOL_NAMES ==================
-
-describe('ANTHROPIC_TOOL_NAMES', () => {
-  test('contains exactly 6 PascalCase tool names', () => {
-    expect(ANTHROPIC_TOOL_NAMES).toHaveLength(6);
-    expect(new Set(ANTHROPIC_TOOL_NAMES)).toEqual(new Set(['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash']));
-  });
-
-  test('is derived from TOOL_REGISTRY', () => {
-    expect(ANTHROPIC_TOOL_NAMES).toEqual(TOOL_REGISTRY.map(t => t.anthropic));
-  });
-
-  test('has same count as OPENAI_TOOLS', () => {
-    expect(ANTHROPIC_TOOL_NAMES.length).toBe(OPENAI_TOOLS.length);
-  });
-});
-
-// ================== OPENAI_TOOLS ==================
-
-describe('OPENAI_TOOLS', () => {
-  test('contains 6 function definitions', () => {
-    expect(OPENAI_TOOLS.length).toBe(6);
-  });
-
-  test('all entries have type: function', () => {
-    for (const tool of OPENAI_TOOLS) {
-      expect(tool.type).toBe('function');
-    }
-  });
-
-  test('tool names are snake_case', () => {
-    const names = OPENAI_TOOLS.map(t => t.function.name);
-    expect(names).toEqual(['read_file', 'write_file', 'edit_file', 'bash', 'glob', 'grep']);
-  });
-
-  test('each tool has a description and parameters', () => {
-    for (const tool of OPENAI_TOOLS) {
-      expect(tool.function.description).toBeTruthy();
-      expect(tool.function.parameters).toBeTruthy();
-      expect(tool.function.parameters.type).toBe('object');
-    }
-  });
-
-  test('read_file requires file_path', () => {
-    const tool = OPENAI_TOOLS.find(t => t.function.name === 'read_file')!;
-    expect(tool.function.parameters.required).toEqual(['file_path']);
-  });
-
-  test('write_file requires file_path and content', () => {
-    const tool = OPENAI_TOOLS.find(t => t.function.name === 'write_file')!;
-    expect(tool.function.parameters.required).toEqual(['file_path', 'content']);
-  });
-
-  test('edit_file requires file_path, old_string, new_string', () => {
-    const tool = OPENAI_TOOLS.find(t => t.function.name === 'edit_file')!;
-    expect(tool.function.parameters.required).toEqual(['file_path', 'old_string', 'new_string']);
-  });
-
-  test('bash requires command, timeout_ms is optional', () => {
-    const tool = OPENAI_TOOLS.find(t => t.function.name === 'bash')!;
-    expect(tool.function.parameters.required).toEqual(['command']);
-  });
-
-  test('glob requires pattern, path is optional', () => {
-    const tool = OPENAI_TOOLS.find(t => t.function.name === 'glob')!;
-    expect(tool.function.parameters.required).toEqual(['pattern']);
-  });
-
-  test('grep requires pattern, path and glob_filter are optional', () => {
-    const tool = OPENAI_TOOLS.find(t => t.function.name === 'grep')!;
-    expect(tool.function.parameters.required).toEqual(['pattern']);
-  });
-});
-
-// ================== OPENAI_MAX_ITERATIONS ==================
-
-describe('OPENAI_MAX_ITERATIONS', () => {
-  test('is 100', () => {
-    expect(OPENAI_MAX_ITERATIONS).toBe(100);
-  });
-});
-
-// ================== TOOL_REGISTRY ==================
-
-describe('TOOL_REGISTRY', () => {
-  test('bijection: every Anthropic name maps to exactly one OpenAI name', () => {
-    const anthropicNames = TOOL_REGISTRY.map(t => t.anthropic);
-    const openaiNames = TOOL_REGISTRY.map(t => t.openai);
-    // No duplicates
-    expect(new Set(anthropicNames).size).toBe(anthropicNames.length);
-    expect(new Set(openaiNames).size).toBe(openaiNames.length);
-  });
-
-  test('OpenAI names match OPENAI_TOOLS function names', () => {
-    const registryOpenAI = new Set(TOOL_REGISTRY.map(t => t.openai));
-    const toolsOpenAI = new Set(OPENAI_TOOLS.map(t => t.function.name));
-    expect(registryOpenAI).toEqual(toolsOpenAI);
-  });
-
-  test('Anthropic names match ANTHROPIC_TOOL_NAMES', () => {
-    const registryAnthropicSet = new Set(TOOL_REGISTRY.map(t => t.anthropic));
-    const toolNamesSet = new Set(ANTHROPIC_TOOL_NAMES);
-    expect(registryAnthropicSet).toEqual(toolNamesSet);
-  });
-});
-
-// ================== resolveOpenAIAllowed ==================
-
-describe('resolveOpenAIAllowed', () => {
-  test('returns all OpenAI names when allowedTools is undefined', () => {
-    const result = resolveOpenAIAllowed(undefined);
-    expect(result.size).toBe(6);
-    expect(result).toContain('read_file');
-    expect(result).toContain('write_file');
-    expect(result).toContain('bash');
-  });
-
-  test('returns all OpenAI names when allowedTools is empty', () => {
-    const result = resolveOpenAIAllowed([]);
-    expect(result.size).toBe(6);
-  });
-
-  test('filters to Read,Glob,Grep → read_file,glob,grep', () => {
-    const result = resolveOpenAIAllowed(['Read', 'Glob', 'Grep']);
-    expect(result.size).toBe(3);
-    expect(result).toContain('read_file');
-    expect(result).toContain('glob');
-    expect(result).toContain('grep');
-    expect(result).not.toContain('write_file');
-    expect(result).not.toContain('edit_file');
-    expect(result).not.toContain('bash');
-  });
-
-  test('ignores unknown PascalCase names', () => {
-    const result = resolveOpenAIAllowed(['Read', 'UnknownTool']);
-    expect(result.size).toBe(1);
-    expect(result).toContain('read_file');
-  });
-});
-
 // ================== parseArgs --allowed-tools ==================
 
 describe('parseArgs --allowed-tools', () => {
@@ -697,932 +403,387 @@ describe('parseArgs --allowed-tools', () => {
   });
 });
 
-// ================== executeToolCall ==================
-
-describe('executeToolCall', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-tool-test-'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  // --- read_file ---
-
-  test('read_file returns file contents', async () => {
-    const filePath = path.join(tmpDir, 'test.txt');
-    fs.writeFileSync(filePath, 'hello world');
-    const result = await executeToolCall('read_file', { file_path: filePath });
-    expect(result).toBe('hello world');
-  });
-
-  test('read_file returns error for missing file', async () => {
-    const result = await executeToolCall('read_file', { file_path: path.join(tmpDir, 'nope.txt') });
-    expect(result).toContain('Error:');
-    expect(result).toContain('ENOENT');
-  });
-
-  test('read_file returns error when file_path missing', async () => {
-    const result = await executeToolCall('read_file', {});
-    expect(result).toBe('Error: file_path is required');
-  });
-
-  // --- write_file ---
-
-  test('write_file creates file and parent directories', async () => {
-    const filePath = path.join(tmpDir, 'sub', 'dir', 'new.txt');
-    const result = await executeToolCall('write_file', { file_path: filePath, content: 'created' });
-    expect(result).toBe('OK');
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('created');
-  });
-
-  test('write_file overwrites existing file', async () => {
-    const filePath = path.join(tmpDir, 'existing.txt');
-    fs.writeFileSync(filePath, 'old');
-    await executeToolCall('write_file', { file_path: filePath, content: 'new' });
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('new');
-  });
-
-  test('write_file returns error when file_path missing', async () => {
-    const result = await executeToolCall('write_file', { content: 'data' });
-    expect(result).toBe('Error: file_path is required');
-  });
-
-  test('write_file returns error when content missing', async () => {
-    const result = await executeToolCall('write_file', { file_path: path.join(tmpDir, 'x.txt') });
-    expect(result).toBe('Error: content is required');
-  });
-
-  // --- edit_file ---
-
-  test('edit_file replaces old_string with new_string', async () => {
-    const filePath = path.join(tmpDir, 'edit-me.txt');
-    fs.writeFileSync(filePath, 'Hello World');
-    const result = await executeToolCall('edit_file', {
-      file_path: filePath,
-      old_string: 'World',
-      new_string: 'Bun',
-    });
-    expect(result).toBe('OK');
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('Hello Bun');
-  });
-
-  test('edit_file errors when old_string not found', async () => {
-    const filePath = path.join(tmpDir, 'edit-me.txt');
-    fs.writeFileSync(filePath, 'Hello World');
-    const result = await executeToolCall('edit_file', {
-      file_path: filePath,
-      old_string: 'NotHere',
-      new_string: 'X',
-    });
-    expect(result).toContain('Error: old_string not found');
-  });
-
-  test('edit_file errors when old_string appears multiple times', async () => {
-    const filePath = path.join(tmpDir, 'edit-me.txt');
-    fs.writeFileSync(filePath, 'aaa bbb aaa');
-    const result = await executeToolCall('edit_file', {
-      file_path: filePath,
-      old_string: 'aaa',
-      new_string: 'X',
-    });
-    expect(result).toContain('found 2 times');
-    // File should not be modified
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('aaa bbb aaa');
-  });
-
-  test('edit_file errors when file_path missing', async () => {
-    const result = await executeToolCall('edit_file', { old_string: 'a', new_string: 'b' });
-    expect(result).toBe('Error: file_path is required');
-  });
-
-  // --- bash ---
-
-  test('bash executes command and returns output', async () => {
-    const result = await executeToolCall('bash', { command: 'echo hello' });
-    expect(result.trim()).toBe('hello');
-  });
-
-  test('bash returns stderr combined with stdout', async () => {
-    const result = await executeToolCall('bash', { command: 'echo out && echo err >&2' });
-    expect(result).toContain('out');
-    expect(result).toContain('err');
-  });
-
-  test('bash returns exit code when no output', async () => {
-    const result = await executeToolCall('bash', { command: 'true' });
-    expect(result).toContain('exit code: 0');
-  });
-
-  test('bash errors when command missing', async () => {
-    const result = await executeToolCall('bash', {});
-    expect(result).toBe('Error: command is required');
-  });
-
-  // --- glob ---
-
-  test('glob finds matching files', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'a.ts'), '');
-    fs.writeFileSync(path.join(tmpDir, 'b.ts'), '');
-    fs.writeFileSync(path.join(tmpDir, 'c.js'), '');
-    const result = await executeToolCall('glob', { pattern: '*.ts', path: tmpDir });
-    expect(result).toContain('a.ts');
-    expect(result).toContain('b.ts');
-    expect(result).not.toContain('c.js');
-  });
-
-  test('glob returns no matches message', async () => {
-    const result = await executeToolCall('glob', { pattern: '*.xyz', path: tmpDir });
-    expect(result).toBe('(no matches)');
-  });
-
-  test('glob errors when pattern missing', async () => {
-    const result = await executeToolCall('glob', {});
-    expect(result).toBe('Error: pattern is required');
-  });
-
-  // --- grep ---
-
-  test('grep finds matching lines', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'searchme.txt'), 'line one\nfind me\nline three\n');
-    const result = await executeToolCall('grep', { pattern: 'find me', path: tmpDir });
-    expect(result).toContain('find me');
-  });
-
-  test('grep returns no matches message', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'searchme.txt'), 'nothing here\n');
-    const result = await executeToolCall('grep', { pattern: 'ZZZZZ', path: tmpDir });
-    expect(result).toBe('(no matches)');
-  });
-
-  test('grep errors when pattern missing', async () => {
-    const result = await executeToolCall('grep', {});
-    expect(result).toBe('Error: pattern is required');
-  });
-
-  test('grep supports glob_filter', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'a.ts'), 'target line\n');
-    fs.writeFileSync(path.join(tmpDir, 'b.js'), 'target line\n');
-    const result = await executeToolCall('grep', { pattern: 'target', path: tmpDir, glob_filter: '*.ts' });
-    expect(result).toContain('a.ts');
-    expect(result).not.toContain('b.js');
-  });
-
-  test('grep returns error for invalid regex', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'test.txt'), 'some content\n');
-    const result = await executeToolCall('grep', { pattern: '[', path: tmpDir });
-    expect(result).toContain('Error:');
-  });
-
-  // --- bash timeout ---
-
-  test('bash returns timeout error when command exceeds timeout', async () => {
-    const result = await executeToolCall('bash', { command: 'sleep 30', timeout_ms: 1000 });
-    expect(result).toContain('Error: command timed out');
-  }, 15000); // Extended test timeout — kill + drain takes a few seconds in Bun
-
-  // --- unknown tool ---
-
-  test('unknown tool returns error', async () => {
-    const result = await executeToolCall('unknown_tool', {});
-    expect(result).toBe('Error: Unknown tool "unknown_tool"');
-  });
-});
-
 // ================== createRunner ==================
 
 describe('createRunner', () => {
-  test('returns OpenAIRunner for protocol: openai', () => {
-    const runner = createRunner(mockOpenAIPreset);
-    expect(runner).toBeInstanceOf(OpenAIRunner);
-  });
-
-  test('returns AnthropicRunner for protocol: anthropic', () => {
-    const preset: ApiPreset = { ...mockPreset, protocol: 'anthropic' };
-    const runner = createRunner(preset);
-    expect(runner).toBeInstanceOf(AnthropicRunner);
-  });
-
-  test('returns AnthropicRunner when protocol is undefined (default)', () => {
+  test('returns UnifiedRunner for default protocol', () => {
     const runner = createRunner(mockPreset);
-    expect(runner).toBeInstanceOf(AnthropicRunner);
+    expect(runner).toBeInstanceOf(UnifiedRunner);
   });
 
-  test('both runners implement AgentRunner interface', () => {
-    const anthropic = createRunner(mockPreset);
-    const openai = createRunner(mockOpenAIPreset);
-    // TypeScript compile-time check: both have run() method
-    expect(typeof anthropic.run).toBe('function');
-    expect(typeof openai.run).toBe('function');
+  test('returns UnifiedRunner for openai protocol', () => {
+    const runner = createRunner(mockOpenAIPreset);
+    expect(runner).toBeInstanceOf(UnifiedRunner);
+  });
+
+  test('returns UnifiedRunner for explicit anthropic protocol', () => {
+    const runner = createRunner({ ...mockPreset, protocol: 'anthropic' });
+    expect(runner).toBeInstanceOf(UnifiedRunner);
+  });
+
+  test('implements AgentRunner interface', () => {
+    const runner = createRunner(mockPreset);
+    expect(typeof runner.run).toBe('function');
   });
 });
 
-// ================== OpenAIRunner ==================
+// ================== UnifiedRunner ==================
 
-describe('OpenAIRunner', () => {
-  const originalFetch = globalThis.fetch;
+describe('UnifiedRunner', () => {
+  test('returns result text on success', async () => {
+    const mockGenerate = (async (opts: any) => ({
+      text: 'Task done successfully',
+      steps: [],
+      finishReason: 'stop',
+      usage: { promptTokens: 0, completionTokens: 0 },
+      warnings: [],
+      response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+      toolCalls: [],
+      toolResults: [],
+      providerMetadata: {},
+      experimental_providerMetadata: {},
+      logprobs: undefined,
+      responseMessages: [],
+      roundtrips: [],
+      sources: [],
+      reasoning: undefined,
+      reasoningDetails: [],
+      files: [],
+      request: {},
+    })) as unknown as typeof generateText;
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
+    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const result = await runner.run('test task', defaultRunOptions);
 
-  /** Convert a mock response to SSE text for the streaming OpenAI runner. */
-  function toSSE(resp: {
-    content?: string | null;
-    tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
-    finish_reason: string;
-  }): string {
-    const lines: string[] = [];
-    if (resp.content) {
-      lines.push(`data: ${JSON.stringify({
-        choices: [{ index: 0, delta: { role: 'assistant', content: resp.content }, finish_reason: null }],
-      })}`);
-    }
-    if (resp.tool_calls?.length) {
-      for (let i = 0; i < resp.tool_calls.length; i++) {
-        const tc = resp.tool_calls[i];
-        lines.push(`data: ${JSON.stringify({
-          choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{
-            index: i, id: tc.id, type: tc.type,
-            function: { name: tc.function.name, arguments: tc.function.arguments },
-          }] }, finish_reason: null }],
-        })}`);
-      }
-    }
-    lines.push(`data: ${JSON.stringify({
-      choices: [{ index: 0, delta: {}, finish_reason: resp.finish_reason }],
-    })}`);
-    lines.push('data: [DONE]');
-    return lines.join('\n\n') + '\n';
-  }
-
-  /** Helper to create a mock fetch that returns canned SSE streaming responses. */
-  function mockFetch(responses: Array<{
-    content?: string | null;
-    tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
-    finish_reason: string;
-  }>) {
-    let callIndex = 0;
-    globalThis.fetch = (async (_url: string | URL | Request, _init?: RequestInit) => {
-      const resp = responses[callIndex] ?? responses[responses.length - 1];
-      callIndex++;
-      return {
-        ok: true,
-        text: async () => toSSE(resp),
-      };
-    }) as typeof fetch;
-    return () => callIndex; // Returns call count accessor
-  }
-
-  const baseOptions: AgentRunOptions = {
-    model: 'gpt-4o',
-    timeoutMs: 30_000,
-    cwd: '/tmp',
-    debugEnabled: false,
-    presetName: 'test-openai',
-  };
-
-  test('single-turn completion (finish_reason: stop)', async () => {
-    mockFetch([{ content: 'Done!', finish_reason: 'stop' }]);
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('Say hello', baseOptions);
-    expect(result.result).toBe('Done!');
+    expect(result.result).toBe('Task done successfully');
     expect(result.error).toBeNull();
     expect(result.timedOut).toBe(false);
   });
 
-  test('single-turn completion (finish_reason: end_turn)', async () => {
-    mockFetch([{ content: 'Ended', finish_reason: 'end_turn' }]);
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('Hello', baseOptions);
-    expect(result.result).toBe('Ended');
-    expect(result.error).toBeNull();
-  });
+  test('returns fallback text when result.text is empty', async () => {
+    const mockGenerate = (async () => ({
+      text: '',
+      steps: [],
+      finishReason: 'stop',
+      usage: { promptTokens: 0, completionTokens: 0 },
+      warnings: [],
+      response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+      toolCalls: [],
+      toolResults: [],
+      providerMetadata: {},
+      experimental_providerMetadata: {},
+      logprobs: undefined,
+      responseMessages: [],
+      roundtrips: [],
+      sources: [],
+      reasoning: undefined,
+      reasoningDetails: [],
+      files: [],
+      request: {},
+    })) as unknown as typeof generateText;
 
-  test('tool call then stop', async () => {
-    mockFetch([
-      {
-        content: null,
-        tool_calls: [{
-          id: 'tc-1',
-          type: 'function',
-          function: { name: 'bash', arguments: JSON.stringify({ command: 'echo hi' }) },
-        }],
-        finish_reason: 'tool_calls',
-      },
-      { content: 'All done', finish_reason: 'stop' },
-    ]);
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('Run echo', baseOptions);
-    expect(result.result).toBe('All done');
-    expect(result.error).toBeNull();
-  });
+    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const result = await runner.run('test task', defaultRunOptions);
 
-  test('multi-turn tool calls', async () => {
-    mockFetch([
-      {
-        content: null,
-        tool_calls: [{
-          id: 'tc-1',
-          type: 'function',
-          function: { name: 'bash', arguments: JSON.stringify({ command: 'echo step1' }) },
-        }],
-        finish_reason: 'tool_calls',
-      },
-      {
-        content: null,
-        tool_calls: [{
-          id: 'tc-2',
-          type: 'function',
-          function: { name: 'bash', arguments: JSON.stringify({ command: 'echo step2' }) },
-        }],
-        finish_reason: 'tool_calls',
-      },
-      { content: 'Both steps done', finish_reason: 'stop' },
-    ]);
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('Two steps', baseOptions);
-    expect(result.result).toBe('Both steps done');
-  });
-
-  test('system prompt included when provided', async () => {
-    let capturedBody: any = null;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
-      return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
-      };
-    }) as typeof fetch;
-
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    await runner.run('test', { ...baseOptions, systemPromptContent: 'You are a reviewer.' });
-    expect(capturedBody.messages[0].role).toBe('system');
-    expect(capturedBody.messages[0].content).toBe('You are a reviewer.');
-    expect(capturedBody.messages[1].role).toBe('user');
-  });
-
-  test('no system prompt when omitted', async () => {
-    let capturedBody: any = null;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
-      return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
-      };
-    }) as typeof fetch;
-
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    await runner.run('test', baseOptions);
-    expect(capturedBody.messages[0].role).toBe('user');
-  });
-
-  test('API error returns error result', async () => {
-    globalThis.fetch = (async () => ({
-      ok: false,
-      status: 401,
-      text: async () => 'Unauthorized',
-    })) as typeof fetch;
-
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('test', baseOptions);
-    expect(result.error).toContain('401');
-    expect(result.error).toContain('Unauthorized');
-    expect(result.result).toBeNull();
-  });
-
-  test('timeout returns timedOut result', async () => {
-    // Return tool_calls repeatedly to keep the loop running until the deadline fires.
-    // Each iteration adds ~10ms of overhead; with timeoutMs: 100 the deadline check
-    // fires within a few iterations.
-    mockFetch([{
-      content: null,
-      tool_calls: [{
-        id: 'tc-delay',
-        type: 'function',
-        function: { name: 'bash', arguments: JSON.stringify({ command: 'sleep 0.05' }) },
-      }],
-      finish_reason: 'tool_calls',
-    }]);
-
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('test', { ...baseOptions, timeoutMs: 100 });
-    expect(result.timedOut).toBe(true);
-    expect(result.error).toContain('timed out');
-  });
-
-  test('max iterations exceeded returns error', async () => {
-    // Always return tool_calls to exhaust iterations
-    mockFetch([{
-      content: null,
-      tool_calls: [{
-        id: 'tc-loop',
-        type: 'function',
-        function: { name: 'bash', arguments: JSON.stringify({ command: 'echo loop' }) },
-      }],
-      finish_reason: 'tool_calls',
-    }]);
-
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('infinite loop', { ...baseOptions, timeoutMs: 300_000 });
-    expect(result.error).toContain(`exceeded ${OPENAI_MAX_ITERATIONS} iterations`);
-  });
-
-  test('reasoning_effort included when set on preset', async () => {
-    let capturedBody: any = null;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
-      return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
-      };
-    }) as typeof fetch;
-
-    const presetWithReasoning: ApiPreset = {
-      ...mockOpenAIPreset,
-      reasoning_effort: 'medium',
-    };
-    const runner = new OpenAIRunner(presetWithReasoning);
-    await runner.run('test', baseOptions);
-    expect(capturedBody.reasoning_effort).toBe('medium');
-  });
-
-  test('reasoning_effort omitted when not set', async () => {
-    let capturedBody: any = null;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
-      return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
-      };
-    }) as typeof fetch;
-
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    await runner.run('test', baseOptions);
-    expect(capturedBody.reasoning_effort).toBeUndefined();
-  });
-
-  test('base URL normalization avoids double /v1', async () => {
-    let capturedUrl: string = '';
-    globalThis.fetch = (async (url: string | URL | Request) => {
-      capturedUrl = url as string;
-      return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
-      };
-    }) as typeof fetch;
-
-    const presetWithV1: ApiPreset = {
-      ...mockOpenAIPreset,
-      base_url: 'https://api.example.com/v1',
-    };
-    const runner = new OpenAIRunner(presetWithV1);
-    await runner.run('test', baseOptions);
-    expect(capturedUrl).toBe('https://api.example.com/v1/chat/completions');
-    expect(capturedUrl).not.toContain('/v1/v1/');
-  });
-
-  test('base URL without /v1 suffix also works', async () => {
-    let capturedUrl: string = '';
-    globalThis.fetch = (async (url: string | URL | Request) => {
-      capturedUrl = url as string;
-      return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
-      };
-    }) as typeof fetch;
-
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    await runner.run('test', baseOptions);
-    expect(capturedUrl).toBe('https://api.openai.com/v1/chat/completions');
-  });
-
-  test('no choices in response returns error', async () => {
-    globalThis.fetch = (async () => ({
-      ok: true,
-      text: async () => '',
-    })) as typeof fetch;
-
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('test', baseOptions);
-    expect(result.error).toContain('no choices');
-  });
-
-  test('null content on stop returns fallback message', async () => {
-    mockFetch([{ content: null, finish_reason: 'stop' }]);
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('test', baseOptions);
     expect(result.result).toBe('Task completed (no text response)');
   });
 
-  test('tool execution error returned as tool result string', async () => {
-    // read_file on nonexistent file → error string → model gets it and stops
-    mockFetch([
-      {
-        content: null,
-        tool_calls: [{
-          id: 'tc-err',
-          type: 'function',
-          function: { name: 'read_file', arguments: JSON.stringify({ file_path: '/nonexistent/file.txt' }) },
-        }],
-        finish_reason: 'tool_calls',
-      },
-      { content: 'File not found, I see', finish_reason: 'stop' },
-    ]);
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('read missing file', baseOptions);
-    expect(result.result).toBe('File not found, I see');
-  });
-
-  test('Authorization header uses preset api_key', async () => {
-    let capturedHeaders: Record<string, string> = {};
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedHeaders = Object.fromEntries((init?.headers as any) ? Object.entries(init!.headers as Record<string, string>) : []);
+  test('forwards system prompt', async () => {
+    let capturedOpts: any = null;
+    const mockGenerate = (async (opts: any) => {
+      capturedOpts = opts;
       return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
       };
-    }) as typeof fetch;
+    }) as unknown as typeof generateText;
 
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    await runner.run('test', baseOptions);
-    expect(capturedHeaders['Authorization']).toBe(`Bearer ${FAKE_KEY}`);
-  });
-
-  test('max_output_tokens override: preset value sent as max_tokens', async () => {
-    let capturedBody: any = null;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
-      return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
-      };
-    }) as typeof fetch;
-
-    const presetWithMaxTokens: ApiPreset = {
-      ...mockOpenAIPreset,
-      max_output_tokens: 4096,
-    };
-    const runner = new OpenAIRunner(presetWithMaxTokens);
-    await runner.run('test', baseOptions);
-    expect(capturedBody.max_tokens).toBe(4096);
-  });
-
-  test('max_output_tokens fallback: uses 16384 when not set on preset', async () => {
-    let capturedBody: any = null;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
-      return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
-      };
-    }) as typeof fetch;
-
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    await runner.run('test', baseOptions);
-    expect(capturedBody.max_tokens).toBe(16384);
-  });
-
-  test('max_output_tokens defensive: non-numeric value falls back to 16384', async () => {
-    let capturedBody: any = null;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
-      return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
-      };
-    }) as typeof fetch;
-
-    const presetWithInvalidTokens: ApiPreset = {
-      ...mockOpenAIPreset,
-      max_output_tokens: 'invalid' as unknown as number,
-    };
-    const runner = new OpenAIRunner(presetWithInvalidTokens);
-    await runner.run('test', baseOptions);
-    expect(capturedBody.max_tokens).toBe(16384);
-  });
-});
-
-// ================== AnthropicRunner ==================
-
-describe('AnthropicRunner', () => {
-  const baseOptions: AgentRunOptions = {
-    model: 'TestModel',
-    timeoutMs: 30_000,
-    cwd: '/tmp',
-    debugEnabled: false,
-    presetName: 'test-anthropic',
-  };
-
-  /** Create a mock query function that captures args and returns a controllable stream. */
-  function mockQueryFn(messages: Array<Record<string, unknown>>) {
-    let capturedParams: any = null;
-    let closed = false;
-
-    const fn = ((params: any) => {
-      capturedParams = params;
-      const generator = (async function* () {
-        for (const msg of messages) {
-          if (closed) return;
-          yield msg;
-        }
-      })();
-      return Object.assign(generator, {
-        close: () => { closed = true; },
-        // Query interface methods (unused in these tests, but present for type compat)
-        interrupt: async () => {},
-        setPermissionMode: async () => {},
-        setModel: async () => {},
-        setMaxThinkingTokens: async () => {},
-        initializationResult: async () => ({}),
-        supportedCommands: async () => ([]),
-        supportedModels: async () => ([]),
-        accountInfo: async () => ({}),
-        rewindFiles: async () => ({}),
-        mcpServerStatus: async () => ([]),
-        reconnectMcpServer: async () => {},
-        toggleMcpServer: async () => {},
-        setMcpServers: async () => ({}),
-        streamInput: async () => {},
-        stopTask: async () => {},
-        return: generator.return.bind(generator),
-        next: generator.next.bind(generator),
-        throw: generator.throw.bind(generator),
-        [Symbol.asyncIterator]: () => generator,
-      });
-    }) as any;
-
-    return { fn, getParams: () => capturedParams, isClosed: () => closed };
-  }
-
-  test('forwards systemPrompt when systemPromptContent is provided', async () => {
-    const { fn, getParams } = mockQueryFn([
-      { type: 'result', subtype: 'success', result: 'done' },
-    ]);
-    const runner = new AnthropicRunner(mockPreset, fn);
-    await runner.run('test task', { ...baseOptions, systemPromptContent: 'You are a planner.' });
-
-    const params = getParams();
-    expect(params.prompt).toBe('test task');
-    expect(params.options.systemPrompt).toEqual({
-      type: 'preset',
-      preset: 'claude_code',
-      append: 'You are a planner.',
+    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    await runner.run('test task', {
+      ...defaultRunOptions,
+      systemPromptContent: 'You are a code reviewer.',
     });
+
+    expect(capturedOpts.system).toBe('You are a code reviewer.');
   });
 
-  test('omits systemPrompt when systemPromptContent is not provided', async () => {
-    const { fn, getParams } = mockQueryFn([
-      { type: 'result', subtype: 'success', result: 'done' },
-    ]);
-    const runner = new AnthropicRunner(mockPreset, fn);
-    await runner.run('test task', baseOptions);
+  test('omits system prompt when not provided', async () => {
+    let capturedOpts: any = null;
+    const mockGenerate = (async (opts: any) => {
+      capturedOpts = opts;
+      return {
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
+      };
+    }) as unknown as typeof generateText;
 
-    const params = getParams();
-    expect(params.options.systemPrompt).toBeUndefined();
+    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    await runner.run('test task', defaultRunOptions);
+
+    expect(capturedOpts.system).toBeUndefined();
   });
 
-  test('forwards model, env, permissionMode, and allowedTools', async () => {
-    const { fn, getParams } = mockQueryFn([
-      { type: 'result', subtype: 'success', result: 'done' },
-    ]);
-    const runner = new AnthropicRunner(mockPreset, fn);
-    await runner.run('test task', baseOptions);
+  test('handles API error', async () => {
+    const mockGenerate = (async () => {
+      throw new Error('API key is invalid');
+    }) as unknown as typeof generateText;
 
-    const params = getParams();
-    expect(params.options.model).toBe('sonnet');
-    expect(params.options.permissionMode).toBe('default');
-    expect(params.options.allowedTools).toEqual([...ANTHROPIC_TOOL_NAMES]);
-    expect(params.options.env).toBeDefined();
-    // Verify env includes provider credentials
-    expect(params.options.env.ANTHROPIC_API_KEY).toBe(mockPreset.api_key);
-    expect(params.options.env.ANTHROPIC_BASE_URL).toBe(mockPreset.base_url);
-  });
+    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const result = await runner.run('test task', defaultRunOptions);
 
-  test('returns result on success', async () => {
-    const { fn } = mockQueryFn([
-      { type: 'assistant', message: 'working...' },
-      { type: 'result', subtype: 'success', result: 'All done!' },
-    ]);
-    const runner = new AnthropicRunner(mockPreset, fn);
-    const result = await runner.run('test task', baseOptions);
-
-    expect(result.result).toBe('All done!');
-    expect(result.error).toBeNull();
+    expect(result.result).toBeNull();
+    expect(result.error).toBe('API key is invalid');
     expect(result.timedOut).toBe(false);
   });
 
-  test('returns error on failure', async () => {
-    const { fn } = mockQueryFn([
-      { type: 'result', subtype: 'error', errors: ['something broke'] },
-    ]);
-    const runner = new AnthropicRunner(mockPreset, fn);
-    const result = await runner.run('test task', baseOptions);
+  test('handles timeout via AbortError', async () => {
+    const mockGenerate = (async () => {
+      const err = new Error('The operation was aborted');
+      err.name = 'AbortError';
+      throw err;
+    }) as unknown as typeof generateText;
+
+    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const result = await runner.run('test task', defaultRunOptions);
 
     expect(result.result).toBeNull();
-    expect(result.error).toContain('error');
-    expect(result.timedOut).toBe(false);
-  });
-
-  test('closes query on timeout', async () => {
-    // Create a stalled query that never yields a result
-    let closed = false;
-    const stalledFn = ((params: any) => {
-      const generator = (async function* () {
-        await new Promise<void>((resolve) => {
-          const check = setInterval(() => {
-            if (closed) { clearInterval(check); resolve(); }
-          }, 10);
-        });
-      })();
-      return Object.assign(generator, {
-        close: () => { closed = true; },
-        interrupt: async () => {},
-        setPermissionMode: async () => {},
-        setModel: async () => {},
-        setMaxThinkingTokens: async () => {},
-        initializationResult: async () => ({}),
-        supportedCommands: async () => ([]),
-        supportedModels: async () => ([]),
-        accountInfo: async () => ({}),
-        rewindFiles: async () => ({}),
-        mcpServerStatus: async () => ([]),
-        reconnectMcpServer: async () => {},
-        toggleMcpServer: async () => {},
-        setMcpServers: async () => ({}),
-        streamInput: async () => {},
-        stopTask: async () => {},
-        return: generator.return.bind(generator),
-        next: generator.next.bind(generator),
-        throw: generator.throw.bind(generator),
-        [Symbol.asyncIterator]: () => generator,
-      });
-    }) as any;
-
-    const runner = new AnthropicRunner(mockPreset, stalledFn);
-    const result = await runner.run('test task', { ...baseOptions, timeoutMs: 100 });
-
-    expect(result.result).toBeNull();
-    expect(result.error).toContain('timed out');
     expect(result.timedOut).toBe(true);
-    expect(closed).toBe(true); // query was closed
+    expect(result.error).toContain('timed out');
   });
 
-  test('catches exceptions from query', async () => {
-    const throwingFn = (() => {
-      throw new Error('SDK connection failed');
-    }) as any;
-
-    const runner = new AnthropicRunner(mockPreset, throwingFn);
-    const result = await runner.run('test task', baseOptions);
-
-    expect(result.result).toBeNull();
-    expect(result.error).toBe('SDK connection failed');
-    expect(result.timedOut).toBe(false);
-  });
-
-  test('filters allowedTools when provided', async () => {
-    const { fn, getParams } = mockQueryFn([
-      { type: 'result', subtype: 'success', result: 'done' },
-    ]);
-    const runner = new AnthropicRunner(mockPreset, fn);
-    await runner.run('test task', { ...baseOptions, allowedTools: ['Read', 'Glob', 'Grep'] });
-
-    const params = getParams();
-    expect(params.options.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
-  });
-
-  test('passes all tools when allowedTools is undefined', async () => {
-    const { fn, getParams } = mockQueryFn([
-      { type: 'result', subtype: 'success', result: 'done' },
-    ]);
-    const runner = new AnthropicRunner(mockPreset, fn);
-    await runner.run('test task', baseOptions);
-
-    const params = getParams();
-    expect(params.options.allowedTools).toEqual([...ANTHROPIC_TOOL_NAMES]);
-  });
-});
-
-// ================== OpenAIRunner --allowed-tools ==================
-
-describe('OpenAIRunner --allowed-tools', () => {
-  const originalFetch = globalThis.fetch;
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  const baseOptions: AgentRunOptions = {
-    model: 'gpt-4o',
-    timeoutMs: 30_000,
-    cwd: '/tmp',
-    debugEnabled: false,
-    presetName: 'test-openai',
-  };
-
-  /** Convert a mock response to SSE text for the streaming OpenAI runner. */
-  function toSSE(resp: {
-    content?: string | null;
-    tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
-    finish_reason: string;
-  }): string {
-    const lines: string[] = [];
-    if (resp.content) {
-      lines.push(`data: ${JSON.stringify({
-        choices: [{ index: 0, delta: { role: 'assistant', content: resp.content }, finish_reason: null }],
-      })}`);
-    }
-    if (resp.tool_calls?.length) {
-      for (let i = 0; i < resp.tool_calls.length; i++) {
-        const tc = resp.tool_calls[i];
-        lines.push(`data: ${JSON.stringify({
-          choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{
-            index: i, id: tc.id, type: tc.type,
-            function: { name: tc.function.name, arguments: tc.function.arguments },
-          }] }, finish_reason: null }],
-        })}`);
-      }
-    }
-    lines.push(`data: ${JSON.stringify({
-      choices: [{ index: 0, delta: {}, finish_reason: resp.finish_reason }],
-    })}`);
-    lines.push('data: [DONE]');
-    return lines.join('\n\n') + '\n';
-  }
-
-  test('sends only allowed tools in request body', async () => {
-    let capturedBody: any = null;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
+  test('forwards reasoning_effort in providerOptions', async () => {
+    let capturedOpts: any = null;
+    const mockGenerate = (async (opts: any) => {
+      capturedOpts = opts;
       return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
       };
-    }) as typeof fetch;
+    }) as unknown as typeof generateText;
 
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    await runner.run('test', { ...baseOptions, allowedTools: ['Read', 'Glob', 'Grep'] });
+    const presetWithReasoning: ApiPreset = {
+      ...mockOpenAIPreset,
+      reasoning_effort: 'high',
+    };
+    const runner = new UnifiedRunner(presetWithReasoning, mockGenerate);
+    await runner.run('test task', { ...defaultRunOptions, model: 'gpt-4o', presetName: 'test-openai' });
 
-    const toolNames = capturedBody.tools.map((t: any) => t.function.name);
-    expect(toolNames).toEqual(['read_file', 'glob', 'grep']);
-    expect(toolNames).not.toContain('write_file');
-    expect(toolNames).not.toContain('bash');
+    expect(capturedOpts.providerOptions).toEqual({ openai: { reasoningEffort: 'high' } });
   });
 
-  test('sends all 6 tools when allowedTools is undefined', async () => {
-    let capturedBody: any = null;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
+  test('does not set providerOptions when no reasoning_effort', async () => {
+    let capturedOpts: any = null;
+    const mockGenerate = (async (opts: any) => {
+      capturedOpts = opts;
       return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK', finish_reason: 'stop' }),
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
       };
-    }) as typeof fetch;
+    }) as unknown as typeof generateText;
 
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    await runner.run('test', baseOptions);
+    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    await runner.run('test task', defaultRunOptions);
 
-    expect(capturedBody.tools).toHaveLength(6);
+    expect(capturedOpts.providerOptions).toBeUndefined();
   });
 
-  test('blocks disallowed tool call with error message', async () => {
-    // First response: model tries to call write_file (disallowed)
-    // Second response: model responds with text
-    let callIndex = 0;
-    let capturedMessages: any[] = [];
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(init?.body as string);
-      capturedMessages = body.messages;
-      callIndex++;
-      if (callIndex === 1) {
-        return {
-          ok: true,
-          text: async () => toSSE({
-            tool_calls: [{
-              id: 'tc-blocked',
-              type: 'function',
-              function: { name: 'write_file', arguments: JSON.stringify({ file_path: '/tmp/x', content: 'bad' }) },
-            }],
-            finish_reason: 'tool_calls',
-          }),
-        };
-      }
+  test('forwards max_output_tokens as maxOutputTokens', async () => {
+    let capturedOpts: any = null;
+    const mockGenerate = (async (opts: any) => {
+      capturedOpts = opts;
       return {
-        ok: true,
-        text: async () => toSSE({ content: 'OK understood', finish_reason: 'stop' }),
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
       };
-    }) as typeof fetch;
+    }) as unknown as typeof generateText;
 
-    const runner = new OpenAIRunner(mockOpenAIPreset);
-    const result = await runner.run('test', { ...baseOptions, allowedTools: ['Read', 'Glob', 'Grep'] });
+    const presetWithTokens: ApiPreset = {
+      ...mockPreset,
+      max_output_tokens: 8192,
+    };
+    const runner = new UnifiedRunner(presetWithTokens, mockGenerate);
+    await runner.run('test task', defaultRunOptions);
 
-    expect(result.result).toBe('OK understood');
-    // Verify the tool error message was sent back
-    const toolMsg = capturedMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === 'tc-blocked');
-    expect(toolMsg?.content).toContain("not allowed");
+    expect(capturedOpts.maxOutputTokens).toBe(8192);
+  });
+
+  test('defaults maxOutputTokens to 16384 for openai protocol', async () => {
+    let capturedOpts: any = null;
+    const mockGenerate = (async (opts: any) => {
+      capturedOpts = opts;
+      return {
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
+      };
+    }) as unknown as typeof generateText;
+
+    const runner = new UnifiedRunner(mockOpenAIPreset, mockGenerate);
+    await runner.run('test task', { ...defaultRunOptions, model: 'gpt-4o', presetName: 'test-openai' });
+
+    expect(capturedOpts.maxOutputTokens).toBe(16384);
+  });
+
+  test('defaults maxOutputTokens to undefined for anthropic protocol', async () => {
+    let capturedOpts: any = null;
+    const mockGenerate = (async (opts: any) => {
+      capturedOpts = opts;
+      return {
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
+      };
+    }) as unknown as typeof generateText;
+
+    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    await runner.run('test task', defaultRunOptions);
+
+    expect(capturedOpts.maxOutputTokens).toBeUndefined();
+  });
+
+  test('passes tools from buildToolSet', async () => {
+    let capturedOpts: any = null;
+    const mockGenerate = (async (opts: any) => {
+      capturedOpts = opts;
+      return {
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
+      };
+    }) as unknown as typeof generateText;
+
+    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    await runner.run('test task', {
+      ...defaultRunOptions,
+      allowedTools: ['Read', 'Grep'],
+    });
+
+    const toolKeys = Object.keys(capturedOpts.tools);
+    expect(toolKeys.sort()).toEqual(['grep', 'read']);
   });
 });

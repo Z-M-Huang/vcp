@@ -42,27 +42,8 @@ VCP enforces standards through three layers:
 
 The API task runner (`plugins/dev-buddy/scripts/api-task-runner.ts`) runs one task per invocation, outputs the result as JSON to stdout, and exits. Each invocation is an independent process — multiple instances can run in parallel safely.
 
-Both protocols implement the shared `AgentRunner` interface:
-- **`AnthropicRunner`** (default) — V2 Agent SDK session with 6 built-in tools
-- **`OpenAIRunner`** (`protocol: 'openai'`) — multi-turn function-calling agent loop via `fetch()` with 6 local tool implementations (read_file, write_file, edit_file, bash, glob, grep)
+A single `UnifiedRunner` implements the `AgentRunner` interface using Vercel AI SDK's `generateText()` with agentool-provided tools (read, write, edit, bash, glob, grep). The `protocol` field (`'anthropic'` | `'openai'`) selects the Vercel AI SDK provider constructor (`@ai-sdk/anthropic` or `@ai-sdk/openai`). Credentials are passed directly to the provider — no env var mapping or subprocess isolation.
 
-**Env var mapping for Anthropic API presets:**
-
-| Env Var | Source | Purpose |
-|---------|--------|---------|
-| `ANTHROPIC_BASE_URL` | `preset.base_url` | Route SDK to external provider |
-| `ANTHROPIC_API_KEY` | `preset.api_key` | Authenticate with provider |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `preset.models[0]` | Map haiku alias to provider model |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `preset.models[0]` | Map sonnet alias to provider model |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `preset.models[0]` | Map opus alias to provider model |
-| `CLAUDE_CODE_SUBAGENT_MODEL` | `preset.models[0]` | Model for nested subagents |
-
-All aliases set to the same provider model name (**case-sensitive** — e.g., `MiniMax-M2.5` not `minimax-m2.5`).
-Claude Code only accepts `haiku`/`sonnet`/`opus` as model identifiers; the env vars map those to the actual provider model.
-
-The OpenAI runner uses `preset.base_url` and `preset.api_key` directly in HTTP headers — no env var mapping needed.
-
-The subprocess env (Anthropic path) uses a platform-aware allowlist (not `...process.env`) for clean isolation.
 Per-task timeout defaults to 5 minutes, configurable via `ApiPreset.timeout_ms` (set in the web portal under "Task Timeout").
 `api-task-runner.ts --task-timeout` receives the preset's timeout value.
 
