@@ -229,7 +229,7 @@ export class UnifiedRunner implements AgentRunner {
           source: 'api-task-runner', event: 'response_shape', decision: 'info',
           details: `text=${text.length}ch steps=${steps.length} finish=${finishReason} `
             + `tokens=${JSON.stringify(usage)} msgs=${response?.messages?.length ?? 0} [${stepDetails}]`,
-        }, true);
+        }, options.debugEnabled);
 
         // text only contains the LAST step's text. If the model's final
         // step is a tool call with no accompanying text, text is empty
@@ -262,7 +262,7 @@ export class UnifiedRunner implements AgentRunner {
           await vcpLog(options.cwd, {
             source: 'api-task-runner', event: 'response_fallback', decision: 'info',
             details: `recovered ${messagesText.length}ch from response.messages (text/stepsText were empty)`,
-          }, true);
+          }, options.debugEnabled);
           return { result: messagesText, error: null, timedOut: false };
         }
 
