@@ -19,7 +19,7 @@
  */
 
 import path from 'path';
-import { generateText, stepCountIs } from 'ai';
+import { generateText, streamText, stepCountIs } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createBash, createRead, createWrite, createEdit, createGlob, createGrep } from 'agentool';
@@ -168,13 +168,15 @@ export async function gatewayCompatFetch(
 // ================== UNIFIED RUNNER ==================
 
 /**
- * Unified runner using Vercel AI SDK's generateText() with agentool tools.
+ * Unified runner using Vercel AI SDK's streamText() with agentool tools.
+ * Uses streaming to ensure compatibility with OpenAI-compatible gateways that
+ * only return content via SSE (returning content:null for non-streaming requests).
  * Handles both 'anthropic' and 'openai' protocols via different provider constructors.
  */
 export class UnifiedRunner implements AgentRunner {
-  private generateTextFn: typeof generateText;
-  constructor(private preset: ApiPreset, generateTextFn?: typeof generateText) {
-    this.generateTextFn = generateTextFn ?? generateText;
+  private streamTextFn: typeof streamText;
+  constructor(private preset: ApiPreset, streamTextFn?: typeof streamText) {
+    this.streamTextFn = streamTextFn ?? streamText;
   }
 
   async run(task: string, options: AgentRunOptions): Promise<AgentRunResult> {
@@ -202,7 +204,7 @@ export class UnifiedRunner implements AgentRunner {
       const timer = setTimeout(() => abortController.abort(), options.timeoutMs);
 
       try {
-        const result = await this.generateTextFn({
+        const stream = this.streamTextFn({
           model,
           tools,
           stopWhen: stepCountIs(MAX_AGENT_STEPS),
@@ -215,8 +217,14 @@ export class UnifiedRunner implements AgentRunner {
           }),
         });
 
+        const [text, steps] = await Promise.all([stream.text, stream.steps]);
+
+        // text only contains the LAST step's text. If the model's final
+        // step is a tool call with no accompanying text, text is empty
+        // even though intermediate steps contain the actual response.
+        const stepsText = steps.map(s => s.text).filter(Boolean).join('\n\n').trim();
         return {
-          result: result.text || 'Task completed (no text response)',
+          result: text || stepsText || 'Task completed (no text response)',
           error: null,
           timedOut: false,
         };

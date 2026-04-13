@@ -12,6 +12,7 @@ import {
 } from '../api-task-runner.ts';
 import type { AgentRunner, AgentRunOptions, AgentRunResult } from '../api-task-runner.ts';
 import type { ApiPreset } from '../../types/presets.ts';
+import type { streamText } from 'ai';
 
 // ================== TEST FIXTURES ==================
 
@@ -431,7 +432,7 @@ describe('createRunner', () => {
 
 describe('UnifiedRunner', () => {
   test('returns result text on success', async () => {
-    const mockGenerate = (async (opts: any) => ({
+    const mockStream = ((opts: any) => ({
       text: 'Task done successfully',
       steps: [],
       finishReason: 'stop',
@@ -450,9 +451,9 @@ describe('UnifiedRunner', () => {
       reasoningDetails: [],
       files: [],
       request: {},
-    })) as unknown as typeof generateText;
+    })) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockPreset, mockStream);
     const result = await runner.run('test task', defaultRunOptions);
 
     expect(result.result).toBe('Task done successfully');
@@ -461,7 +462,7 @@ describe('UnifiedRunner', () => {
   });
 
   test('returns fallback text when result.text is empty', async () => {
-    const mockGenerate = (async () => ({
+    const mockStream = (() => ({
       text: '',
       steps: [],
       finishReason: 'stop',
@@ -480,17 +481,50 @@ describe('UnifiedRunner', () => {
       reasoningDetails: [],
       files: [],
       request: {},
-    })) as unknown as typeof generateText;
+    })) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockPreset, mockStream);
     const result = await runner.run('test task', defaultRunOptions);
 
     expect(result.result).toBe('Task completed (no text response)');
   });
 
+  test('extracts text from intermediate steps when final step text is empty', async () => {
+    const mockStream = (() => ({
+      text: '',
+      steps: [
+        { text: 'Analyzing the code.', toolCalls: [], toolResults: [] },
+        { text: 'Found the issue in auth module.', toolCalls: [{}], toolResults: [{}] },
+        { text: '', toolCalls: [{}], toolResults: [{}] },
+      ],
+      finishReason: 'stop',
+      usage: { promptTokens: 100, completionTokens: 200 },
+      warnings: [],
+      response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+      toolCalls: [{}],
+      toolResults: [{}],
+      providerMetadata: {},
+      experimental_providerMetadata: {},
+      logprobs: undefined,
+      responseMessages: [],
+      roundtrips: [],
+      sources: [],
+      reasoning: undefined,
+      reasoningDetails: [],
+      files: [],
+      request: {},
+    })) as unknown as typeof streamText;
+
+    const runner = new UnifiedRunner(mockPreset, mockStream);
+    const result = await runner.run('test task', defaultRunOptions);
+
+    expect(result.result).toBe('Analyzing the code.\n\nFound the issue in auth module.');
+    expect(result.error).toBeNull();
+  });
+
   test('forwards system prompt', async () => {
     let capturedOpts: any = null;
-    const mockGenerate = (async (opts: any) => {
+    const mockStream = ((opts: any) => {
       capturedOpts = opts;
       return {
         text: 'done',
@@ -512,9 +546,9 @@ describe('UnifiedRunner', () => {
         files: [],
         request: {},
       };
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockPreset, mockStream);
     await runner.run('test task', {
       ...defaultRunOptions,
       systemPromptContent: 'You are a code reviewer.',
@@ -525,7 +559,7 @@ describe('UnifiedRunner', () => {
 
   test('omits system prompt when not provided', async () => {
     let capturedOpts: any = null;
-    const mockGenerate = (async (opts: any) => {
+    const mockStream = ((opts: any) => {
       capturedOpts = opts;
       return {
         text: 'done',
@@ -547,20 +581,20 @@ describe('UnifiedRunner', () => {
         files: [],
         request: {},
       };
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockPreset, mockStream);
     await runner.run('test task', defaultRunOptions);
 
     expect(capturedOpts.system).toBeUndefined();
   });
 
   test('handles API error', async () => {
-    const mockGenerate = (async () => {
+    const mockStream = (() => {
       throw new Error('API key is invalid');
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockPreset, mockStream);
     const result = await runner.run('test task', defaultRunOptions);
 
     expect(result.result).toBeNull();
@@ -569,13 +603,13 @@ describe('UnifiedRunner', () => {
   });
 
   test('handles timeout via AbortError', async () => {
-    const mockGenerate = (async () => {
+    const mockStream = (() => {
       const err = new Error('The operation was aborted');
       err.name = 'AbortError';
       throw err;
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockPreset, mockStream);
     const result = await runner.run('test task', defaultRunOptions);
 
     expect(result.result).toBeNull();
@@ -585,7 +619,7 @@ describe('UnifiedRunner', () => {
 
   test('forwards reasoning_effort in providerOptions', async () => {
     let capturedOpts: any = null;
-    const mockGenerate = (async (opts: any) => {
+    const mockStream = ((opts: any) => {
       capturedOpts = opts;
       return {
         text: 'done',
@@ -607,13 +641,13 @@ describe('UnifiedRunner', () => {
         files: [],
         request: {},
       };
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
     const presetWithReasoning: ApiPreset = {
       ...mockOpenAIPreset,
       reasoning_effort: 'high',
     };
-    const runner = new UnifiedRunner(presetWithReasoning, mockGenerate);
+    const runner = new UnifiedRunner(presetWithReasoning, mockStream);
     await runner.run('test task', { ...defaultRunOptions, model: 'gpt-4o', presetName: 'test-openai' });
 
     expect(capturedOpts.providerOptions).toEqual({ openai: { reasoningEffort: 'high' } });
@@ -621,7 +655,7 @@ describe('UnifiedRunner', () => {
 
   test('does not set providerOptions when no reasoning_effort', async () => {
     let capturedOpts: any = null;
-    const mockGenerate = (async (opts: any) => {
+    const mockStream = ((opts: any) => {
       capturedOpts = opts;
       return {
         text: 'done',
@@ -643,9 +677,9 @@ describe('UnifiedRunner', () => {
         files: [],
         request: {},
       };
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockPreset, mockStream);
     await runner.run('test task', defaultRunOptions);
 
     expect(capturedOpts.providerOptions).toBeUndefined();
@@ -653,7 +687,7 @@ describe('UnifiedRunner', () => {
 
   test('forwards max_output_tokens as maxOutputTokens', async () => {
     let capturedOpts: any = null;
-    const mockGenerate = (async (opts: any) => {
+    const mockStream = ((opts: any) => {
       capturedOpts = opts;
       return {
         text: 'done',
@@ -675,13 +709,13 @@ describe('UnifiedRunner', () => {
         files: [],
         request: {},
       };
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
     const presetWithTokens: ApiPreset = {
       ...mockPreset,
       max_output_tokens: 8192,
     };
-    const runner = new UnifiedRunner(presetWithTokens, mockGenerate);
+    const runner = new UnifiedRunner(presetWithTokens, mockStream);
     await runner.run('test task', defaultRunOptions);
 
     expect(capturedOpts.maxOutputTokens).toBe(8192);
@@ -689,7 +723,7 @@ describe('UnifiedRunner', () => {
 
   test('defaults maxOutputTokens to 16384 for openai protocol', async () => {
     let capturedOpts: any = null;
-    const mockGenerate = (async (opts: any) => {
+    const mockStream = ((opts: any) => {
       capturedOpts = opts;
       return {
         text: 'done',
@@ -711,9 +745,9 @@ describe('UnifiedRunner', () => {
         files: [],
         request: {},
       };
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockOpenAIPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockOpenAIPreset, mockStream);
     await runner.run('test task', { ...defaultRunOptions, model: 'gpt-4o', presetName: 'test-openai' });
 
     expect(capturedOpts.maxOutputTokens).toBe(16384);
@@ -721,7 +755,7 @@ describe('UnifiedRunner', () => {
 
   test('defaults maxOutputTokens to undefined for anthropic protocol', async () => {
     let capturedOpts: any = null;
-    const mockGenerate = (async (opts: any) => {
+    const mockStream = ((opts: any) => {
       capturedOpts = opts;
       return {
         text: 'done',
@@ -743,9 +777,9 @@ describe('UnifiedRunner', () => {
         files: [],
         request: {},
       };
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockPreset, mockStream);
     await runner.run('test task', defaultRunOptions);
 
     expect(capturedOpts.maxOutputTokens).toBeUndefined();
@@ -753,7 +787,7 @@ describe('UnifiedRunner', () => {
 
   test('passes tools from buildToolSet', async () => {
     let capturedOpts: any = null;
-    const mockGenerate = (async (opts: any) => {
+    const mockStream = ((opts: any) => {
       capturedOpts = opts;
       return {
         text: 'done',
@@ -775,9 +809,9 @@ describe('UnifiedRunner', () => {
         files: [],
         request: {},
       };
-    }) as unknown as typeof generateText;
+    }) as unknown as typeof streamText;
 
-    const runner = new UnifiedRunner(mockPreset, mockGenerate);
+    const runner = new UnifiedRunner(mockPreset, mockStream);
     await runner.run('test task', {
       ...defaultRunOptions,
       allowedTools: ['Read', 'Grep'],
