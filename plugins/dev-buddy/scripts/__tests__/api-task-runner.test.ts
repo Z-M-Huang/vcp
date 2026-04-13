@@ -493,14 +493,14 @@ describe('UnifiedRunner', () => {
     const mockStream = (() => ({
       text: '',
       steps: [
-        { text: 'Analyzing the code.', toolCalls: [], toolResults: [] },
-        { text: 'Found the issue in auth module.', toolCalls: [{}], toolResults: [{}] },
-        { text: '', toolCalls: [{}], toolResults: [{}] },
+        { text: 'Analyzing the code.', toolCalls: [], toolResults: [], finishReason: 'tool-calls' },
+        { text: 'Found the issue in auth module.', toolCalls: [{}], toolResults: [{}], finishReason: 'tool-calls' },
+        { text: '', toolCalls: [{}], toolResults: [{}], finishReason: 'stop' },
       ],
       finishReason: 'stop',
       usage: { promptTokens: 100, completionTokens: 200 },
       warnings: [],
-      response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+      response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {}, messages: [] },
       toolCalls: [{}],
       toolResults: [{}],
       providerMetadata: {},
@@ -519,6 +519,89 @@ describe('UnifiedRunner', () => {
     const result = await runner.run('test task', defaultRunOptions);
 
     expect(result.result).toBe('Analyzing the code.\n\nFound the issue in auth module.');
+    expect(result.error).toBeNull();
+  });
+
+  test('extracts text from response.messages when text and stepsText are empty', async () => {
+    const mockStream = (() => ({
+      text: '',
+      steps: [
+        { text: '', toolCalls: [{}], toolResults: [{}], finishReason: 'tool-calls' },
+        { text: '', toolCalls: [{}], toolResults: [{}], finishReason: 'stop' },
+      ],
+      finishReason: 'stop',
+      usage: { promptTokens: 100, completionTokens: 200 },
+      warnings: [],
+      response: {
+        id: 'test', timestamp: new Date(), modelId: 'test', headers: {},
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'tool-call', toolCallId: 'tc1', toolName: 'read', args: {} },
+              { type: 'text', text: 'The code review found 3 issues.' },
+            ],
+          },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'Summary: refactor the auth module.' },
+            ],
+          },
+        ],
+      },
+      toolCalls: [],
+      toolResults: [],
+      providerMetadata: {},
+      experimental_providerMetadata: {},
+      logprobs: undefined,
+      responseMessages: [],
+      roundtrips: [],
+      sources: [],
+      reasoning: undefined,
+      reasoningDetails: [],
+      files: [],
+      request: {},
+    })) as unknown as typeof streamText;
+
+    const runner = new UnifiedRunner(mockPreset, mockStream);
+    const result = await runner.run('test task', defaultRunOptions);
+
+    expect(result.result).toBe('The code review found 3 issues.\n\nSummary: refactor the auth module.');
+    expect(result.error).toBeNull();
+  });
+
+  test('extracts string content from response.messages', async () => {
+    const mockStream = (() => ({
+      text: '',
+      steps: [],
+      finishReason: 'stop',
+      usage: { promptTokens: 10, completionTokens: 20 },
+      warnings: [],
+      response: {
+        id: 'test', timestamp: new Date(), modelId: 'test', headers: {},
+        messages: [
+          { role: 'assistant', content: 'Here is the review result.' },
+        ],
+      },
+      toolCalls: [],
+      toolResults: [],
+      providerMetadata: {},
+      experimental_providerMetadata: {},
+      logprobs: undefined,
+      responseMessages: [],
+      roundtrips: [],
+      sources: [],
+      reasoning: undefined,
+      reasoningDetails: [],
+      files: [],
+      request: {},
+    })) as unknown as typeof streamText;
+
+    const runner = new UnifiedRunner(mockPreset, mockStream);
+    const result = await runner.run('test task', defaultRunOptions);
+
+    expect(result.result).toBe('Here is the review result.');
     expect(result.error).toBeNull();
   });
 

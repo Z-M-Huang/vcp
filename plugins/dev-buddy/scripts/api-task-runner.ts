@@ -217,14 +217,57 @@ export class UnifiedRunner implements AgentRunner {
           }),
         });
 
-        const [text, steps] = await Promise.all([stream.text, stream.steps]);
+        const [text, steps, response, finishReason, usage] = await Promise.all([
+          stream.text, stream.steps, stream.response, stream.finishReason, stream.usage,
+        ]);
+
+        // Always log response shape — critical for diagnosing empty-response issues
+        const stepDetails = steps.map((s, i) =>
+          `${i}:text=${s.text.length}ch/tools=${s.toolCalls?.length ?? 0}/finish=${s.finishReason}`
+        ).join(' ');
+        await vcpLog(options.cwd, {
+          source: 'api-task-runner', event: 'response_shape', decision: 'info',
+          details: `text=${text.length}ch steps=${steps.length} finish=${finishReason} `
+            + `tokens=${JSON.stringify(usage)} msgs=${response?.messages?.length ?? 0} [${stepDetails}]`,
+        }, true);
 
         // text only contains the LAST step's text. If the model's final
         // step is a tool call with no accompanying text, text is empty
         // even though intermediate steps contain the actual response.
         const stepsText = steps.map(s => s.text).filter(Boolean).join('\n\n').trim();
+
+        if (text || stepsText) {
+          return { result: text || stepsText, error: null, timedOut: false };
+        }
+
+        // Fallback: extract text content directly from response messages.
+        // The SDK's .text/.steps[].text can miss content when OpenAI-protocol
+        // gateways return it in a shape the accumulator doesn't recognize.
+        const messagesText = (response?.messages ?? [])
+          .filter((m: any) => m.role === 'assistant')
+          .flatMap((m: any) => {
+            if (typeof m.content === 'string') return [m.content];
+            if (Array.isArray(m.content)) {
+              return m.content
+                .filter((c: any) => c.type === 'text' && c.text)
+                .map((c: any) => c.text as string);
+            }
+            return [];
+          })
+          .filter(Boolean)
+          .join('\n\n')
+          .trim();
+
+        if (messagesText) {
+          await vcpLog(options.cwd, {
+            source: 'api-task-runner', event: 'response_fallback', decision: 'info',
+            details: `recovered ${messagesText.length}ch from response.messages (text/stepsText were empty)`,
+          }, true);
+          return { result: messagesText, error: null, timedOut: false };
+        }
+
         return {
-          result: text || stepsText || 'Task completed (no text response)',
+          result: 'Task completed (no text response)',
           error: null,
           timedOut: false,
         };
