@@ -17,7 +17,7 @@ function presetsMixin() {
     newPreset: {
       key: '', type: 'subscription', name: '',
       base_url: '', api_key: '', models_str: '', protocol: 'anthropic',
-      reasoning_effort_api: '', max_output_tokens: '', timeout_minutes: '',
+      reasoning_effort_api: '', max_output_tokens: '', max_context_tokens: '', timeout_minutes: '',
       command: '', args_template: '', resume_args_template: '', one_shot_args_template: '',
       supports_resume: false, supports_reasoning_effort: false, reasoning_effort: 'medium', cli_models_str: '',
     },
@@ -47,6 +47,7 @@ function presetsMixin() {
           protocol: this.newPreset.protocol || 'anthropic',
           reasoning_effort: this.newPreset.protocol === 'openai' && this.newPreset.reasoning_effort_api ? this.newPreset.reasoning_effort_api : undefined,
           max_output_tokens: this.newPreset.protocol === 'openai' && this.newPreset.max_output_tokens ? Number(this.newPreset.max_output_tokens) : undefined,
+          max_context_tokens: this.newPreset.max_context_tokens ? Number(this.newPreset.max_context_tokens) : undefined,
         };
       } else if (this.newPreset.type === 'subscription') {
         body = { type: 'subscription', name: this.newPreset.name };
@@ -121,6 +122,7 @@ function presetsMixin() {
         this.newPreset.protocol = preset.protocol || 'anthropic';
         this.newPreset.reasoning_effort_api = preset.reasoning_effort || '';
         this.newPreset.max_output_tokens = preset.max_output_tokens || '';
+        this.newPreset.max_context_tokens = preset.max_context_tokens || '';
       } else if (preset.type === 'cli') {
         this.newPreset.command = preset.command || ''; this.newPreset.args_template = preset.args_template || '';
         this.newPreset.resume_args_template = preset.resume_args_template || '';
@@ -156,7 +158,7 @@ function presetsMixin() {
 
     resetNewPreset() {
       this.editingPresetKey = null; this.formTesting = false; this.formTestResults = null;
-      this.newPreset = { key: '', type: 'subscription', name: '', base_url: '', api_key: '', models_str: '', protocol: 'anthropic', reasoning_effort_api: '', max_output_tokens: '', timeout_minutes: '', command: '', args_template: '', resume_args_template: '', one_shot_args_template: '', supports_resume: false, supports_reasoning_effort: false, reasoning_effort: 'medium', cli_models_str: '' };
+      this.newPreset = { key: '', type: 'subscription', name: '', base_url: '', api_key: '', models_str: '', protocol: 'anthropic', reasoning_effort_api: '', max_output_tokens: '', max_context_tokens: '', timeout_minutes: '', command: '', args_template: '', resume_args_template: '', one_shot_args_template: '', supports_resume: false, supports_reasoning_effort: false, reasoning_effort: 'medium', cli_models_str: '' };
     },
 
     // ============================================================

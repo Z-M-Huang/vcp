@@ -868,6 +868,110 @@ describe('UnifiedRunner', () => {
     expect(capturedOpts.maxOutputTokens).toBeUndefined();
   });
 
+  test('attaches onStepFinish when debugEnabled is true', async () => {
+    let capturedOpts: any = null;
+    const mockStream = ((opts: any) => {
+      capturedOpts = opts;
+      return {
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
+      };
+    }) as unknown as typeof streamText;
+
+    const runner = new UnifiedRunner(mockPreset, mockStream);
+    await runner.run('test task', { ...defaultRunOptions, debugEnabled: true });
+
+    expect(typeof capturedOpts.onStepFinish).toBe('function');
+  });
+
+  test('does not attach onStepFinish when debugEnabled is false', async () => {
+    let capturedOpts: any = null;
+    const mockStream = ((opts: any) => {
+      capturedOpts = opts;
+      return {
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
+      };
+    }) as unknown as typeof streamText;
+
+    const runner = new UnifiedRunner(mockPreset, mockStream);
+    await runner.run('test task', { ...defaultRunOptions, debugEnabled: false });
+
+    expect(capturedOpts.onStepFinish).toBeUndefined();
+  });
+
+  test('onStepFinish does not throw on mixed step with text and tools', async () => {
+    let capturedOpts: any = null;
+    const mockStream = ((opts: any) => {
+      capturedOpts = opts;
+      return {
+        text: 'done',
+        steps: [],
+        finishReason: 'stop',
+        usage: { promptTokens: 0, completionTokens: 0 },
+        warnings: [],
+        response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+        toolCalls: [],
+        toolResults: [],
+        providerMetadata: {},
+        experimental_providerMetadata: {},
+        logprobs: undefined,
+        responseMessages: [],
+        roundtrips: [],
+        sources: [],
+        reasoning: undefined,
+        reasoningDetails: [],
+        files: [],
+        request: {},
+      };
+    }) as unknown as typeof streamText;
+
+    const runner = new UnifiedRunner(mockPreset, mockStream);
+    await runner.run('test task', { ...defaultRunOptions, debugEnabled: true });
+
+    // Invoke the callback with a mixed step (text + tool calls) — must not throw
+    await expect(capturedOpts.onStepFinish({
+      stepNumber: 0,
+      finishReason: 'tool-calls',
+      text: 'Some analysis text',
+      toolCalls: [{ toolName: 'read', input: { file_path: '/app/foo.ts' } }],
+      toolResults: [{ toolName: 'read', output: 'line1\nline2\nline3' }],
+      usage: { inputTokens: 100, outputTokens: 50 },
+    })).resolves.toBeUndefined();
+  });
+
   test('passes tools from buildToolSet', async () => {
     let capturedOpts: any = null;
     const mockStream = ((opts: any) => {
@@ -902,5 +1006,110 @@ describe('UnifiedRunner', () => {
 
     const toolKeys = Object.keys(capturedOpts.tools);
     expect(toolKeys.sort()).toEqual(['grep', 'read']);
+  });
+
+  test('works with max_context_tokens configured', async () => {
+    const presetWithContext: ApiPreset = {
+      ...mockPreset,
+      max_context_tokens: 200000,
+      max_output_tokens: 16384,
+    };
+
+    const mockStream = (() => ({
+      text: 'done',
+      steps: [],
+      finishReason: 'stop',
+      usage: { promptTokens: 0, completionTokens: 0 },
+      warnings: [],
+      response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+      toolCalls: [],
+      toolResults: [],
+      providerMetadata: {},
+      experimental_providerMetadata: {},
+      logprobs: undefined,
+      responseMessages: [],
+      roundtrips: [],
+      sources: [],
+      reasoning: undefined,
+      reasoningDetails: [],
+      files: [],
+      request: {},
+    })) as unknown as typeof streamText;
+
+    const runner = new UnifiedRunner(presetWithContext, mockStream);
+    const result = await runner.run('test task', defaultRunOptions);
+
+    expect(result.result).toBe('done');
+    expect(result.error).toBeNull();
+  });
+
+  test('works with max_context_tokens but no max_output_tokens', async () => {
+    const presetWithContext: ApiPreset = {
+      ...mockPreset,
+      max_context_tokens: 50000, // Small context to test clamping
+    };
+
+    const mockStream = (() => ({
+      text: 'done',
+      steps: [],
+      finishReason: 'stop',
+      usage: { promptTokens: 0, completionTokens: 0 },
+      warnings: [],
+      response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+      toolCalls: [],
+      toolResults: [],
+      providerMetadata: {},
+      experimental_providerMetadata: {},
+      logprobs: undefined,
+      responseMessages: [],
+      roundtrips: [],
+      sources: [],
+      reasoning: undefined,
+      reasoningDetails: [],
+      files: [],
+      request: {},
+    })) as unknown as typeof streamText;
+
+    const runner = new UnifiedRunner(presetWithContext, mockStream);
+    const result = await runner.run('test task', defaultRunOptions);
+
+    expect(result.result).toBe('done');
+    expect(result.error).toBeNull();
+  });
+
+  test('ignores invalid max_context_tokens (non-number)', async () => {
+    // This would be caught by preset validation, but test the runner's guard
+    const presetInvalidContext: ApiPreset = {
+      ...mockPreset,
+      max_context_tokens: 'invalid' as unknown as number,
+    };
+
+    const mockStream = (() => ({
+      text: 'done',
+      steps: [],
+      finishReason: 'stop',
+      usage: { promptTokens: 0, completionTokens: 0 },
+      warnings: [],
+      response: { id: 'test', timestamp: new Date(), modelId: 'test', headers: {} },
+      toolCalls: [],
+      toolResults: [],
+      providerMetadata: {},
+      experimental_providerMetadata: {},
+      logprobs: undefined,
+      responseMessages: [],
+      roundtrips: [],
+      sources: [],
+      reasoning: undefined,
+      reasoningDetails: [],
+      files: [],
+      request: {},
+    })) as unknown as typeof streamText;
+
+    const runner = new UnifiedRunner(presetInvalidContext, mockStream);
+    const result = await runner.run('test task', defaultRunOptions);
+
+    // Should still work - the invalid value is ignored by the type guard
+    expect(result.result).toBe('done');
+    expect(result.error).toBeNull();
   });
 });

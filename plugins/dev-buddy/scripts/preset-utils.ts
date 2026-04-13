@@ -234,6 +234,16 @@ export function validatePreset(preset: unknown): Preset {
           throw new Error('API preset max_output_tokens must not exceed 1000000');
         }
       }
+      // max_context_tokens is optional but must be a positive integer if present
+      if (p.max_context_tokens !== undefined) {
+        if (typeof p.max_context_tokens !== 'number' || !Number.isInteger(p.max_context_tokens) || (p.max_context_tokens as number) <= 0) {
+          throw new Error('API preset max_context_tokens must be a positive integer');
+        }
+        // Validate that max_output_tokens < max_context_tokens when both are set
+        if (p.max_output_tokens !== undefined && (p.max_output_tokens as number) >= (p.max_context_tokens as number)) {
+          throw new Error(`API preset max_output_tokens (${p.max_output_tokens}) must be less than max_context_tokens (${p.max_context_tokens})`);
+        }
+      }
       return p as unknown as ApiPreset;
     }
     case 'subscription': {

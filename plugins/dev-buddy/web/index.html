@@ -124,6 +124,10 @@
               <input type="number" x-model="newPreset.max_output_tokens" placeholder="16384" min="1" step="1">
             </label>
             <label>
+              Max Context Tokens <span class="optional-label">(optional, enables context compaction)</span>
+              <input type="number" x-model="newPreset.max_context_tokens" placeholder="200000" min="1" step="1">
+            </label>
+            <label>
               Base URL
               <input type="url" x-model="newPreset.base_url" placeholder="https://openrouter.ai/api" required>
             </label>
@@ -345,6 +349,10 @@
                   <div class="detail-row" x-show="preset.protocol === 'openai' && preset.max_output_tokens">
                     <span class="label">Max Output Tokens:</span>
                     <span x-text="preset.max_output_tokens"></span>
+                  </div>
+                  <div class="detail-row" x-show="preset.max_context_tokens">
+                    <span class="label">Max Context Tokens:</span>
+                    <span x-text="preset.max_context_tokens"></span>
                   </div>
                 </div>
               </template>

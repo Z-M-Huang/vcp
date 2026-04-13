@@ -330,6 +330,67 @@ describe('validatePreset: API max_output_tokens', () => {
   });
 });
 
+// ================== validatePreset: API max_context_tokens ==================
+
+describe('validatePreset: API max_context_tokens', () => {
+  test('accepts valid positive integer (200000)', () => {
+    const preset = makeApiPreset({ max_context_tokens: 200000 });
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+
+  test('rejects zero (0)', () => {
+    const preset = makeApiPreset({ max_context_tokens: 0 });
+    expect(() => validatePreset(preset)).toThrow('max_context_tokens must be a positive integer');
+  });
+
+  test('rejects negative value (-100)', () => {
+    const preset = makeApiPreset({ max_context_tokens: -100 });
+    expect(() => validatePreset(preset)).toThrow('max_context_tokens must be a positive integer');
+  });
+
+  test('rejects non-integer float (12.5)', () => {
+    const preset = makeApiPreset({ max_context_tokens: 12.5 });
+    expect(() => validatePreset(preset)).toThrow('max_context_tokens must be a positive integer');
+  });
+
+  test('rejects non-number string', () => {
+    const preset = makeApiPreset({ max_context_tokens: 'abc' });
+    expect(() => validatePreset(preset)).toThrow('max_context_tokens must be a positive integer');
+  });
+
+  test('accepts absent field (optional)', () => {
+    const preset = makeApiPreset();
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+});
+
+describe('validatePreset: API max_output_tokens vs max_context_tokens', () => {
+  test('rejects max_output_tokens >= max_context_tokens', () => {
+    const preset = makeApiPreset({ max_output_tokens: 200000, max_context_tokens: 200000 });
+    expect(() => validatePreset(preset)).toThrow('must be less than max_context_tokens');
+  });
+
+  test('rejects max_output_tokens > max_context_tokens', () => {
+    const preset = makeApiPreset({ max_output_tokens: 250000, max_context_tokens: 200000 });
+    expect(() => validatePreset(preset)).toThrow('must be less than max_context_tokens');
+  });
+
+  test('accepts max_output_tokens < max_context_tokens', () => {
+    const preset = makeApiPreset({ max_output_tokens: 16384, max_context_tokens: 200000 });
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+
+  test('accepts max_output_tokens absent with max_context_tokens', () => {
+    const preset = makeApiPreset({ max_context_tokens: 200000 });
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+
+  test('accepts max_context_tokens absent with max_output_tokens', () => {
+    const preset = makeApiPreset({ max_output_tokens: 16384 });
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+});
+
 // ================== maskApiKey ==================
 
 describe('maskApiKey', () => {

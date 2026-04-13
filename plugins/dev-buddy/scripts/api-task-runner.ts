@@ -19,10 +19,11 @@
  */
 
 import path from 'path';
-import { generateText, streamText, stepCountIs } from 'ai';
+import { generateText, streamText, stepCountIs, wrapLanguageModel } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createBash, createRead, createWrite, createEdit, createGlob, createGrep } from 'agentool';
+import { createContextCompaction } from 'agentool/context-compaction';
 import { readPresets, maskApiKey } from './preset-utils.ts';
 import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
@@ -203,6 +204,12 @@ export class UnifiedRunner implements AgentRunner {
       const abortController = new AbortController();
       const timer = setTimeout(() => abortController.abort(), options.timeoutMs);
 
+      // Sanitize strings for single-line log entries: escape newlines, then truncate.
+      const sanitize = (s: string, max: number) => {
+        const escaped = s.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        return escaped.length > max ? escaped.slice(0, max - 3) + '...' : escaped;
+      };
+
       try {
         const stream = this.streamTextFn({
           model,
@@ -214,6 +221,44 @@ export class UnifiedRunner implements AgentRunner {
           abortSignal: abortController.signal,
           ...(this.preset.reasoning_effort && {
             providerOptions: { openai: { reasoningEffort: this.preset.reasoning_effort } },
+          }),
+          ...(options.debugEnabled && {
+            onStepFinish: async (step: any) => {
+              try {
+                await vcpLog(options.cwd, {
+                  source: 'api-task-runner', event: 'step_finish', decision: 'info',
+                  details: `step=${step.stepNumber} finish=${step.finishReason} `
+                    + `text=${step.text.length}ch tokens=${JSON.stringify(step.usage)}`,
+                }, true);
+
+                for (const tc of step.toolCalls) {
+                  await vcpLog(options.cwd, {
+                    source: 'api-task-runner', event: 'step_tool_call', decision: 'info',
+                    details: `step=${step.stepNumber} tool=${tc.toolName} `
+                      + `input=${sanitize(JSON.stringify(tc.input), 500)}`,
+                  }, true);
+                }
+
+                for (const tr of step.toolResults) {
+                  const output = typeof tr.output === 'string'
+                    ? tr.output : JSON.stringify(tr.output);
+                  await vcpLog(options.cwd, {
+                    source: 'api-task-runner', event: 'step_tool_result', decision: 'info',
+                    details: `step=${step.stepNumber} tool=${tr.toolName} `
+                      + `output=${sanitize(output, 500)}`,
+                  }, true);
+                }
+
+                if (step.text) {
+                  await vcpLog(options.cwd, {
+                    source: 'api-task-runner', event: 'step_text', decision: 'info',
+                    details: `step=${step.stepNumber} text=${sanitize(step.text, 500)}`,
+                  }, true);
+                }
+              } catch {
+                // Never let debug logging break execution
+              }
+            },
           }),
         });
 
@@ -284,6 +329,8 @@ export class UnifiedRunner implements AgentRunner {
   }
 
   private createModel(protocol: string, modelId: string) {
+    let rawModel;
+
     if (protocol === 'openai') {
       // @ai-sdk/openai expects baseURL to include /v1 (default: https://api.openai.com/v1).
       // The web portal strips /v1 on save, so presets store URLs WITHOUT /v1.
@@ -291,20 +338,43 @@ export class UnifiedRunner implements AgentRunner {
       // MUST use .chat() — .responses() is the default since AI SDK v5,
       // but third-party OpenAI-compatible gateways only implement /chat/completions.
       const baseURL = this.preset.base_url.replace(/\/v1\/?$/, '') + '/v1';
-      return createOpenAI({ apiKey: this.preset.api_key, baseURL }).chat(modelId);
+      rawModel = createOpenAI({ apiKey: this.preset.api_key, baseURL }).chat(modelId);
+    } else {
+      // Anthropic: @ai-sdk/anthropic expects baseURL to include /v1
+      // (default: https://api.anthropic.com/v1, SDK appends /messages).
+      // The web portal strips /v1 on save, so presets store URLs WITHOUT /v1.
+      // Normalize: strip any trailing /v1, then re-append to ensure exactly one.
+      // Uses gatewayCompatFetch to handle third-party gateways that return
+      // non-compliant thinking blocks (missing `signature` field).
+      const baseURL = this.preset.base_url.replace(/\/v1\/?$/, '') + '/v1';
+      rawModel = createAnthropic({
+        apiKey: this.preset.api_key,
+        baseURL,
+        fetch: gatewayCompatFetch,
+      })(modelId);
     }
-    // Anthropic: @ai-sdk/anthropic expects baseURL to include /v1
-    // (default: https://api.anthropic.com/v1, SDK appends /messages).
-    // The web portal strips /v1 on save, so presets store URLs WITHOUT /v1.
-    // Normalize: strip any trailing /v1, then re-append to ensure exactly one.
-    // Uses gatewayCompatFetch to handle third-party gateways that return
-    // non-compliant thinking blocks (missing `signature` field).
-    const baseURL = this.preset.base_url.replace(/\/v1\/?$/, '') + '/v1';
-    return createAnthropic({
-      apiKey: this.preset.api_key,
-      baseURL,
-      fetch: gatewayCompatFetch,
-    })(modelId);
+
+    // Wrap with context compaction if max_context_tokens is configured
+    if (typeof this.preset.max_context_tokens === 'number' && this.preset.max_context_tokens > 0) {
+      const maxOutput = this.resolveMaxOutputTokens();
+      // Clamp reservedOutputTokens to ensure it's less than max_context_tokens
+      const reservedOutputTokens = maxOutput && maxOutput < this.preset.max_context_tokens
+        ? maxOutput
+        : Math.min(16384, Math.floor(this.preset.max_context_tokens * 0.1)); // 10% of context, max 16k
+
+      return wrapLanguageModel({
+        model: rawModel,
+        middleware: createContextCompaction({
+          maxContextTokens: this.preset.max_context_tokens,
+          autoCompactThresholdPct: 0.80,    // compact at 80% full
+          summaryTargetPct: 0.05,           // summarize to 5% of context
+          reservedOutputTokens,
+          onCompactionFailure: 'passthrough', // don't fail on compaction errors
+        }),
+      });
+    }
+
+    return rawModel;
   }
 
   private resolveMaxOutputTokens(): number | undefined {
