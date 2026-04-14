@@ -182,18 +182,19 @@ export class UnifiedRunner implements AgentRunner {
 
   async run(task: string, options: AgentRunOptions): Promise<AgentRunResult> {
     const protocol = this.preset.protocol ?? 'anthropic';
+    const logSource = `api-task-runner[${options.presetName}/${options.model}]`;
 
     // Debug logging (3 entries)
     await vcpLog(options.cwd, {
-      source: 'api-task-runner', event: 'session_config', decision: 'info',
+      source: logSource, event: 'session_config', decision: 'info',
       details: `protocol=${protocol} model=${options.model} preset=${options.presetName} base_url=${this.preset.base_url} key=${maskApiKey(this.preset.api_key)}`,
     }, options.debugEnabled);
     await vcpLog(options.cwd, {
-      source: 'api-task-runner', event: 'session_system_prompt', decision: 'info',
+      source: logSource, event: 'session_system_prompt', decision: 'info',
       details: options.systemPromptContent ?? 'none',
     }, options.debugEnabled);
     await vcpLog(options.cwd, {
-      source: 'api-task-runner', event: 'session_task', decision: 'info',
+      source: logSource, event: 'session_task', decision: 'info',
       details: task,
     }, options.debugEnabled);
 
@@ -226,14 +227,14 @@ export class UnifiedRunner implements AgentRunner {
             onStepFinish: async (step: any) => {
               try {
                 await vcpLog(options.cwd, {
-                  source: 'api-task-runner', event: 'step_finish', decision: 'info',
+                  source: logSource, event: 'step_finish', decision: 'info',
                   details: `step=${step.stepNumber} finish=${step.finishReason} `
                     + `text=${step.text.length}ch tokens=${JSON.stringify(step.usage)}`,
                 }, true);
 
                 for (const tc of step.toolCalls) {
                   await vcpLog(options.cwd, {
-                    source: 'api-task-runner', event: 'step_tool_call', decision: 'info',
+                    source: logSource, event: 'step_tool_call', decision: 'info',
                     details: `step=${step.stepNumber} tool=${tc.toolName} `
                       + `input=${sanitize(JSON.stringify(tc.input), 500)}`,
                   }, true);
@@ -243,7 +244,7 @@ export class UnifiedRunner implements AgentRunner {
                   const output = typeof tr.output === 'string'
                     ? tr.output : JSON.stringify(tr.output);
                   await vcpLog(options.cwd, {
-                    source: 'api-task-runner', event: 'step_tool_result', decision: 'info',
+                    source: logSource, event: 'step_tool_result', decision: 'info',
                     details: `step=${step.stepNumber} tool=${tr.toolName} `
                       + `output=${sanitize(output, 500)}`,
                   }, true);
@@ -251,7 +252,7 @@ export class UnifiedRunner implements AgentRunner {
 
                 if (step.text) {
                   await vcpLog(options.cwd, {
-                    source: 'api-task-runner', event: 'step_text', decision: 'info',
+                    source: logSource, event: 'step_text', decision: 'info',
                     details: `step=${step.stepNumber} text=${sanitize(step.text, 500)}`,
                   }, true);
                 }
@@ -271,7 +272,7 @@ export class UnifiedRunner implements AgentRunner {
           `${i}:text=${s.text.length}ch/tools=${s.toolCalls?.length ?? 0}/finish=${s.finishReason}`
         ).join(' ');
         await vcpLog(options.cwd, {
-          source: 'api-task-runner', event: 'response_shape', decision: 'info',
+          source: logSource, event: 'response_shape', decision: 'info',
           details: `text=${text.length}ch steps=${steps.length} finish=${finishReason} `
             + `tokens=${JSON.stringify(usage)} msgs=${response?.messages?.length ?? 0} [${stepDetails}]`,
         }, options.debugEnabled);
@@ -305,7 +306,7 @@ export class UnifiedRunner implements AgentRunner {
 
         if (messagesText) {
           await vcpLog(options.cwd, {
-            source: 'api-task-runner', event: 'response_fallback', decision: 'info',
+            source: logSource, event: 'response_fallback', decision: 'info',
             details: `recovered ${messagesText.length}ch from response.messages (text/stepsText were empty)`,
           }, options.debugEnabled);
           return { result: messagesText, error: null, timedOut: false };

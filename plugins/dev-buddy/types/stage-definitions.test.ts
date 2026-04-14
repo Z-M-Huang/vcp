@@ -12,9 +12,9 @@ import type { StageType, LegacyStageType } from './stage-definitions.ts';
 // ─── VALID_STAGE_TYPES ───────────────────────────────────────────────────────
 
 describe('VALID_STAGE_TYPES', () => {
-  test('contains all 6 Ralph stage types', () => {
-    expect(VALID_STAGE_TYPES.size).toBe(6);
-    for (const t of ['discovery', 'ralph-requirements', 'decomposition', 'ralph-build', 'ralph-code-review', 'ralph-uat']) {
+  test('contains all 7 stage types (6 pipeline + 1 optional)', () => {
+    expect(VALID_STAGE_TYPES.size).toBe(7);
+    for (const t of ['discovery', 'ralph-requirements', 'decomposition', 'ralph-build', 'ralph-code-review', 'ralph-uat', 'unit-review']) {
       expect(VALID_STAGE_TYPES.has(t)).toBe(true);
     }
   });

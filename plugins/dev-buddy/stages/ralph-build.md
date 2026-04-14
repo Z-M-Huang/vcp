@@ -13,6 +13,7 @@ Implement ONE unit of work. You receive a unit plan file path. Read it, implemen
 ## Process
 
 1. **Read the unit plan file** from disk — it contains everything you need
+1b. **Check for review feedback** — If the unit plan contains a `## Review Feedback` section, read it. This contains findings from a prior semantic review explaining why the previous attempt was rejected. Address every finding in your implementation.
 2. **Read discovered context** — understand existing patterns before writing code
 3. **Implement** — touch ONLY the files listed in the unit plan
 4. **Run backpressure** — execute the test/typecheck/lint commands from the plan
@@ -25,6 +26,7 @@ Implement ONE unit of work. You receive a unit plan file path. Read it, implemen
 - **Search before assuming.** If the plan says to use a utility, verify it exists (Glob/Grep).
 - **Follow existing patterns.** The discovered context section tells you what conventions to follow.
 - **Run backpressure yourself** as a self-check. The build-loop-runner will run backpressure independently — its mechanical verdict is authoritative for determining unit pass/fail.
+- **Address review feedback.** If a `## Review Feedback` section exists in the unit plan, every finding listed there is a binding correction. Do not repeat the same mistake.
 - **No design decisions.** The unit plan has already made all design decisions. Follow them exactly.
 - **No over-engineering.** Implement the minimum required to pass backpressure.
 - **Do NOT write Status or Attempts.** The build-loop-runner owns `**Status:**` and `**Attempts:**` fields in the unit plan file. Do not modify the unit plan file at all — only modify project source files.

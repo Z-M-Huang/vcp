@@ -124,14 +124,7 @@ export interface BackpressureResult {
 }
 
 // ─── BUILD LOOP RUNNER TYPES ────────────────────────────────────────────────
-// Types for the mechanical build loop (build-loop-runner.ts).
-
-/** A single task update operation for the Ralph orchestrator to replay. */
-export interface TaskProjectionOp {
-  ref: string;
-  status: 'in_progress' | 'completed' | 'failed';
-  note?: string;
-}
+// Types for the single-unit build executor (build-loop-runner.ts).
 
 /** Result of dispatching one build unit via stage-runner.ts. */
 export interface UnitBuildDispatchResult {
@@ -149,35 +142,33 @@ export interface UnitBuildDispatchResult {
   error?: string;
 }
 
-/** Outcome of a single unit build attempt. */
-export interface UnitBuildOutcome {
-  unitId: number;
-  unitPath: string;
-  attempt: number;
-  maxAttempts: number;
-  dispatch: UnitBuildDispatchResult;
-  backpressure: BackpressureResult[];
-  outcome: 'done' | 'retry' | 'failed';
-}
-
-/** Terminal result returned by build-loop-runner.ts to the Ralph orchestrator. */
-export interface BuildLoopRunnerResult {
-  event: 'build_loop_complete' | 'build_loop_blocked' | 'build_loop_error';
-  slug: string;
-  terminalPlanStatus: PlanStatus;
-  nextStep: 'requery_state_machine' | 'report_blocked' | 'report_error';
-  taskOperations: TaskProjectionOp[];
-  units: UnitBuildOutcome[];
-  summary: string;
-  blocked?: { reason: string; preconditionError?: string };
-  error?: { message: string };
-}
-
 /** Patch applied to a unit plan file's metadata by the build loop runner. */
 export interface UnitStatusPatch {
   status: 'pending' | 'done' | 'failed';
   attempts: number;
   appendResult: string;
+}
+
+/** Result of a single-unit build invocation (single-unit-per-invocation model). */
+export interface SingleUnitResult {
+  event: 'unit_done' | 'unit_failed' | 'unit_error';
+  unitId: number;
+  unitPath: string;
+  attempt: number;
+  maxAttempts: number;
+  outcome: 'done' | 'failed';
+  summary: string;
+  error?: string;
+}
+
+/** Result of per-unit semantic review (optional step after mechanical backpressure). */
+export interface UnitReviewResult {
+  /** True if unit-review not configured (empty executors). */
+  skipped: boolean;
+  /** True if review passed or was skipped. */
+  passed: boolean;
+  /** Reviewer findings (empty if passed/skipped). */
+  feedback: string;
 }
 
 /** Pipeline stages in execution order (10 entries, including 3 review gates). */

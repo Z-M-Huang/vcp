@@ -60,39 +60,41 @@ flowchart TD
     DC_UC -->|Approve| Q1
     DC_UC -->|Reject / Context| DC
 
-    Q1 -->|"invoke_skill: ralph-build"| BUILD_ENTRY
+    Q1 -->|"invoke_skill: ralph-build<br/>(per unit)"| BUILD_ENTRY
 
-    subgraph BUILD_MECHANICAL["build-loop-runner.ts — no orchestrator LLM in control loop"]
-        BUILD_ENTRY["CC → Bash: build-loop-runner.ts<br/>(single call, owns entire build loop)"]
-        B_SM["import: state-machine main ⟶ next unit"]
+    subgraph BUILD_MECHANICAL["build-loop-runner.ts --unit N — retry loop per unit"]
+        BUILD_ENTRY["CC → Bash: build-loop-runner.ts --unit N"]
         B_DISPATCH["subprocess: stage-runner.ts<br/>⟶ configured executor"]
         B_BP{"spawnSync: backpressure<br/>test, typecheck, lint"}
-        B_WRITE_PASS["Write Status: done<br/>+ Attempts to unit file"]
-        B_WRITE_FAIL["Write Status: pending/failed<br/>+ Attempts to unit file"]
-        B_MORE{"More<br/>units?"}
+        B_REVIEW{"unit-review<br/>configured?"}
+        B_WRITE_PASS["Write Status: done"]
+        B_RETRY["Write Status: pending<br/>(retry)"]
+        B_FAILED["Write Status: failed"]
 
-        BUILD_ENTRY --> B_SM
-        B_SM --> B_DISPATCH
+        BUILD_ENTRY --> B_DISPATCH
         B_DISPATCH --> B_BP
-        B_BP -->|fail, attempts left| B_WRITE_FAIL
-        B_WRITE_FAIL --> B_SM
-        B_BP -->|pass| B_WRITE_PASS
-        B_WRITE_PASS --> B_MORE
-        B_MORE -->|yes| B_SM
+        B_BP -->|pass| B_REVIEW
+        B_REVIEW -->|"skip / PASS"| B_WRITE_PASS
+        B_REVIEW -->|"NEEDS_CHANGES,<br/>attempts left"| B_RETRY
+        B_REVIEW -->|"NEEDS_CHANGES,<br/>exhausted"| B_FAILED
+        B_BP -->|fail, attempts left| B_RETRY
+        B_RETRY --> B_DISPATCH
+        B_BP -->|fail, exhausted| B_FAILED
     end
 
-    B_MORE -->|"all done ⟶ JSON: build_loop_complete"| Q1
+    B_WRITE_PASS -->|"JSON: unit_done"| Q1
+    B_FAILED -->|"JSON: unit_failed"| Q1
 
     Q1 -->|"invoke_skill: review"| CR
     CR["CODE REVIEW — multi-AI flow tracing<br/>🔧 CC → Bash: stage-runner.ts"]
     CR -->|approved| Q1
-    CR -->|needs_changes| BUILD_ENTRY
+    CR -->|needs_changes| Q1
     CR -->|rejected| STOP([Escalate to User])
 
     Q1 -->|"invoke_skill: uat"| UAT
     UAT["UAT — Playwright + full backpressure<br/>🔧 CC → Bash: stage-runner.ts"]
     UAT -->|all pass| DONE([Done])
-    UAT -->|any fail| BUILD_ENTRY
+    UAT -->|any fail| Q1
 ```
 
 ```mermaid
@@ -125,36 +127,42 @@ sequenceDiagram
         CC->>FS: Write approveStatus to plan
     end
 
-    CC->>SM: Bash: --action next
-    SM-->>CC: JSON: {actions: [update_tasks(unit:1→in_progress), invoke_skill(ralph-build, unit:1)]}
-
     rect rgb(255, 235, 220)
-        Note over BLR,FS: BUILD — no orchestrator LLM in control loop
-        CC->>BLR: Bash: --plan X --cwd Y (single call)
-        loop For each unit in dependency order
-            BLR->>SM: import main(plan, 'next')
-            SM->>FS: Read plan + unit files
-            SM-->>BLR: {update_tasks + invoke_skill(build, unitId, unitPath)}
-            BLR->>FS: Write Attempts++ (crash-safe)
-            BLR->>SR: subprocess: --stage-type ralph-build --task-stdin <unit plan>
-            SR->>EX: Dispatch configured build executor
-            EX-->>SR: Implementation result
-            SR-->>BLR: JSON: {synthesis}
-            BLR->>BLR: runBackpressure(commands, cwd)
-            alt all backpressure pass
-                BLR->>FS: Write Status: done
-            else fail + attempts remain
-                BLR->>FS: Write Status: pending (retry)
-            else fail + exhausted
-                BLR->>FS: Write Status: failed
+        Note over CC,FS: BUILD — per-unit dispatch, retries internal to runner
+        loop For each unit (CC drives via state machine)
+            CC->>SM: Bash: --action next
+            SM-->>CC: JSON: {invoke_skill(ralph-build, unitId, unitPath)}
+            CC->>CC: TaskUpdate(unit N → in_progress)
+            CC->>BLR: Bash: --plan X --cwd Y --unit N
+            loop Retry loop (mechanical, inside runner)
+                BLR->>FS: Write Attempts++ (crash-safe)
+                BLR->>SR: subprocess: --stage-type ralph-build --task-stdin
+                SR->>EX: Dispatch configured build executor
+                EX-->>SR: Implementation result
+                SR-->>BLR: JSON: {synthesis}
+                BLR->>BLR: runBackpressure(commands, cwd)
+                alt all backpressure pass
+                    opt unit-review configured
+                        BLR->>SR: subprocess: --stage-type unit-review --task-stdin
+                        SR->>EX: Dispatch reviewer executor(s)
+                        EX-->>SR: Review verdict
+                        SR-->>BLR: JSON: {synthesis: PASS|NEEDS_CHANGES}
+                        alt NEEDS_CHANGES + attempts remain
+                            BLR->>FS: Write Review Feedback + Status: pending
+                        end
+                    end
+                    BLR->>FS: Write Status: done
+                else fail + attempts remain
+                    BLR->>FS: Write Status: pending (retry)
+                else fail + exhausted
+                    BLR->>FS: Write Status: failed
+                end
             end
+            BLR-->>CC: JSON: {event: unit_done|unit_failed}
+            CC->>CC: TaskUpdate(unit N → completed|failed)
         end
-        Note over BLR: SM returns write_plan(build→review)<br/>when all units done
-        BLR->>FS: Apply write_plan edits to plan file
-        BLR-->>CC: JSON: {build_loop_complete, taskOps[], units[]}
     end
 
-    CC->>CC: Replay taskOperations (TaskUpdate)
     CC->>SM: Bash: --action next
 
     rect rgb(220, 245, 220)
@@ -170,7 +178,7 @@ sequenceDiagram
         CC->>SM: Bash: --action next
         SM-->>CC: JSON: {write_plan(review→build)}
         CC->>FS: Apply write_plan edits
-        CC->>BLR: Bash: rebuild affected units
+        Note over CC: Re-enters build loop via SM query
     else verdict = approved
         rect rgb(240, 230, 250)
             Note over CC,EX: UAT
@@ -192,18 +200,18 @@ sequenceDiagram
         CC->>SM: Bash: --action next
         SM-->>CC: JSON: {write_plan(uat→build)}
         CC->>FS: Apply write_plan
-        CC->>BLR: Bash: rebuild failing units
+        Note over CC: Re-enters build loop via SM query
     end
 ```
 
 **Script enforcement boundaries:**
 - **ralph-state-machine.ts** (passive) — Computes next action when queried. CC calls it via Bash before every stage transition. Reads plan + unit files, returns JSON with the next action. Never drives execution.
-- **stage-runner.ts** (dispatch) — Multi-executor dispatcher. CC calls it via Bash for all 6 stages. Loads config, resolves system prompts, spawns executors (subscription/API/CLI), synthesizes outputs.
-- **build-loop-runner.ts** (mechanical loop) — Owns the entire build inner loop. CC calls it once via Bash; it loops internally: queries SM (import), dispatches executor (subprocess to stage-runner), runs backpressure (spawnSync), writes unit status (fs). Returns one JSON blob when done.
-- **CC Main Process** (LLM) — Drives the outer pipeline: queries SM, invokes scripts, validates synthesis, presents user checkpoints, replays task operations. Does NOT execute the build inner loop.
+- **stage-runner.ts** (dispatch) — Multi-executor dispatcher. CC calls it via Bash for all stages. Loads config, resolves system prompts, spawns executors (subscription/API/CLI), synthesizes outputs.
+- **build-loop-runner.ts** (single-unit executor) — Owns single-unit execution with internal retries. CC calls it per unit via Bash with `--unit N`; it retries internally: dispatches executor (subprocess to stage-runner), runs backpressure (spawnSync), optional semantic review (subprocess to stage-runner with unit-review), writes unit status (fs). Returns JSON when the unit is done or failed.
+- **CC Main Process** (LLM) — Drives the pipeline: queries SM, invokes scripts, validates synthesis, presents user checkpoints, updates tasks. Drives unit-to-unit build progression via state machine queries and task management.
 
 **Two nested loops + review gate:**
-- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), retry up to `max_build_attempts`. Code review can send units back for rework. Build inner loop is fully mechanical via `build-loop-runner.ts`.
+- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), optional per-unit semantic review, retry up to `max_build_attempts`. Code review can send units back for rework. Per-unit retry loop is fully mechanical via `build-loop-runner.ts --unit N`. Unit-to-unit progression is driven by the CC orchestrator via state machine queries and task management.
 - **Outer (UAT):** integration Ralph loop — real Playwright UAT against running app. Failures identify affected units and loop back through BUILD and CODE REVIEW (up to `max_outer_iterations`).
 - **User checkpoints** after Discovery, Requirements, and Decompose — approve, reject, or provide additional context. Each stage runs internal adversarial validation before presenting to the user.
 
@@ -216,23 +224,24 @@ sequenceDiagram
 | **Discovery** | Explore codebase + running app. Map code paths, patterns, impact points. Screenshot current state. | Yes |
 | **Requirements + UAT** | Define ACs (Given/When/Then + misinterpretation). Design Playwright UAT scenarios. Risk registry. | Yes |
 | **Decomposition** | Break into ~50 LOC units. Each unit gets its own plan file with precise instructions. | Yes |
-| **Build** | Per-unit implementation with fresh context. Orchestrator independently runs backpressure. | Single |
+| **Build** | Per-unit implementation with fresh context. Runner runs backpressure + optional semantic review. | Configurable |
 | **Code Review** | Flow tracing (point + path + intent). Stub/orphan detection. Cross-unit integration. | Yes |
 | **UAT** | Execute Playwright tests + all mechanical backpressure against running app. | Single |
 
 ---
 
-## The 8-Layer Enforcement Stack
+## The 9-Layer Enforcement Stack
 
 ```
-Layer 1: Unit plan + contracts   <- intent, data flow traces, authoritative sources
-Layer 2: Mechanical backpressure <- compilation, types, lint errors
-Layer 3: Orchestrator verify     <- subagent lies, missing sections, source violations
-Layer 4: Code review (multi-AI)  <- flow tracing, stub detection, drift probe
-Layer 5: UAT (Playwright)        <- real user scenario failures
-Layer 6: User checkpoint         <- everything above missed
-Layer 7: TaskManagement          <- process compliance (no skipping)
-Layer 8: Plan files on disk      <- state survival after compaction
+Layer 1: Unit plan + contracts     <- intent, data flow traces, authoritative sources
+Layer 2: Mechanical backpressure   <- compilation, types, lint errors
+Layer 3: Per-unit semantic review  <- AC tracing, contract verification (optional, multi-AI)
+Layer 4: Orchestrator verify       <- subagent lies, missing sections, source violations
+Layer 5: Code review (multi-AI)    <- flow tracing, stub detection, drift probe
+Layer 6: UAT (Playwright)          <- real user scenario failures
+Layer 7: User checkpoint           <- everything above missed
+Layer 8: TaskManagement            <- process compliance (no skipping)
+Layer 9: Plan files on disk        <- state survival after compaction
 ```
 
 Each layer catches what the layers above missed. With weaker models, more layers fire. With stronger models, most pass through cleanly.
@@ -285,6 +294,7 @@ Each stage skill works standalone (reads existing plan files) or as part of the 
 | ralph-requirements-analyst | Requirements | AC + UAT designer |
 | decomposer | Decomposition | Task breakdown specialist |
 | unit-builder | Build | Focused unit implementer |
+| unit-reviewer | Build (review) | Per-unit AC verifier (optional) |
 | ralph-code-reviewer | Code Review | Semantic drift detector |
 | uat-evaluator | UAT | Pessimistic test executor |
 
@@ -325,7 +335,8 @@ Use the web portal (`/dev-buddy-config`) or edit JSON directly.
     ]},
     "ralph-uat": { "executors": [
       { "system_prompt": "uat-evaluator", "preset": "anthropic-subscription", "model": "sonnet" }
-    ]}
+    ]},
+    "unit-review": { "executors": [] }
   },
   "pipelines": { "ralph": ["discovery", "ralph-requirements", "decomposition", "ralph-build", "ralph-code-review", "ralph-uat"] },
   "config_port": 8888,

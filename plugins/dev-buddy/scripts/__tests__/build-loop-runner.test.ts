@@ -8,14 +8,13 @@ import {
   replaceOrAppendSection,
   writeUnitStatus,
   extractBackpressureCommands,
-  findBuildInvokeAction,
-  findErrorAction,
-  findBlockedAction,
-  collectTaskOps,
-  applyWritePlanActions,
-  runBuildLoop,
+  resolveUnitPath,
+  runSingleUnit,
+  parseReviewVerdict,
+  readFilesTouched,
 } from '../build-loop-runner.ts';
-import type { StateMachineOutput, SkillAction, ErrorAction, BlockedAction, TaskAction, WritePlanAction } from '../ralph/types.ts';
+import type { UnitReviewResult } from '../ralph/types.ts';
+
 
 // ─── Temp directory management ─────────────────────────────────────────────
 
@@ -31,18 +30,29 @@ function makeTmpDir(): string {
 // ─── parseBuildLoopArgs ────────────────────────────────────────────────────
 
 describe('parseBuildLoopArgs', () => {
-  test('parses --plan and --cwd', () => {
-    const result = parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a/b.md', '--cwd', '/c/d']);
+  test('parses --plan, --cwd, and --unit', () => {
+    const result = parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a/b.md', '--cwd', '/c/d', '--unit', '13']);
     expect(result.planPath).toBe('/a/b.md');
     expect(result.cwd).toBe('/c/d');
+    expect(result.unitId).toBe(13);
   });
 
   test('throws when --plan missing', () => {
-    expect(() => parseBuildLoopArgs(['node', 'script.ts', '--cwd', '/c'])).toThrow('--plan');
+    expect(() => parseBuildLoopArgs(['node', 'script.ts', '--cwd', '/c', '--unit', '1'])).toThrow('--plan');
   });
 
   test('throws when --cwd missing', () => {
-    expect(() => parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a'])).toThrow('--cwd');
+    expect(() => parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a', '--unit', '1'])).toThrow('--cwd');
+  });
+
+  test('throws when --unit missing', () => {
+    expect(() => parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a', '--cwd', '/c'])).toThrow('--unit');
+  });
+
+  test('throws when --unit is not a positive integer', () => {
+    expect(() => parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a', '--cwd', '/c', '--unit', 'abc'])).toThrow('Invalid --unit');
+    expect(() => parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a', '--cwd', '/c', '--unit', '0'])).toThrow('Invalid --unit');
+    expect(() => parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a', '--cwd', '/c', '--unit', '-1'])).toThrow('Invalid --unit');
   });
 });
 
@@ -152,92 +162,21 @@ describe('extractBackpressureCommands', () => {
   });
 });
 
-// ─── Action inspection helpers ────────────────────────────────────────────
+// ─── resolveUnitPath ──────────────────────────────────────────────────────
 
-describe('findBuildInvokeAction', () => {
-  test('returns build invoke action', () => {
-    const sm: StateMachineOutput = {
-      actions: [
-        { type: 'update_tasks', operations: [{ action: 'update', ref: 'unit:1', status: 'in_progress' }] } as TaskAction,
-        { type: 'invoke_skill', skill: 'dev-buddy-build', stageType: 'ralph-build', slug: 'test', unitId: 1, unitPath: '/a/b.md' } as SkillAction,
-      ],
-      state: { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} },
-    };
-    const result = findBuildInvokeAction(sm);
-    expect(result).not.toBeNull();
-    expect(result!.unitId).toBe(1);
+describe('resolveUnitPath', () => {
+  test('resolves unit path from plan path', () => {
+    const result = resolveUnitPath('/proj/.vcp/plan/ralph-dense-mem.md', 13);
+    expect(result.slug).toBe('dense-mem');
+    expect(result.unitPath).toBe('/proj/.vcp/plan/ralph/dense-mem/unit-13.md');
   });
 
-  test('returns null for non-build action', () => {
-    const sm: StateMachineOutput = {
-      actions: [{ type: 'invoke_skill', skill: 'dev-buddy-discover', stageType: 'discovery', slug: 'test' } as SkillAction],
-      state: { slug: 'test', status: 'discover', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} },
-    };
-    expect(findBuildInvokeAction(sm)).toBeNull();
+  test('throws for invalid plan filename', () => {
+    expect(() => resolveUnitPath('/proj/.vcp/plan/bad-name.md', 1)).toThrow('Cannot extract slug');
   });
 });
 
-describe('findErrorAction / findBlockedAction', () => {
-  test('finds error action', () => {
-    const sm: StateMachineOutput = {
-      actions: [{ type: 'error', message: 'boom' } as ErrorAction],
-      state: { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} },
-    };
-    expect(findErrorAction(sm)!.message).toBe('boom');
-  });
-
-  test('returns null when no error', () => {
-    const sm: StateMachineOutput = {
-      actions: [{ type: 'done', summary: 'ok' }],
-      state: { slug: 'test', status: 'done', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} },
-    };
-    expect(findErrorAction(sm)).toBeNull();
-    expect(findBlockedAction(sm)).toBeNull();
-  });
-});
-
-describe('collectTaskOps', () => {
-  test('extracts operations from update_tasks actions', () => {
-    const actions = [
-      { type: 'update_tasks', operations: [{ action: 'update', ref: 'unit:1', status: 'in_progress' }] } as TaskAction,
-      { type: 'invoke_skill', skill: 'x', stageType: 'y', slug: 'z' } as SkillAction,
-      { type: 'update_tasks', operations: [{ action: 'update', ref: 'stage:build', status: 'completed' }] } as TaskAction,
-    ];
-    const ops = collectTaskOps(actions);
-    expect(ops).toHaveLength(2);
-    expect(ops[0]).toEqual({ ref: 'unit:1', status: 'in_progress' });
-    expect(ops[1]).toEqual({ ref: 'stage:build', status: 'completed' });
-  });
-});
-
-// ─── applyWritePlanActions ────────────────────────────────────────────────
-
-describe('applyWritePlanActions', () => {
-  test('applies edit pairs to plan file', () => {
-    const tmp = makeTmpDir();
-    const planPath = path.join(tmp, 'plan.md');
-    writeFileSync(planPath, '# Plan\n**Status:** build\nSome content');
-    const actions = [
-      { type: 'write_plan', edits: [{ old_string: '**Status:** build', new_string: '**Status:** review' }] } as WritePlanAction,
-    ];
-    applyWritePlanActions(planPath, actions);
-    expect(readFileSync(planPath, 'utf-8')).toContain('**Status:** review');
-  });
-
-  test('skips edit when old_string not found', () => {
-    const tmp = makeTmpDir();
-    const planPath = path.join(tmp, 'plan.md');
-    writeFileSync(planPath, '# Plan\n**Status:** build');
-    const actions = [
-      { type: 'write_plan', edits: [{ old_string: '**Status:** uat', new_string: '**Status:** done' }] } as WritePlanAction,
-    ];
-    applyWritePlanActions(planPath, actions);
-    // Original preserved
-    expect(readFileSync(planPath, 'utf-8')).toContain('**Status:** build');
-  });
-});
-
-// ─── runBuildLoop integration tests ───────────────────────────────────────
+// ─── runSingleUnit integration tests ────────────────────────────────────
 
 /** Create a minimal valid unit plan file. */
 function makeUnitPlan(id: number, opts: {
@@ -315,37 +254,58 @@ function setupProject(unitPlans: string[]): { projectDir: string; planPath: stri
   return { projectDir, planPath, slug };
 }
 
-describe('runBuildLoop', () => {
-  test('builds 2 units successfully and transitions to review', async () => {
-    const { projectDir, planPath } = setupProject([
-      makeUnitPlan(1),
-      makeUnitPlan(2),
-    ]);
+describe('runSingleUnit', () => {
+  /** Skip review — avoids hitting real config/subprocess in unit tests */
+  const skipReview = async () => ({ skipped: true, passed: true, feedback: '' } as UnitReviewResult);
 
-    const result = await runBuildLoop(
-      { planPath, cwd: projectDir },
+  test('unit passes on first attempt', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
       {
         dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Implemented.' }),
         backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        reviewFn: skipReview,
       },
     );
 
-    expect(result.event).toBe('build_loop_complete');
-    expect(result.units).toHaveLength(2);
-    expect(result.units[0].outcome).toBe('done');
-    expect(result.units[1].outcome).toBe('done');
-    expect(result.taskOperations.some(op => op.ref === 'unit:1' && op.status === 'completed')).toBe(true);
-    expect(result.taskOperations.some(op => op.ref === 'unit:2' && op.status === 'completed')).toBe(true);
+    expect(result.event).toBe('unit_done');
+    expect(result.outcome).toBe('done');
+    expect(result.attempt).toBe(1);
+    expect(result.unitId).toBe(1);
   });
 
-  test('fails unit after exhausting attempts', async () => {
-    const { projectDir, planPath } = setupProject([
-      makeUnitPlan(1, { maxAttempts: 2 }),
-    ]);
+  test('unit retries then passes', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
 
     let callCount = 0;
-    const result = await runBuildLoop(
-      { planPath, cwd: projectDir },
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => {
+          callCount++;
+          return { event: 'complete', stage: 'ralph-build', synthesis: 'Implemented.' };
+        },
+        backpressureFn: () => {
+          // Fail first 2, pass on 3rd
+          return [{ command: 'bun test', exitCode: callCount < 3 ? 1 : 0, stdout: '', stderr: '', passed: callCount >= 3 }];
+        },
+        reviewFn: skipReview,
+      },
+    );
+
+    expect(result.event).toBe('unit_done');
+    expect(result.attempt).toBe(3);
+    expect(callCount).toBe(3);
+  });
+
+  test('unit exhausts all attempts', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 2 })]);
+
+    let callCount = 0;
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
       {
         dispatchFn: async () => {
           callCount++;
@@ -355,39 +315,90 @@ describe('runBuildLoop', () => {
       },
     );
 
-    // Should have attempted twice then the 3rd query sees it as failed
+    expect(result.event).toBe('unit_failed');
+    expect(result.attempt).toBe(2);
     expect(callCount).toBe(2);
-    const failedUnit = result.units.find(u => u.outcome === 'failed');
-    expect(failedUnit).toBeDefined();
-    expect(failedUnit!.attempt).toBe(2);
   });
 
-  test('treats zero backpressure commands as hard failure', async () => {
-    const { projectDir, planPath } = setupProject([
-      makeUnitPlan(1, { backpressureCommands: [], maxAttempts: 1 }),
-    ]);
+  test('already exhausted — dispatch not called', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { attempts: 2, maxAttempts: 2 })]);
 
-    const result = await runBuildLoop(
-      { planPath, cwd: projectDir },
+    let dispatchCalled = false;
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
+        dispatchFn: async () => { dispatchCalled = true; return { event: 'complete', stage: 'ralph-build' }; },
         backpressureFn: () => [],
       },
     );
 
-    // Unit should be failed, not done
-    const unit = result.units.find(u => u.unitId === 1);
-    expect(unit).toBeDefined();
-    expect(unit!.outcome).toBe('failed');
+    expect(result.event).toBe('unit_failed');
+    expect(dispatchCalled).toBe(false);
   });
 
-  test('handles dispatch failure gracefully', async () => {
-    const { projectDir, planPath } = setupProject([
-      makeUnitPlan(1, { maxAttempts: 1 }),
-    ]);
+  test('already done — returns unit_error', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { status: 'done', attempts: 1 })]);
 
-    const result = await runBuildLoop(
-      { planPath, cwd: projectDir },
+    let dispatchCalled = false;
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => { dispatchCalled = true; return { event: 'complete', stage: 'ralph-build' }; },
+        backpressureFn: () => [],
+      },
+    );
+
+    expect(result.event).toBe('unit_error');
+    expect(result.error).toContain('already done');
+    expect(dispatchCalled).toBe(false);
+  });
+
+  test('already failed — returns unit_error', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { status: 'failed', attempts: 3 })]);
+
+    let dispatchCalled = false;
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => { dispatchCalled = true; return { event: 'complete', stage: 'ralph-build' }; },
+        backpressureFn: () => [],
+      },
+    );
+
+    expect(result.event).toBe('unit_error');
+    expect(result.error).toContain('already failed');
+    expect(dispatchCalled).toBe(false);
+  });
+
+  test('dispatch error with retries left — continues to next attempt', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 2 })]);
+
+    let callCount = 0;
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => {
+          callCount++;
+          if (callCount === 1) {
+            return { event: 'error', stage: 'ralph-build', phase: 'dispatch_failed', error: 'stage-runner crashed' };
+          }
+          return { event: 'complete', stage: 'ralph-build', synthesis: 'OK' };
+        },
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        reviewFn: skipReview,
+      },
+    );
+
+    expect(result.event).toBe('unit_done');
+    expect(result.attempt).toBe(2);
+    expect(callCount).toBe(2);
+  });
+
+  test('dispatch error exhausted', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 1 })]);
+
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
       {
         dispatchFn: async () => ({
           event: 'error',
@@ -399,9 +410,248 @@ describe('runBuildLoop', () => {
       },
     );
 
-    const unit = result.units.find(u => u.unitId === 1);
-    expect(unit).toBeDefined();
-    expect(unit!.outcome).toBe('failed');
-    expect(unit!.dispatch.event).toBe('error');
+    expect(result.event).toBe('unit_failed');
+    expect(result.attempt).toBe(1);
+  });
+
+  test('zero backpressure commands — hard failure', async () => {
+    const { projectDir, planPath } = setupProject([
+      makeUnitPlan(1, { backpressureCommands: [], maxAttempts: 1 }),
+    ]);
+
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
+        backpressureFn: () => [],
+      },
+    );
+
+    expect(result.event).toBe('unit_failed');
+    expect(result.outcome).toBe('failed');
+  });
+
+  test('unit file not found — returns unit_error', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 99 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' }),
+        backpressureFn: () => [],
+      },
+    );
+
+    expect(result.event).toBe('unit_error');
+    expect(result.error).toContain('not found');
+  });
+
+  test('config cap overrides unit maxAttempts', async () => {
+    // Unit says maxAttempts: 10, but config caps at 3 (default)
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 10 })]);
+
+    let callCount = 0;
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => {
+          callCount++;
+          return { event: 'complete', stage: 'ralph-build', synthesis: 'Done.' };
+        },
+        backpressureFn: () => [{ command: 'bun test', exitCode: 1, stdout: '', stderr: 'fail', passed: false }],
+      },
+    );
+
+    // Config max_build_attempts caps the unit's maxAttempts (10) — effective max is config value
+    expect(result.event).toBe('unit_failed');
+    expect(callCount).toBeLessThan(10);
+    expect(result.attempt).toBe(callCount);
+    expect(result.maxAttempts).toBeLessThan(10);
+  });
+});
+
+// ─── parseReviewVerdict ──────────────────────────────────────────────────
+
+describe('parseReviewVerdict', () => {
+  test('parses PASS verdict', () => {
+    const result = parseReviewVerdict('## Verdict: PASS\n\nAll ACs traced.');
+    expect(result.passed).toBe(true);
+    expect(result.feedback).toBe('');
+  });
+
+  test('parses NEEDS_CHANGES with review feedback section', () => {
+    const output = [
+      '## Verdict: NEEDS_CHANGES',
+      '',
+      '## Review Feedback',
+      '',
+      '- AC-1 violated (src/foo.ts:42): missing error handling',
+      '- Contract mismatch (src/bar.ts:10): returns void instead of Promise',
+    ].join('\n');
+    const result = parseReviewVerdict(output);
+    expect(result.passed).toBe(false);
+    expect(result.feedback).toContain('AC-1 violated');
+    expect(result.feedback).toContain('Contract mismatch');
+  });
+
+  test('fail-open on malformed output', () => {
+    const result = parseReviewVerdict('This is garbage output with no verdict heading');
+    expect(result.passed).toBe(true);
+    expect(result.feedback).toBe('');
+  });
+
+  test('handles case-insensitive verdict', () => {
+    expect(parseReviewVerdict('## verdict: pass').passed).toBe(true);
+    expect(parseReviewVerdict('## VERDICT: NEEDS_CHANGES\nSome feedback').passed).toBe(false);
+  });
+});
+
+// ─── readFilesTouched ──────────────────────────────────────────────────
+
+describe('readFilesTouched', () => {
+  test('reads existing files from Files to Touch section', () => {
+    const tmp = makeTmpDir();
+    mkdirSync(path.join(tmp, 'src'), { recursive: true });
+    writeFileSync(path.join(tmp, 'src', 'foo.ts'), 'export function foo() {}');
+    const unitContent = '### Files to Touch\n- `src/foo.ts` -- existing | modify\n### Done When';
+    const result = readFilesTouched(unitContent, tmp);
+    expect(result).toContain('### File: src/foo.ts');
+    expect(result).toContain('export function foo()');
+  });
+
+  test('marks missing files as NOT FOUND', () => {
+    const tmp = makeTmpDir();
+    const unitContent = '### Files to Touch\n- `src/missing.ts` -- new | create\n### Done When';
+    const result = readFilesTouched(unitContent, tmp);
+    expect(result).toContain('NOT FOUND');
+  });
+
+  test('returns empty for content without Files to Touch', () => {
+    expect(readFilesTouched('# Unit 1\n### Done When', '/tmp')).toBe('');
+  });
+});
+
+// ─── runSingleUnit with review ────────────────────────────────────────
+
+describe('runSingleUnit with review', () => {
+  /** Helper: review returns skipped (disabled) */
+  const skippedReview: () => Promise<UnitReviewResult> = async () => ({ skipped: true, passed: true, feedback: '' });
+  /** Helper: review passes */
+  const passingReview: () => Promise<UnitReviewResult> = async () => ({ skipped: false, passed: true, feedback: '' });
+  /** Helper: review fails */
+  const failingReview = (feedback: string): (() => Promise<UnitReviewResult>) =>
+    async () => ({ skipped: false, passed: false, feedback });
+
+  test('review disabled (skipped) — unit_done same as before', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        reviewFn: skippedReview,
+      },
+    );
+
+    expect(result.event).toBe('unit_done');
+    expect(result.outcome).toBe('done');
+  });
+
+  test('review passes — unit_done', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        reviewFn: passingReview,
+      },
+    );
+
+    expect(result.event).toBe('unit_done');
+  });
+
+  test('review fails then passes on retry', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
+
+    let reviewCallCount = 0;
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        reviewFn: async () => {
+          reviewCallCount++;
+          if (reviewCallCount === 1) return { skipped: false, passed: false, feedback: 'AC-1 not met' };
+          return { skipped: false, passed: true, feedback: '' };
+        },
+      },
+    );
+
+    expect(result.event).toBe('unit_done');
+    expect(result.attempt).toBe(2);
+    expect(reviewCallCount).toBe(2);
+  });
+
+  test('review fails and budget exhausted — unit_failed', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 1 })]);
+
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        reviewFn: failingReview('AC-2 violated: returns wrong type'),
+      },
+    );
+
+    expect(result.event).toBe('unit_failed');
+    expect(result.attempt).toBe(1);
+    expect(result.summary).toContain('failed review');
+  });
+
+  test('review feedback written to unit file on failure', async () => {
+    const { projectDir, planPath, slug } = setupProject([makeUnitPlan(1, { maxAttempts: 2 })]);
+
+    let reviewCallCount = 0;
+    await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        reviewFn: async () => {
+          reviewCallCount++;
+          if (reviewCallCount === 1) return { skipped: false, passed: false, feedback: 'Missing error handling' };
+          return { skipped: false, passed: true, feedback: '' };
+        },
+      },
+    );
+
+    // After success, review feedback should be cleared
+    const unitPath = path.join(projectDir, '.vcp', 'plan', 'ralph', slug, 'unit-1.md');
+    const content = readFileSync(unitPath, 'utf-8');
+    // Feedback section should be empty (cleared on success)
+    const feedbackMatch = content.match(/## Review Feedback\s*\n\n([\s\S]*?)(?=\n##|\n*$)/);
+    if (feedbackMatch) {
+      expect(feedbackMatch[1].trim()).toBe('');
+    }
+  });
+
+  test('review dispatch error (fail-open) — unit_done', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleUnit(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        reviewFn: async () => { throw new Error('subprocess crashed'); },
+      },
+    );
+
+    // Fail-open: review throws but unit still passes
+    expect(result.event).toBe('unit_done');
   });
 });

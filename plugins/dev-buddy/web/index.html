@@ -613,7 +613,7 @@
 
     <template x-if="!loadingStages">
       <div>
-        <template x-for="[stageType, stageConfig] in Object.entries(v3Stages)" x-bind:key="stageType">
+        <template x-for="[stageType, stageConfig] in Object.entries(v3Stages).filter(([k]) => !stageDefinitions[k]?.optional)" x-bind:key="stageType">
           <div class="card" style="margin-bottom: 16px;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <h3 style="margin: 0;" x-text="stageType"></h3>
@@ -664,7 +664,66 @@
             </div>
 
             <button x-on:click="addExecutorToStage(stageType)" style="margin-top: 8px; font-size: 0.85rem;" class="btn-secondary"
+              x-show="!(stageDefinitions[stageType]?.max_executors !== undefined && stageConfig.executors.length >= stageDefinitions[stageType].max_executors)"
               x-bind:disabled="stageDefinitions[stageType]?.max_executors !== undefined && stageConfig.executors.length >= stageDefinitions[stageType].max_executors">+ Add Executor</button>
+
+            <!-- Per-unit semantic review (nested inside ralph-build) -->
+            <template x-if="stageType === 'ralph-build' && v3Stages['unit-review']">
+              <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border);">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <h4 style="margin: 0;">Per-Unit Semantic Review</h4>
+                    <span x-show="v3Stages['unit-review'].executors.length === 0"
+                          style="font-size: 0.75rem; color: var(--text-secondary); opacity: 0.7;">Optional — add executors to enable</span>
+                  </div>
+                  <button x-on:click="saveStage('unit-review')" class="btn-primary" style="font-size: 0.8rem;">Save</button>
+                </div>
+                <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 4px 0 8px 0;">
+                  After mechanical backpressure passes, review each unit's implementation against its ACs. Empty = disabled (current behavior).
+                </p>
+                <div>
+                  <template x-for="(exec, idx) in v3Stages['unit-review'].executors" x-bind:key="exec._id">
+                    <div class="executor-row">
+                      <button x-on:click="moveExecutorInStage('unit-review', idx, -1)"
+                        x-bind:disabled="idx === 0"
+                        x-show="!(v3Stages['unit-review'].executors.length > 1 && idx === v3Stages['unit-review'].executors.length - 1)"
+                        title="Move up" style="padding: 2px 8px;">&#9650;</button>
+                      <button x-on:click="moveExecutorInStage('unit-review', idx, 1)"
+                        x-bind:disabled="idx >= v3Stages['unit-review'].executors.length - 2 || v3Stages['unit-review'].executors.length <= 1"
+                        x-show="!(v3Stages['unit-review'].executors.length > 1 && idx === v3Stages['unit-review'].executors.length - 1)"
+                        title="Move down" style="padding: 2px 8px;">&#9660;</button>
+                      <select x-model="exec.system_prompt" x-init="$nextTick(() => $el.value = exec.system_prompt || '')" style="flex: 1; min-width: 120px;">
+                        <option value="">-- System Prompt --</option>
+                        <template x-for="p in systemPrompts" x-bind:key="p.name">
+                          <option x-bind:value="p.name" x-text="p.name"></option>
+                        </template>
+                      </select>
+                      <select x-model="exec.preset" x-on:change="onStagePresetChange(exec)" x-init="$nextTick(() => $el.value = exec.preset || '')" style="flex: 1; min-width: 120px;">
+                        <option value="">-- Preset --</option>
+                        <template x-for="[pName] in Object.entries(presets)" x-bind:key="pName">
+                          <option x-bind:value="pName" x-text="pName"></option>
+                        </template>
+                      </select>
+                      <select x-model="exec.model" x-init="$nextTick(() => $el.value = exec.model || '')" style="flex: 0 1 130px;">
+                        <option value="">-- Model --</option>
+                        <template x-for="m in (stageModelOptions[exec.preset] || [])" x-bind:key="m">
+                          <option x-bind:value="m" x-text="m"></option>
+                        </template>
+                      </select>
+                      <label style="display: flex; align-items: center; gap: 4px; font-size: 0.82rem; color: var(--text-secondary); margin: 0; white-space: nowrap;">
+                        <input type="checkbox" x-model="exec.parallel"
+                          x-bind:disabled="v3Stages['unit-review'].executors.length > 1 && idx === v3Stages['unit-review'].executors.length - 1">
+                        Parallel
+                      </label>
+                      <span x-show="v3Stages['unit-review'].executors.length > 1 && idx === v3Stages['unit-review'].executors.length - 1"
+                        class="badge badge-synthesizer" style="font-size: 0.75rem;">Synthesizer</span>
+                      <button x-on:click="removeExecutorFromStage('unit-review', idx)" class="btn-danger" style="font-size: 0.75rem;">Remove</button>
+                    </div>
+                  </template>
+                </div>
+                <button x-on:click="addExecutorToStage('unit-review')" style="margin-top: 8px; font-size: 0.85rem;" class="btn-secondary">+ Add Reviewer</button>
+              </div>
+            </template>
           </div>
         </template>
       </div>

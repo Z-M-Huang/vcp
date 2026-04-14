@@ -60,39 +60,41 @@ flowchart TD
     DC_UC -->|批准| Q1
     DC_UC -->|拒绝 / 补充上下文| DC
 
-    Q1 -->|"invoke_skill: ralph-build"| BUILD_ENTRY
+    Q1 -->|"invoke_skill: ralph-build<br/>(per unit)"| BUILD_ENTRY
 
-    subgraph BUILD_MECHANICAL["build-loop-runner.ts — 控制循环中无编排器 LLM"]
-        BUILD_ENTRY["CC → Bash: build-loop-runner.ts<br/>(单次调用，拥有整个构建循环)"]
-        B_SM["import: state-machine main ⟶ 下一单元"]
+    subgraph BUILD_MECHANICAL["build-loop-runner.ts --unit N — 逐单元重试循环"]
+        BUILD_ENTRY["CC → Bash: build-loop-runner.ts --unit N"]
         B_DISPATCH["subprocess: stage-runner.ts<br/>⟶ 已配置的执行器"]
         B_BP{"spawnSync: 反压<br/>test, typecheck, lint"}
-        B_WRITE_PASS["写入 Status: done<br/>+ Attempts 到单元文件"]
-        B_WRITE_FAIL["写入 Status: pending/failed<br/>+ Attempts 到单元文件"]
-        B_MORE{"更多<br/>单元?"}
+        B_REVIEW{"unit-review<br/>已配置？"}
+        B_WRITE_PASS["写入 Status: done"]
+        B_RETRY["写入 Status: pending<br/>（重试）"]
+        B_FAILED["写入 Status: failed"]
 
-        BUILD_ENTRY --> B_SM
-        B_SM --> B_DISPATCH
+        BUILD_ENTRY --> B_DISPATCH
         B_DISPATCH --> B_BP
-        B_BP -->|失败，剩余尝试| B_WRITE_FAIL
-        B_WRITE_FAIL --> B_SM
-        B_BP -->|通过| B_WRITE_PASS
-        B_WRITE_PASS --> B_MORE
-        B_MORE -->|是| B_SM
+        B_BP -->|通过| B_REVIEW
+        B_REVIEW -->|"跳过 / PASS"| B_WRITE_PASS
+        B_REVIEW -->|"NEEDS_CHANGES,<br/>剩余尝试"| B_RETRY
+        B_REVIEW -->|"NEEDS_CHANGES,<br/>尝试耗尽"| B_FAILED
+        B_BP -->|失败，剩余尝试| B_RETRY
+        B_RETRY --> B_DISPATCH
+        B_BP -->|失败，尝试耗尽| B_FAILED
     end
 
-    B_MORE -->|"全部完成 ⟶ JSON: build_loop_complete"| Q1
+    B_WRITE_PASS -->|"JSON: unit_done"| Q1
+    B_FAILED -->|"JSON: unit_failed"| Q1
 
     Q1 -->|"invoke_skill: review"| CR
     CR["CODE REVIEW — 多 AI 流追踪<br/>🔧 CC → Bash: stage-runner.ts"]
     CR -->|approved| Q1
-    CR -->|needs_changes| BUILD_ENTRY
+    CR -->|needs_changes| Q1
     CR -->|rejected| STOP([升级给用户])
 
     Q1 -->|"invoke_skill: uat"| UAT
     UAT["UAT — Playwright + 完整反压<br/>🔧 CC → Bash: stage-runner.ts"]
     UAT -->|全部通过| DONE([完成])
-    UAT -->|任意失败| BUILD_ENTRY
+    UAT -->|任意失败| Q1
 ```
 
 ```mermaid
@@ -125,36 +127,42 @@ sequenceDiagram
         CC->>FS: 写入 approveStatus 到计划
     end
 
-    CC->>SM: Bash: --action next
-    SM-->>CC: JSON: {actions: [update_tasks(unit:1→in_progress), invoke_skill(ralph-build, unit:1)]}
-
     rect rgb(255, 235, 220)
-        Note over BLR,FS: BUILD — 控制循环中无编排器 LLM
-        CC->>BLR: Bash: --plan X --cwd Y（单次调用）
-        loop 按依赖顺序遍历每个单元
-            BLR->>SM: import main(plan, 'next')
-            SM->>FS: 读取计划 + 单元文件
-            SM-->>BLR: {update_tasks + invoke_skill(build, unitId, unitPath)}
-            BLR->>FS: 写入 Attempts++（崩溃安全）
-            BLR->>SR: subprocess: --stage-type ralph-build --task-stdin <单元计划>
-            SR->>EX: 分发已配置的构建执行器
-            EX-->>SR: 实现结果
-            SR-->>BLR: JSON: {synthesis}
-            BLR->>BLR: runBackpressure(commands, cwd)
-            alt 全部反压通过
-                BLR->>FS: 写入 Status: done
-            else 失败 + 剩余尝试
-                BLR->>FS: 写入 Status: pending（重试）
-            else 失败 + 尝试耗尽
-                BLR->>FS: 写入 Status: failed
+        Note over CC,FS: BUILD — 逐单元分发，重试在 runner 内部完成
+        loop 遍历每个单元（CC 通过状态机驱动）
+            CC->>SM: Bash: --action next
+            SM-->>CC: JSON: {invoke_skill(ralph-build, unitId, unitPath)}
+            CC->>CC: TaskUpdate(unit N → in_progress)
+            CC->>BLR: Bash: --plan X --cwd Y --unit N
+            loop 重试循环（机械化，runner 内部）
+                BLR->>FS: 写入 Attempts++（崩溃安全）
+                BLR->>SR: subprocess: --stage-type ralph-build --task-stdin
+                SR->>EX: 分发已配置的构建执行器
+                EX-->>SR: 实现结果
+                SR-->>BLR: JSON: {synthesis}
+                BLR->>BLR: runBackpressure(commands, cwd)
+                alt 全部反压通过
+                    opt unit-review 已配置
+                        BLR->>SR: subprocess: --stage-type unit-review --task-stdin
+                        SR->>EX: 分发审查执行器
+                        EX-->>SR: 审查判定
+                        SR-->>BLR: JSON: {synthesis: PASS|NEEDS_CHANGES}
+                        alt NEEDS_CHANGES + 剩余尝试
+                            BLR->>FS: 写入 Review Feedback + Status: pending
+                        end
+                    end
+                    BLR->>FS: 写入 Status: done
+                else 失败 + 剩余尝试
+                    BLR->>FS: 写入 Status: pending（重试）
+                else 失败 + 尝试耗尽
+                    BLR->>FS: 写入 Status: failed
+                end
             end
+            BLR-->>CC: JSON: {event: unit_done|unit_failed}
+            CC->>CC: TaskUpdate(unit N → completed|failed)
         end
-        Note over BLR: SM 返回 write_plan(build→review)<br/>当所有单元完成时
-        BLR->>FS: 应用 write_plan 编辑到计划文件
-        BLR-->>CC: JSON: {build_loop_complete, taskOps[], units[]}
     end
 
-    CC->>CC: 回放 taskOperations (TaskUpdate)
     CC->>SM: Bash: --action next
 
     rect rgb(220, 245, 220)
@@ -170,7 +178,7 @@ sequenceDiagram
         CC->>SM: Bash: --action next
         SM-->>CC: JSON: {write_plan(review→build)}
         CC->>FS: 应用 write_plan 编辑
-        CC->>BLR: Bash: 重建受影响单元
+        Note over CC: 通过 SM 查询重新进入构建循环
     else verdict = approved
         rect rgb(240, 230, 250)
             Note over CC,EX: UAT
@@ -192,18 +200,18 @@ sequenceDiagram
         CC->>SM: Bash: --action next
         SM-->>CC: JSON: {write_plan(uat→build)}
         CC->>FS: 应用 write_plan
-        CC->>BLR: Bash: 重建失败单元
+        Note over CC: 通过 SM 查询重新进入构建循环
     end
 ```
 
 **脚本执行边界：**
 - **ralph-state-machine.ts**（被动）— 被查询时计算下一步动作。CC 在每次阶段转换前通过 Bash 调用它。读取计划 + 单元文件，返回 JSON 格式的下一步动作。从不主动驱动执行。
-- **stage-runner.ts**（分发）— 多执行器分发器。CC 通过 Bash 为全部 6 个阶段调用它。加载配置，解析系统提示词，生成执行器（subscription/API/CLI），合成输出。
-- **build-loop-runner.ts**（机械循环）— 拥有整个构建内循环。CC 通过 Bash 调用一次；它在内部循环：查询 SM（import），分发执行器（subprocess 到 stage-runner），运行反压（spawnSync），写入单元状态（fs）。完成时返回一个 JSON 数据包。
-- **CC 主进程**（LLM）— 驱动外层 pipeline：查询 SM，调用脚本，验证合成结果，展示用户检查点，回放任务操作。不执行构建内循环。
+- **stage-runner.ts**（分发）— 多执行器分发器。CC 通过 Bash 为所有阶段调用它。加载配置，解析系统提示词，生成执行器（subscription/API/CLI），合成输出。
+- **build-loop-runner.ts**（单元执行器）— 拥有单个单元的执行及内部重试。CC 通过 Bash 以 `--unit N` 参数逐单元调用；它在内部重试：分发执行器（subprocess 到 stage-runner），运行反压（spawnSync），可选语义审查（subprocess 到 stage-runner 使用 unit-review），写入单元状态（fs）。当单元完成或失败时返回 JSON。
+- **CC 主进程**（LLM）— 驱动 pipeline：查询 SM，调用脚本，验证合成结果，展示用户检查点，更新任务。通过状态机查询和任务管理驱动逐单元构建推进。
 
 **双嵌套循环 + 评审门控：**
-- **内循环（BUILD -> CODE REVIEW）：** 逐单元 Ralph 循环——从磁盘读取全新上下文，实现，机械反压（test/typecheck/lint），重试上限 `max_build_attempts`。代码评审可将单元打回重做。构建内循环通过 `build-loop-runner.ts` 完全机械化执行。
+- **内循环（BUILD -> CODE REVIEW）：** 逐单元 Ralph 循环——从磁盘读取全新上下文，实现，机械反压（test/typecheck/lint），可选逐单元语义审查，重试上限 `max_build_attempts`。代码评审可将单元打回重做。逐单元重试循环通过 `build-loop-runner.ts --unit N` 完全机械化执行。单元间推进由 CC 编排器通过状态机查询和任务管理驱动。
 - **外循环（UAT）：** 集成 Ralph 循环——对运行中的应用执行 Playwright UAT。失败时定位受影响单元，回到 BUILD 和 CODE REVIEW（上限 `max_outer_iterations`）。
 - **用户检查点** 在 Discovery、Requirements 和 Decompose 之后——批准、拒绝或补充上下文。每个阶段在呈现给用户之前先运行内部对抗性验证。
 
@@ -216,23 +224,24 @@ sequenceDiagram
 | **Discovery** | 探索代码库 + 运行中的应用。映射代码路径、模式、影响点。截图当前状态。 | 是 |
 | **Requirements + UAT** | 定义 AC（Given/When/Then + 误解释）。设计 Playwright UAT 场景。风险注册表。 | 是 |
 | **Decomposition** | 分解为约 50 行代码的单元。每个单元有独立的计划文件和精确指令。 | 是 |
-| **Build** | 逐单元实现，全新上下文。编排器独立运行反压。 | 单一 |
+| **Build** | 逐单元实现，全新上下文。Runner 运行反压 + 可选语义审查。 | 可配置 |
 | **Code Review** | 流追踪（定点 + 路径 + 意图）。桩/孤立代码检测。跨单元集成。 | 是 |
 | **UAT** | 对运行中的应用执行 Playwright 测试 + 全部机械反压。 | 单一 |
 
 ---
 
-## 8 层执行栈
+## 9 层执行栈
 
 ```
-第 1 层：单元计划 + 合约      <- 意图、数据流追踪、权威来源
-第 2 层：机械反压             <- 编译、类型、lint 错误
-第 3 层：编排器验证           <- 谎报测试、缺失节、来源违反
-第 4 层：代码评审（多 AI）    <- 流追踪、桩检测、漂移探测
-第 5 层：UAT（Playwright）    <- 真实用户场景失败
-第 6 层：用户检查点           <- 以上全部遗漏的
-第 7 层：TaskManagement       <- 流程合规（不跳步）
-第 8 层：磁盘上的计划文件     <- 上下文压缩后状态存活
+第 1 层：单元计划 + 合约        <- 意图、数据流追踪、权威来源
+第 2 层：机械反压               <- 编译、类型、lint 错误
+第 3 层：逐单元语义审查         <- AC 追踪、合约验证（可选，多 AI）
+第 4 层：编排器验证             <- 谎报测试、缺失节、来源违反
+第 5 层：代码评审（多 AI）      <- 流追踪、桩检测、漂移探测
+第 6 层：UAT（Playwright）      <- 真实用户场景失败
+第 7 层：用户检查点             <- 以上全部遗漏的
+第 8 层：TaskManagement         <- 流程合规（不跳步）
+第 9 层：磁盘上的计划文件       <- 上下文压缩后状态存活
 ```
 
 每一层捕获上层遗漏的问题。模型越弱，触发的层越多。模型越强，大多数层直接通过。
@@ -285,6 +294,7 @@ sequenceDiagram
 | ralph-requirements-analyst | Requirements | AC + UAT 设计师 |
 | decomposer | Decomposition | 任务分解专家 |
 | unit-builder | Build | 专注的单元实现者 |
+| unit-reviewer | Build（审查） | 逐单元 AC 验证器（可选） |
 | ralph-code-reviewer | Code Review | 语义漂移检测器 |
 | uat-evaluator | UAT | 悲观主义测试执行者 |
 
@@ -325,7 +335,8 @@ sequenceDiagram
     ]},
     "ralph-uat": { "executors": [
       { "system_prompt": "uat-evaluator", "preset": "anthropic-subscription", "model": "sonnet" }
-    ]}
+    ]},
+    "unit-review": { "executors": [] }
   },
   "pipelines": { "ralph": ["discovery", "ralph-requirements", "decomposition", "ralph-build", "ralph-code-review", "ralph-uat"] },
   "config_port": 8888,

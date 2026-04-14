@@ -14,7 +14,7 @@ import path from 'path';
 import os from 'os';
 import { readPresets } from './preset-utils.ts';
 import type { PipelineConfig, DevBuddyConfig, DevBuddyConfigV3, StageExecutor, StageConfig } from '../types/pipeline.ts';
-import { STAGE_DEFINITIONS, MODEL_NAME_REGEX, VALID_STAGE_TYPES, LEGACY_STAGE_MAPPING, LEGACY_AGENT_TYPES, VALID_LEGACY_STAGE_TYPES } from '../types/stage-definitions.ts';
+import { STAGE_DEFINITIONS, MODEL_NAME_REGEX, VALID_STAGE_TYPES, OPTIONAL_STAGE_TYPES, LEGACY_STAGE_MAPPING, LEGACY_AGENT_TYPES, VALID_LEGACY_STAGE_TYPES } from '../types/stage-definitions.ts';
 import type { StageType, LegacyStageType } from '../types/stage-definitions.ts';
 import { discoverSystemPrompts } from './system-prompts.ts';
 
@@ -91,6 +91,7 @@ export const DEFAULT_CONFIG: DevBuddyConfig = {
     'ralph-build': { executors: [{ system_prompt: 'unit-builder', preset: 'anthropic-subscription', model: 'sonnet' }] },
     'ralph-code-review': { executors: [{ system_prompt: 'ralph-code-reviewer', preset: 'anthropic-subscription', model: 'sonnet' }] },
     'ralph-uat': { executors: [{ system_prompt: 'uat-evaluator', preset: 'anthropic-subscription', model: 'sonnet' }] },
+    'unit-review': { executors: [] },
   },
   pipelines: {
     'ralph': RALPH_PIPELINE,
@@ -147,15 +148,8 @@ export function validateDevBuddyConfig(config: DevBuddyConfig): void {
     availablePrompts = new Set();
   }
 
-  // Validate stages: all 6 Ralph stage types must exist
-  for (const stageType of VALID_STAGE_TYPES) {
-    const stage = config.stages[stageType as StageType];
-    if (!stage) {
-      throw new Error(`Missing stage config for '${stageType}'`);
-    }
-    if (!Array.isArray(stage.executors)) {
-      throw new Error(`Stage '${stageType}': executors must be an array`);
-    }
+  /** Validate executors for a single stage. */
+  function validateStageExecutors(stageType: string, stage: StageConfig): void {
     for (let i = 0; i < stage.executors.length; i++) {
       const exec = stage.executors[i];
       if (!exec.system_prompt || typeof exec.system_prompt !== 'string') {
@@ -167,7 +161,6 @@ export function validateDevBuddyConfig(config: DevBuddyConfig): void {
       if (!exec.preset || typeof exec.preset !== 'string') {
         throw new Error(`Stage '${stageType}' executor[${i}]: preset is required`);
       }
-      // Validate preset exists
       try {
         getProviderType(exec.preset);
       } catch {
@@ -183,14 +176,32 @@ export function validateDevBuddyConfig(config: DevBuddyConfig): void {
         throw new Error(`Stage '${stageType}' executor[${i}]: parallel must be a boolean`);
       }
     }
-
-    // Enforce max_executors constraint
     const def = STAGE_DEFINITIONS[stageType as StageType];
     if (def.max_executors !== undefined && stage.executors.length > def.max_executors) {
       throw new Error(
         `Stage '${stageType}': maximum ${def.max_executors} executor(s) allowed, got ${stage.executors.length}`
       );
     }
+  }
+
+  // Validate stages: mandatory require ≥1 executor, optional allow 0
+  for (const stageType of VALID_STAGE_TYPES) {
+    if (OPTIONAL_STAGE_TYPES.has(stageType)) continue;
+    const stage = config.stages[stageType as StageType];
+    if (!stage) {
+      throw new Error(`Missing stage config for '${stageType}'`);
+    }
+    if (!Array.isArray(stage.executors)) {
+      throw new Error(`Stage '${stageType}': executors must be an array`);
+    }
+    validateStageExecutors(stageType, stage);
+  }
+
+  // Validate optional stages — 0 executors is allowed
+  for (const stageType of OPTIONAL_STAGE_TYPES) {
+    const stage = config.stages[stageType as StageType];
+    if (!stage || !Array.isArray(stage.executors) || stage.executors.length === 0) continue;
+    validateStageExecutors(stageType, stage);
   }
 
   // Validate pipelines object
@@ -332,6 +343,11 @@ function buildV5Stages(
 
   for (const stageType of VALID_STAGE_TYPES) {
     const st = stageType as StageType;
+    // Optional stages with no legacy equivalent get empty executors (disabled)
+    if (OPTIONAL_STAGE_TYPES.has(stageType)) {
+      result[st] = { executors: [] };
+      continue;
+    }
     const migrated = migratedStages.get(st);
     if (migrated && migrated.length > 0) {
       // Deduplicate executors (same system_prompt + preset + model)
@@ -523,6 +539,12 @@ export function loadDevBuddyConfig(): DevBuddyConfig {
     config.max_discovery_iterations ??= DEFAULT_CONFIG.max_discovery_iterations;
     config.max_requirements_iterations ??= DEFAULT_CONFIG.max_requirements_iterations;
     config.max_decomposition_iterations ??= DEFAULT_CONFIG.max_decomposition_iterations;
+    // Fill optional stages if absent (additive default — existing configs lack unit-review)
+    for (const optStage of OPTIONAL_STAGE_TYPES) {
+      if (!config.stages[optStage as StageType]) {
+        config.stages[optStage as StageType] = { executors: [] };
+      }
+    }
     validateDevBuddyConfig(config);
     return config;
   }

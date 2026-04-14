@@ -13,7 +13,7 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.version).toBe('5.0');
   });
 
-  test('has all 6 Ralph stage types', () => {
+  test('has all 7 stage types (6 pipeline + 1 optional)', () => {
     const stages = Object.keys(DEFAULT_CONFIG.stages);
     expect(stages).toContain('discovery');
     expect(stages).toContain('ralph-requirements');
@@ -21,6 +21,13 @@ describe('DEFAULT_CONFIG', () => {
     expect(stages).toContain('ralph-build');
     expect(stages).toContain('ralph-code-review');
     expect(stages).toContain('ralph-uat');
+    expect(stages).toContain('unit-review');
+  });
+
+  test('unit-review has empty executors by default (optional, disabled)', () => {
+    const stage = DEFAULT_CONFIG.stages['unit-review' as keyof typeof DEFAULT_CONFIG.stages];
+    expect(stage).toBeDefined();
+    expect(stage.executors).toEqual([]);
   });
 
   test('each stage has inline executors with system_prompt, preset, model', () => {
@@ -201,6 +208,50 @@ describe('validateDevBuddyConfig', () => {
     expect(() => validateDevBuddyConfig(config)).toThrow(/config_port/);
   });
 
+});
+
+// ─── Optional stage validation ────────────────────────────────────────────
+
+describe('optional stage (unit-review) validation', () => {
+  test('accepts unit-review with 0 executors', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.stages['unit-review' as keyof typeof config.stages] = { executors: [] };
+    expect(() => validateDevBuddyConfig(config)).not.toThrow();
+  });
+
+  test('accepts unit-review with valid executors', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.stages['unit-review' as keyof typeof config.stages] = {
+      executors: [{ system_prompt: 'unit-reviewer', preset: 'anthropic-subscription', model: 'sonnet' }],
+    };
+    expect(() => validateDevBuddyConfig(config)).not.toThrow();
+  });
+
+  test('rejects unit-review executor with missing preset', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.stages['unit-review' as keyof typeof config.stages] = {
+      executors: [{ system_prompt: 'unit-reviewer', preset: '', model: 'sonnet' }],
+    };
+    expect(() => validateDevBuddyConfig(config)).toThrow(/preset is required/);
+  });
+
+  test('rejects unit-review executor with invalid model name', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.stages['unit-review' as keyof typeof config.stages] = {
+      executors: [{ system_prompt: 'unit-reviewer', preset: 'anthropic-subscription', model: 'bad model!' }],
+    };
+    expect(() => validateDevBuddyConfig(config)).toThrow(/invalid model name/);
+  });
+
+  test('zero-executor unit-review does NOT block pipeline validation', () => {
+    // unit-review is NOT in the ralph pipeline, so even if it had executors,
+    // the "stages in active pipelines must have ≥1 executor" check doesn't apply.
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.stages['unit-review' as keyof typeof config.stages] = { executors: [] };
+    // Discovery IS in the pipeline — must have executors
+    config.stages.discovery.executors = [];
+    expect(() => validateDevBuddyConfig(config)).toThrow(/must have at least 1 executor/);
+  });
 });
 
 // ─── loadDevBuddyConfig — additive default-filling ─────────────────────────

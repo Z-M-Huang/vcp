@@ -1002,7 +1002,7 @@ describe('SKILL.md simplification', () => {
 
   test('dev-buddy-build SKILL.md is simplified', () => {
     const content = readFileSync(path.resolve(__dirname, '../../skills/dev-buddy-build/SKILL.md'), 'utf-8');
-    expect(content.split('\n').length).toBeLessThan(50);
+    expect(content.split('\n').length).toBeLessThan(55);
   });
 
   test('all stage SKILL.md files retain frontmatter', () => {

@@ -7,14 +7,15 @@
 
 // ─── Stage Type ──────────────────────────────────────────────────────────────
 
-/** The 6 Ralph stage types. */
+/** The 6 Ralph pipeline stage types + optional per-unit review. */
 export type StageType =
   | 'discovery'
   | 'ralph-requirements'
   | 'decomposition'
   | 'ralph-build'
   | 'ralph-code-review'
-  | 'ralph-uat';
+  | 'ralph-uat'
+  | 'unit-review';
 
 /**
  * Legacy stage types from v2/v3/v4 — only used by migration code.
@@ -38,6 +39,8 @@ export interface StageDefinition {
   agent_type: string;
   /** Maximum number of executors allowed for this stage. undefined = unlimited. */
   max_executors?: number;
+  /** If true, stage is not required in config — empty executors = disabled. */
+  optional?: boolean;
 }
 
 // ─── Stage Registry ───────────────────────────────────────────────────────────
@@ -72,6 +75,11 @@ export const STAGE_DEFINITIONS: Record<StageType, StageDefinition> = {
     singleton: true,
     agent_type: 'uat-evaluator',
     max_executors: 1,
+  },
+  'unit-review': {
+    singleton: false,
+    agent_type: 'unit-reviewer',
+    optional: true,
   },
 };
 
@@ -110,6 +118,13 @@ export const LEGACY_AGENT_TYPES: Record<LegacyStageType, string> = {
 
 /** Runtime set of valid stage type strings (derived from STAGE_DEFINITIONS keys). */
 export const VALID_STAGE_TYPES: ReadonlySet<string> = new Set(Object.keys(STAGE_DEFINITIONS));
+
+/** Runtime set of optional stage types (derived from STAGE_DEFINITIONS). Empty executors = disabled. */
+export const OPTIONAL_STAGE_TYPES: ReadonlySet<string> = new Set(
+  Object.entries(STAGE_DEFINITIONS)
+    .filter(([, def]) => def.optional)
+    .map(([key]) => key)
+);
 
 /** Runtime set of legacy stage type strings (for migration detection). */
 export const VALID_LEGACY_STAGE_TYPES: ReadonlySet<string> = new Set(Object.keys(LEGACY_STAGE_MAPPING));

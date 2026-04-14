@@ -35,7 +35,7 @@ When dispatched by the mechanical build loop runner, the executor receives a sin
 - Query the state machine — the runner already determined which unit to build
 - Edit the unit plan file itself — only project source files
 
-The build-loop-runner handles the full loop: state machine queries, executor dispatch (via `stage-runner.ts` to the configured preset), mechanical backpressure, status writes, and retry logic.
+The build-loop-runner handles single-unit execution with internal retries: executor dispatch (via `stage-runner.ts` to the configured preset), mechanical backpressure, status writes, and retry logic.
 
 ### How It Works (Both Modes)
 

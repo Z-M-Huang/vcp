@@ -1,41 +1,37 @@
 #!/usr/bin/env bun
 /**
- * Build Loop Runner — mechanical build loop for the Ralph pipeline.
+ * Build Loop Runner — single-unit build executor for the Ralph pipeline.
  *
- * Owns the entire inner build loop: queries the state machine for the next unit,
- * dispatches the build executor via stage-runner.ts, runs backpressure, and writes
- * unit status mechanically. The Ralph orchestrator (LLM) calls this once via Bash;
- * the script loops internally and returns one JSON result when done.
+ * Handles one unit per invocation: dispatches the build executor via
+ * stage-runner.ts, runs backpressure, retries internally up to the attempt
+ * budget, and writes unit status. The Ralph orchestrator (LLM) calls this
+ * once per unit via Bash and drives unit-to-unit progression via task management.
  *
  * Invariant: single-writer per pipeline. Ralph invokes one build-loop-runner at a time.
  *
  * Usage:
- *   bun build-loop-runner.ts --plan <path> --cwd <dir>
+ *   bun build-loop-runner.ts --plan <path> --cwd <dir> --unit <id>
  *
  * Exit codes:
- *   0 - Success (build_loop_complete or build_loop_blocked)
- *   1 - Validation error (missing args, bad plan path)
- *   2 - Execution error (state machine failure, unrecoverable)
+ *   0 - unit_done or unit_failed (structured outcome)
+ *   1 - unit_error or validation error
  */
 
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { main as queryStateMachineRaw, runBackpressure } from './ralph-state-machine.ts';
+import { runBackpressure } from './ralph-state-machine.ts';
 import { parseUnitPlan } from './ralph/parsers.ts';
 import { loadDevBuddyConfig } from './pipeline-config.ts';
 import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
+import type { StageType } from '../types/stage-definitions.ts';
 import type {
-  StateMachineOutput, Action, SkillAction, ErrorAction, BlockedAction,
-  WritePlanAction, TaskAction, BackpressureResult,
-  PlanStatus, UnitPlanData,
-  TaskProjectionOp, UnitBuildDispatchResult, UnitBuildOutcome,
-  BuildLoopRunnerResult, UnitStatusPatch,
+  BackpressureResult, UnitBuildDispatchResult, SingleUnitResult, UnitReviewResult,
 } from './ralph/types.ts';
 
 // ─── CLI ARG PARSING ────────────────────────────────────────────────────────
 
-export function parseBuildLoopArgs(argv: string[]): { planPath: string; cwd: string } {
+export function parseBuildLoopArgs(argv: string[]): { planPath: string; cwd: string; unitId: number } {
   const planIdx = argv.indexOf('--plan');
   if (planIdx === -1 || planIdx + 1 >= argv.length) {
     throw new Error('Missing required flag: --plan <plan-file-path>');
@@ -44,7 +40,15 @@ export function parseBuildLoopArgs(argv: string[]): { planPath: string; cwd: str
   if (cwdIdx === -1 || cwdIdx + 1 >= argv.length) {
     throw new Error('Missing required flag: --cwd <project-dir>');
   }
-  return { planPath: argv[planIdx + 1], cwd: argv[cwdIdx + 1] };
+  const unitIdx = argv.indexOf('--unit');
+  if (unitIdx === -1 || unitIdx + 1 >= argv.length) {
+    throw new Error('Missing required flag: --unit <unit-id>');
+  }
+  const unitId = parseInt(argv[unitIdx + 1], 10);
+  if (isNaN(unitId) || unitId < 1) {
+    throw new Error(`Invalid --unit value: ${argv[unitIdx + 1]}. Must be a positive integer.`);
+  }
+  return { planPath: argv[planIdx + 1], cwd: argv[cwdIdx + 1], unitId };
 }
 
 // ─── UNIT FILE MUTATION HELPERS ─────────────────────────────────────────────
@@ -90,7 +94,7 @@ export function replaceOrAppendSection(content: string, heading: string, body: s
  * Write unit status, attempts, and build attempt summary to a unit plan file.
  * Uses atomic temp-file + rename to prevent partial writes.
  */
-export function writeUnitStatus(unitPath: string, patch: UnitStatusPatch): void {
+export function writeUnitStatus(unitPath: string, patch: import('./ralph/types.ts').UnitStatusPatch): void {
   let content = fs.readFileSync(unitPath, 'utf-8');
   content = upsertMetadataLine(content, 'Status', patch.status);
   content = upsertMetadataLine(content, 'Attempts', String(patch.attempts));
@@ -121,104 +125,52 @@ export function extractBackpressureCommands(content: string): string[] {
   return [...section.matchAll(/`([^`]+)`/g)].map(m => m[1].trim()).filter(Boolean);
 }
 
-// ─── ACTION INSPECTION HELPERS ──────────────────────────────────────────────
-
-export function findBuildInvokeAction(output: StateMachineOutput): SkillAction | null {
-  for (const action of output.actions) {
-    if (action.type === 'invoke_skill') {
-      const sa = action as SkillAction;
-      if (sa.stageType === 'ralph-build') return sa;
-    }
-  }
-  return null;
-}
-
-export function findErrorAction(output: StateMachineOutput): ErrorAction | null {
-  for (const action of output.actions) {
-    if (action.type === 'error') return action as ErrorAction;
-  }
-  return null;
-}
-
-export function findBlockedAction(output: StateMachineOutput): BlockedAction | null {
-  for (const action of output.actions) {
-    if (action.type === 'blocked') return action as BlockedAction;
-  }
-  return null;
-}
-
-/** Convert update_tasks actions into flat TaskProjectionOp array. */
-export function collectTaskOps(actions: Action[]): TaskProjectionOp[] {
-  const ops: TaskProjectionOp[] = [];
-  for (const action of actions) {
-    if (action.type === 'update_tasks') {
-      const ta = action as TaskAction;
-      for (const op of ta.operations) {
-        ops.push({ ref: op.ref, status: op.status });
-      }
-    }
-  }
-  return ops;
-}
-
-/** Apply write_plan actions to the plan file using string replacement. */
-export function applyWritePlanActions(planPath: string, actions: Action[]): void {
-  let content = fs.readFileSync(planPath, 'utf-8');
-  for (const action of actions) {
-    if (action.type === 'write_plan') {
-      const wp = action as WritePlanAction;
-      for (const edit of wp.edits) {
-        if (content.includes(edit.old_string)) {
-          content = content.replace(edit.old_string, edit.new_string);
-        }
-      }
-    }
-  }
-  fs.writeFileSync(planPath, content, 'utf-8');
-}
-
-// ─── STATE MACHINE QUERY ────────────────────────────────────────────────────
+// ─── UNIT PATH RESOLUTION ──────────────────────────────────────────────────
 
 /**
- * Query the state machine by importing main() directly.
- * main() is NOT pure — it reads files, loads/saves state, and can throw.
- * Safe from process.exit (gated by import.meta.main).
+ * Resolve the unit plan file path from the plan path and unit ID.
+ * Plan path format: <projectDir>/.vcp/plan/ralph-<slug>.md
+ * Unit path format: <projectDir>/.vcp/plan/ralph/<slug>/unit-<id>.md
  */
-function queryStateMachine(planPath: string): StateMachineOutput {
-  return queryStateMachineRaw(planPath, 'next');
+export function resolveUnitPath(planPath: string, unitId: number): { unitPath: string; slug: string } {
+  const planBasename = path.basename(planPath);
+  const slugMatch = planBasename.match(/^ralph-(.+)\.md$/);
+  if (!slugMatch) {
+    throw new Error(`Cannot extract slug from plan filename: ${planBasename}`);
+  }
+  const slug = slugMatch[1];
+  const planDir = path.dirname(planPath);
+  const unitPath = path.join(planDir, 'ralph', slug, `unit-${unitId}.md`);
+  return { unitPath, slug };
 }
 
-// ─── BUILD DISPATCH ─────────────────────────────────────────────────────────
+// ─── STAGE-RUNNER SUBPROCESS ─────────────────────────────────────────────────
+
+/** Raw result from spawning stage-runner.ts. */
+interface StageRunnerResult {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+}
 
 /**
- * Spawn stage-runner.ts as subprocess to dispatch the configured build executor.
- * Must be subprocess because stage-runner calls process.exit via emitSuccess/emitError.
+ * Spawn stage-runner.ts as subprocess and return raw output.
+ * Shared by build dispatch and review dispatch.
  */
-async function dispatchBuildUnitDefault(
+function spawnStageRunner(
+  stageType: string,
+  task: string,
   planPath: string,
   cwd: string,
-  action: SkillAction,
   debugEnabled: boolean,
-): Promise<UnitBuildDispatchResult> {
-  const unitContent = fs.readFileSync(action.unitPath!, 'utf-8');
-  const task = [
-    'Orchestrated single-unit build.',
-    `Unit plan path: ${action.unitPath}`,
-    'Read and implement the following unit plan.',
-    'Do NOT write **Status:** or decide pass/fail — the outer runner handles that.',
-    'Do NOT modify the unit plan file itself.',
-    '',
-    unitContent,
-  ].join('\n');
-
+): Promise<StageRunnerResult> {
   const stageRunnerPath = path.join(path.dirname(import.meta.path), 'stage-runner.ts');
-
-  return new Promise<UnitBuildDispatchResult>((resolve) => {
+  return new Promise<StageRunnerResult>((resolve) => {
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     const proc = spawn('bun', [
       stageRunnerPath,
-      '--stage-type', 'ralph-build',
+      '--stage-type', stageType,
       '--plan', planPath,
       '--cwd', cwd,
       '--task-stdin',
@@ -233,59 +185,182 @@ async function dispatchBuildUnitDefault(
     proc.stdin!.end();
 
     proc.on('error', (err) => {
-      resolve({
-        event: 'error',
-        stage: 'ralph-build',
-        phase: 'dispatch_failed',
-        error: `Failed to start stage-runner: ${err.message}`,
-      });
+      resolve({ stdout: '', stderr: err.message, code: null });
     });
 
     proc.on('close', (code) => {
       const stdout = Buffer.concat(stdoutChunks).toString('utf-8').trim();
-
-      // Log captured stderr to file (debug-gated); never leaks to parent Bash tool
       const stderr = Buffer.concat(stderrChunks).toString('utf-8');
       if (stderr.trim()) {
         vcpLog(cwd, {
-          source: 'build-loop-runner', event: 'stage_runner_stderr', decision: 'info',
+          source: 'build-loop-runner', event: `${stageType}_stderr`, decision: 'info',
           details: `stderr=${stderr.slice(0, 100_000)}`,
         }, debugEnabled).catch(() => {});
       }
-
-      // Parse JSON defensively — stage-runner may crash and emit to stderr only
-      try {
-        const parsed = JSON.parse(stdout);
-        if (parsed.event === 'complete') {
-          resolve({
-            event: 'complete',
-            stage: 'ralph-build',
-            synthesis: parsed.synthesis ?? null,
-            workerOutputs: parsed.worker_outputs ?? [],
-          });
-        } else {
-          resolve({
-            event: 'error',
-            stage: 'ralph-build',
-            phase: parsed.phase ?? 'dispatch',
-            error: parsed.error ?? `stage-runner returned non-complete event`,
-          });
-        }
-      } catch {
-        // Include stderr excerpt so fatal errors not on stdout are visible
-        const stderrExcerpt = stderr.trim() ? ` stderr=${stderr.slice(0, 500)}` : '';
-        resolve({
-          event: 'error',
-          stage: 'ralph-build',
-          phase: 'dispatch_failed',
-          error: `stage-runner exited ${code}, stdout not parseable: ${stdout.slice(0, 500)}${stderrExcerpt}`,
-        });
-      }
+      resolve({ stdout, stderr, code });
     });
   });
 }
 
-// ─── RESULT BUILDERS ─────────────────────────────────────���──────────────────
+// ─── BUILD DISPATCH ─────────────────────────────────────────────────────────
+
+async function dispatchBuildUnitDefault(
+  planPath: string,
+  cwd: string,
+  unitPath: string,
+  debugEnabled: boolean,
+): Promise<UnitBuildDispatchResult> {
+  const unitContent = fs.readFileSync(unitPath, 'utf-8');
+  const task = [
+    'Orchestrated single-unit build.',
+    `Unit plan path: ${unitPath}`,
+    'Read and implement the following unit plan.',
+    'Do NOT write **Status:** or decide pass/fail — the outer runner handles that.',
+    'Do NOT modify the unit plan file itself.',
+    '',
+    unitContent,
+  ].join('\n');
+
+  const { stdout, stderr, code } = await spawnStageRunner('ralph-build', task, planPath, cwd, debugEnabled);
+
+  if (!stdout) {
+    return {
+      event: 'error', stage: 'ralph-build', phase: 'dispatch_failed',
+      error: `Failed to start stage-runner: ${stderr}`,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(stdout);
+    if (parsed.event === 'complete') {
+      return {
+        event: 'complete', stage: 'ralph-build',
+        synthesis: parsed.synthesis ?? null,
+        workerOutputs: parsed.worker_outputs ?? [],
+      };
+    }
+    return {
+      event: 'error', stage: 'ralph-build',
+      phase: parsed.phase ?? 'dispatch',
+      error: parsed.error ?? 'stage-runner returned non-complete event',
+    };
+  } catch {
+    const stderrExcerpt = stderr.trim() ? ` stderr=${stderr.slice(0, 500)}` : '';
+    return {
+      event: 'error', stage: 'ralph-build', phase: 'dispatch_failed',
+      error: `stage-runner exited ${code}, stdout not parseable: ${stdout.slice(0, 500)}${stderrExcerpt}`,
+    };
+  }
+}
+
+// ─── PER-UNIT SEMANTIC REVIEW ──────────────────────────────────────────────
+
+/**
+ * Parse a review verdict from synthesized review output.
+ * Searches for `## Verdict: PASS` or `## Verdict: NEEDS_CHANGES`.
+ * Fail-open: unparseable output → treat as PASS + log warning.
+ */
+export function parseReviewVerdict(output: string): { passed: boolean; feedback: string } {
+  const verdictMatch = output.match(/^##\s+Verdict:\s*(PASS|NEEDS_CHANGES)\s*$/im);
+  if (!verdictMatch) {
+    return { passed: true, feedback: '' };
+  }
+  if (verdictMatch[1].toUpperCase() === 'PASS') {
+    return { passed: true, feedback: '' };
+  }
+  // Extract feedback: everything after "## Review Feedback" heading, or everything after the verdict
+  const feedbackMatch = output.match(/^##\s+Review Feedback\s*$([\s\S]*?)(?=^##\s|$(?!\n))/im);
+  const feedback = feedbackMatch ? feedbackMatch[1].trim() : output.slice(verdictMatch.index! + verdictMatch[0].length).trim();
+  return { passed: false, feedback };
+}
+
+/**
+ * Read the contents of files listed in a unit plan's "Files to Touch" section.
+ * Returns formatted file contents for the reviewer.
+ */
+export function readFilesTouched(unitContent: string, cwd: string): string {
+  const section = unitContent.match(/^#{2,3}\s+Files to Touch\s*$([\s\S]*?)(?=^#{2,3}\s|$(?!\n))/im);
+  if (!section) return '';
+
+  const filePaths = [...section[1].matchAll(/[-*]\s+`([^`]+)`/g)].map(m => m[1].trim());
+  if (filePaths.length === 0) return '';
+
+  const parts: string[] = [];
+  for (const fp of filePaths) {
+    const fullPath = path.join(cwd, fp);
+    try {
+      const content = fs.readFileSync(fullPath, 'utf-8');
+      parts.push(`### File: ${fp}\n\`\`\`\n${content}\n\`\`\``);
+    } catch {
+      parts.push(`### File: ${fp} \u2014 NOT FOUND`);
+    }
+  }
+  return parts.join('\n\n');
+}
+
+/** Dispatch per-unit semantic review via stage-runner subprocess. Fail-open on any error. */
+async function dispatchUnitReviewDefault(
+  planPath: string,
+  cwd: string,
+  unitPath: string,
+  debugEnabled: boolean,
+): Promise<UnitReviewResult> {
+  try {
+    const unitContent = fs.readFileSync(unitPath, 'utf-8');
+    const fileContents = readFilesTouched(unitContent, cwd);
+
+    const task = [
+      'Review this unit implementation against its acceptance criteria.',
+      '',
+      '## Unit Plan',
+      unitContent,
+      '',
+      '## Implemented Files',
+      fileContents || '(no files found)',
+      '',
+      'Produce a verdict: ## Verdict: PASS or ## Verdict: NEEDS_CHANGES',
+    ].join('\n');
+
+    const { stdout } = await spawnStageRunner('unit-review', task, planPath, cwd, debugEnabled);
+
+    if (!stdout) {
+      return { skipped: false, passed: true, feedback: '' };
+    }
+
+    try {
+      const parsed = JSON.parse(stdout);
+      if (parsed.event === 'complete' && parsed.synthesis) {
+        return { skipped: false, ...parseReviewVerdict(parsed.synthesis) };
+      }
+      // Non-complete event — fail-open
+      vcpLog(cwd, {
+        source: 'build-loop-runner', event: 'unit_review_non_complete', decision: 'warn',
+        details: `stage-runner returned: ${stdout.slice(0, 500)}`,
+      }, debugEnabled).catch(() => {});
+      return { skipped: false, passed: true, feedback: '' };
+    } catch {
+      vcpLog(cwd, {
+        source: 'build-loop-runner', event: 'unit_review_parse_error', decision: 'warn',
+        details: `stdout not parseable: ${stdout.slice(0, 500)}`,
+      }, debugEnabled).catch(() => {});
+      return { skipped: false, passed: true, feedback: '' };
+    }
+  } catch (err) {
+    vcpLog(cwd, {
+      source: 'build-loop-runner', event: 'unit_review_error', decision: 'warn',
+      details: `Review dispatch failed: ${(err as Error).message}`,
+    }, debugEnabled).catch(() => {});
+    return { skipped: false, passed: true, feedback: '' };
+  }
+}
+
+/** Check if unit-review stage is enabled (has executors) in the given config. */
+function isUnitReviewEnabled(config: { stages: Record<string, { executors: unknown[] }> }): boolean {
+  const stage = config.stages['unit-review' as StageType];
+  return !!stage && stage.executors.length > 0;
+}
+
+// ─── RESULT BUILDERS ────────────────────────────────────────────────────────
 
 function renderAttemptSummary(
   dispatch: UnitBuildDispatchResult,
@@ -308,170 +383,134 @@ function renderAttemptSummary(
   return lines.join('\n');
 }
 
-// ─── MAIN BUILD LOOP ────────────────────────────────────────────────────────
+// ─── SINGLE UNIT BUILD ─────────────────────────────────────────────────────
 
 export interface BuildLoopOverrides {
-  dispatchFn?: typeof dispatchBuildUnitDefault;
+  dispatchFn?: (planPath: string, cwd: string, unitPath: string, debug: boolean) => Promise<UnitBuildDispatchResult>;
   backpressureFn?: typeof runBackpressure;
+  reviewFn?: (planPath: string, cwd: string, unitPath: string, debug: boolean) => Promise<UnitReviewResult>;
 }
 
-export async function runBuildLoop(
-  args: { planPath: string; cwd: string },
+export async function runSingleUnit(
+  args: { planPath: string; cwd: string; unitId: number },
   overrides?: BuildLoopOverrides,
-): Promise<BuildLoopRunnerResult> {
+): Promise<SingleUnitResult> {
   const debug = await isDebugEnabled();
   const dispatchFn = overrides?.dispatchFn ?? dispatchBuildUnitDefault;
   const backpressureFn = overrides?.backpressureFn ?? runBackpressure;
 
-  let devBuddyConfig: { max_build_attempts: number };
+  // Load config once — used for attempt budget and review-enabled check
+  let devBuddyConfig: ReturnType<typeof loadDevBuddyConfig>;
   try {
     devBuddyConfig = loadDevBuddyConfig();
   } catch {
-    devBuddyConfig = { max_build_attempts: 3 };
+    devBuddyConfig = { max_build_attempts: 3, stages: {} } as ReturnType<typeof loadDevBuddyConfig>;
+  }
+  const reviewEnabled = isUnitReviewEnabled(devBuddyConfig);
+  const reviewFn = overrides?.reviewFn ?? (reviewEnabled
+    ? dispatchUnitReviewDefault
+    : async () => ({ skipped: true, passed: true, feedback: '' } as UnitReviewResult));
+
+  // Resolve unit path
+  let unitPath: string;
+  try {
+    ({ unitPath } = resolveUnitPath(args.planPath, args.unitId));
+  } catch (err) {
+    return {
+      event: 'unit_error', unitId: args.unitId, unitPath: '',
+      attempt: 0, maxAttempts: 0, outcome: 'failed',
+      summary: `Path resolution error: ${(err as Error).message}`,
+      error: (err as Error).message,
+    };
   }
 
-  const allUnitOutcomes: UnitBuildOutcome[] = [];
-  const taskOps: TaskProjectionOp[] = [];
-  let slug = '';
+  // Read unit file — handles both "not found" and other read errors
+  let unitContent: string;
+  try {
+    unitContent = fs.readFileSync(unitPath, 'utf-8');
+  } catch (err) {
+    const msg = (err as NodeJS.ErrnoException).code === 'ENOENT'
+      ? `Unit file not found: ${unitPath}`
+      : `Failed to read unit file: ${(err as Error).message}`;
+    return {
+      event: 'unit_error', unitId: args.unitId, unitPath,
+      attempt: 0, maxAttempts: 0, outcome: 'failed',
+      summary: msg, error: msg,
+    };
+  }
 
-  while (true) {
-    // Query state machine — wrapped in try/catch for corrupted state
-    let sm: StateMachineOutput;
-    try {
-      sm = queryStateMachine(args.planPath);
-    } catch (err) {
-      return {
-        event: 'build_loop_error',
-        slug,
-        terminalPlanStatus: 'build' as PlanStatus,
-        nextStep: 'report_error',
-        taskOperations: taskOps,
-        units: allUnitOutcomes,
-        summary: `State machine error: ${(err as Error).message}`,
-        error: { message: (err as Error).message },
-      };
-    }
+  const unit = parseUnitPlan(unitContent, args.unitId);
 
-    slug = sm.state.slug;
+  // Eligibility guard — reject already-done or already-failed units
+  if (unit.status === 'done') {
+    return {
+      event: 'unit_error', unitId: args.unitId, unitPath,
+      attempt: unit.attempts, maxAttempts: unit.maxAttempts, outcome: 'done',
+      summary: `Unit ${args.unitId} is already done.`,
+      error: 'Unit already done',
+    };
+  }
+  if (unit.status === 'failed') {
+    return {
+      event: 'unit_error', unitId: args.unitId, unitPath,
+      attempt: unit.attempts, maxAttempts: unit.maxAttempts, outcome: 'failed',
+      summary: `Unit ${args.unitId} is already failed.`,
+      error: 'Unit already failed',
+    };
+  }
 
-    // Check for terminal actions
-    const fatal = findErrorAction(sm);
-    if (fatal) {
-      return {
-        event: 'build_loop_error',
-        slug,
-        terminalPlanStatus: sm.state.status,
-        nextStep: 'report_error',
-        taskOperations: taskOps,
-        units: allUnitOutcomes,
-        summary: `State machine error: ${fatal.message}`,
-        error: { message: fatal.message },
-      };
-    }
+  const maxAttempts = Math.min(unit.maxAttempts, devBuddyConfig.max_build_attempts);
 
-    const blocked = findBlockedAction(sm);
-    if (blocked) {
-      return {
-        event: 'build_loop_blocked',
-        slug,
-        terminalPlanStatus: sm.state.status,
-        nextStep: 'report_blocked',
-        taskOperations: taskOps,
-        units: allUnitOutcomes,
-        summary: `Build blocked: ${blocked.reason}`,
-        blocked: { reason: blocked.reason, preconditionError: blocked.preconditionError },
-      };
-    }
+  // Guard: attempt budget already exhausted
+  if (unit.attempts >= maxAttempts) {
+    writeUnitStatus(unitPath, {
+      status: 'failed',
+      attempts: unit.attempts,
+      appendResult: `Attempt budget exhausted (${unit.attempts}/${maxAttempts}).`,
+    });
+    return {
+      event: 'unit_failed', unitId: args.unitId, unitPath,
+      attempt: unit.attempts, maxAttempts, outcome: 'failed',
+      summary: `Unit ${args.unitId} exhausted attempt budget (${unit.attempts}/${maxAttempts}).`,
+    };
+  }
 
-    // Look for a build invoke action
-    const buildAction = findBuildInvokeAction(sm);
+  let lastAttempt = unit.attempts;
 
-    if (!buildAction) {
-      // No build action — state machine transitioned away from build (all done → review)
-      // Apply any write_plan actions (e.g., Status: build → review)
-      applyWritePlanActions(args.planPath, sm.actions);
-      taskOps.push(...collectTaskOps(sm.actions));
-      return {
-        event: 'build_loop_complete',
-        slug,
-        terminalPlanStatus: sm.state.status,
-        nextStep: 'requery_state_machine',
-        taskOperations: taskOps,
-        units: allUnitOutcomes,
-        summary: `Build loop complete: ${allUnitOutcomes.filter(u => u.outcome === 'done').length} units done, plan advanced to ${sm.state.status}.`,
-      };
-    }
-
-    // Collect task ops from this iteration
-    taskOps.push(...collectTaskOps(sm.actions));
-
-    // Read unit and compute attempt budget
-    const unitContent = fs.readFileSync(buildAction.unitPath!, 'utf-8');
-    const unit = parseUnitPlan(unitContent, buildAction.unitId!);
-    const maxAttempts = Math.min(unit.maxAttempts, devBuddyConfig.max_build_attempts);
-    const nextAttempt = unit.attempts + 1;
-
-    // Guard: attempt budget exhausted
-    if (nextAttempt > maxAttempts) {
-      writeUnitStatus(buildAction.unitPath!, {
-        status: 'failed',
-        attempts: unit.attempts,
-        appendResult: `Attempt budget exhausted (${unit.attempts}/${maxAttempts}).`,
-      });
-      taskOps.push({ ref: `unit:${buildAction.unitId}`, status: 'failed' });
-      allUnitOutcomes.push({
-        unitId: buildAction.unitId!,
-        unitPath: buildAction.unitPath!,
-        attempt: unit.attempts,
-        maxAttempts,
-        dispatch: {
-          event: 'error',
-          stage: 'ralph-build',
-          phase: 'attempt_budget',
-          error: `Exhausted ${unit.attempts}/${maxAttempts} attempts.`,
-        },
-        backpressure: [],
-        outcome: 'failed',
-      });
-      continue; // State machine may have independent units
-    }
+  while (lastAttempt < maxAttempts) {
+    const nextAttempt = lastAttempt + 1;
 
     // Crash-safe: consume attempt before dispatch
-    writeUnitStatus(buildAction.unitPath!, {
+    writeUnitStatus(unitPath, {
       status: 'pending',
       attempts: nextAttempt,
       appendResult: `Attempt ${nextAttempt}/${maxAttempts} started.`,
     });
 
     // Dispatch build executor
-    const dispatch = await dispatchFn(args.planPath, args.cwd, buildAction, debug);
+    const dispatch = await dispatchFn(args.planPath, args.cwd, unitPath, debug);
 
     // Re-read unit file (executor may have modified project files)
-    const refreshedContent = fs.readFileSync(buildAction.unitPath!, 'utf-8');
+    const refreshedContent = fs.readFileSync(unitPath, 'utf-8');
     const commands = extractBackpressureCommands(refreshedContent);
 
     // Zero backpressure commands = hard failure
     if (commands.length === 0) {
       const isExhausted = nextAttempt >= maxAttempts;
-      const outcome: UnitBuildOutcome['outcome'] = isExhausted ? 'failed' : 'retry';
-      writeUnitStatus(buildAction.unitPath!, {
+      writeUnitStatus(unitPath, {
         status: isExhausted ? 'failed' : 'pending',
         attempts: nextAttempt,
-        appendResult: renderAttemptSummary(dispatch, [], outcome, nextAttempt, maxAttempts) +
+        appendResult: renderAttemptSummary(dispatch, [], isExhausted ? 'failed' : 'retry', nextAttempt, maxAttempts) +
           '\n\n**Note:** No backpressure commands found in unit file.',
       });
       if (isExhausted) {
-        taskOps.push({ ref: `unit:${buildAction.unitId}`, status: 'failed' });
+        return {
+          event: 'unit_failed', unitId: args.unitId, unitPath,
+          attempt: nextAttempt, maxAttempts, outcome: 'failed',
+          summary: `Unit ${args.unitId} failed: no backpressure commands (attempt ${nextAttempt}/${maxAttempts}).`,
+        };
       }
-      allUnitOutcomes.push({
-        unitId: buildAction.unitId!,
-        unitPath: buildAction.unitPath!,
-        attempt: nextAttempt,
-        maxAttempts,
-        dispatch,
-        backpressure: [],
-        outcome,
-      });
+      lastAttempt = nextAttempt;
       continue;
     }
 
@@ -484,45 +523,97 @@ export async function runBuildLoop(
       backpressure.length > 0 &&
       backpressure.every(r => r.passed);
 
-    let outcome: UnitBuildOutcome['outcome'];
     if (passed) {
-      outcome = 'done';
-      writeUnitStatus(buildAction.unitPath!, {
-        status: 'done',
+      // Per-unit semantic review (if configured) — fail-open on any error
+      let review: UnitReviewResult;
+      try {
+        review = await reviewFn(args.planPath, args.cwd, unitPath, debug);
+      } catch {
+        review = { skipped: false, passed: true, feedback: '' };
+      }
+
+      if (review.skipped || review.passed) {
+        // Clear stale review feedback from prior failed attempts
+        if (refreshedContent.includes('## Review Feedback')) {
+          const cleaned = replaceOrAppendSection(refreshedContent, '## Review Feedback', '');
+          const tempClean = `${unitPath}.tmp-${process.pid}-${Date.now()}`;
+          try {
+            fs.writeFileSync(tempClean, cleaned, 'utf-8');
+            fs.renameSync(tempClean, unitPath);
+          } catch { try { fs.unlinkSync(tempClean); } catch { /* ignore */ } }
+        }
+
+        writeUnitStatus(unitPath, {
+          status: 'done',
+          attempts: nextAttempt,
+          appendResult: renderAttemptSummary(dispatch, backpressure, 'done', nextAttempt, maxAttempts),
+        });
+        return {
+          event: 'unit_done', unitId: args.unitId, unitPath,
+          attempt: nextAttempt, maxAttempts, outcome: 'done',
+          summary: `Unit ${args.unitId} done on attempt ${nextAttempt}/${maxAttempts}.`,
+        };
+      }
+
+      // Review failed — write feedback for next attempt
+      const withFeedback = replaceOrAppendSection(refreshedContent, '## Review Feedback', review.feedback);
+      const tempFeedback = `${unitPath}.tmp-${process.pid}-${Date.now()}`;
+      try {
+        fs.writeFileSync(tempFeedback, withFeedback, 'utf-8');
+        fs.renameSync(tempFeedback, unitPath);
+      } catch { try { fs.unlinkSync(tempFeedback); } catch { /* ignore */ } }
+
+      const isExhausted = nextAttempt >= maxAttempts;
+      writeUnitStatus(unitPath, {
+        status: isExhausted ? 'failed' : 'pending',
         attempts: nextAttempt,
-        appendResult: renderAttemptSummary(dispatch, backpressure, outcome, nextAttempt, maxAttempts),
+        appendResult: renderAttemptSummary(dispatch, backpressure,
+          isExhausted ? 'failed' : 'retry', nextAttempt, maxAttempts) +
+          '\n\n**Review Verdict:** NEEDS_CHANGES\n' + review.feedback,
       });
-      taskOps.push({ ref: `unit:${buildAction.unitId}`, status: 'completed' });
-    } else if (nextAttempt >= maxAttempts) {
-      outcome = 'failed';
-      writeUnitStatus(buildAction.unitPath!, {
-        status: 'failed',
-        attempts: nextAttempt,
-        appendResult: renderAttemptSummary(dispatch, backpressure, outcome, nextAttempt, maxAttempts),
-      });
-      taskOps.push({ ref: `unit:${buildAction.unitId}`, status: 'failed' });
-    } else {
-      outcome = 'retry';
-      writeUnitStatus(buildAction.unitPath!, {
-        status: 'pending',
-        attempts: nextAttempt,
-        appendResult: renderAttemptSummary(dispatch, backpressure, outcome, nextAttempt, maxAttempts),
-      });
+
+      if (isExhausted) {
+        return {
+          event: 'unit_failed', unitId: args.unitId, unitPath,
+          attempt: nextAttempt, maxAttempts, outcome: 'failed',
+          summary: `Unit ${args.unitId} failed review after ${nextAttempt}/${maxAttempts} attempts.`,
+        };
+      }
+      lastAttempt = nextAttempt;
+      continue;
     }
 
-    allUnitOutcomes.push({
-      unitId: buildAction.unitId!,
-      unitPath: buildAction.unitPath!,
-      attempt: nextAttempt,
-      maxAttempts,
-      dispatch,
-      backpressure,
-      outcome,
+    // Failed — check if exhausted
+    if (nextAttempt >= maxAttempts) {
+      writeUnitStatus(unitPath, {
+        status: 'failed',
+        attempts: nextAttempt,
+        appendResult: renderAttemptSummary(dispatch, backpressure, 'failed', nextAttempt, maxAttempts),
+      });
+      return {
+        event: 'unit_failed', unitId: args.unitId, unitPath,
+        attempt: nextAttempt, maxAttempts, outcome: 'failed',
+        summary: `Unit ${args.unitId} failed after ${nextAttempt}/${maxAttempts} attempts.`,
+      };
+    }
+
+    // Retry — write pending and continue loop
+    writeUnitStatus(unitPath, {
+      status: 'pending',
+      attempts: nextAttempt,
+      appendResult: renderAttemptSummary(dispatch, backpressure, 'retry', nextAttempt, maxAttempts),
     });
+    lastAttempt = nextAttempt;
   }
+
+  return {
+    event: 'unit_failed', unitId: args.unitId, unitPath,
+    attempt: lastAttempt, maxAttempts, outcome: 'failed',
+    summary: `Unit ${args.unitId} exhausted all attempts.`,
+  };
 }
 
-// ─��─ CLI ENTRY POINT ────────────────────────────────────────��───────────────
+// ─── CLI ENTRY POINT ────────────────────────────────────────────────────────
 
 if (import.meta.main) {
   (async () => {
@@ -536,30 +627,30 @@ if (import.meta.main) {
 
       await vcpLog(cwd, {
         source: SRC, event: 'start', decision: 'info',
-        details: `plan=${path.basename(args.planPath)} cwd=${cwd}`,
+        details: `plan=${path.basename(args.planPath)} unit=${args.unitId} cwd=${cwd}`,
       }, debug);
 
-      const result = await runBuildLoop(args);
+      const result = await runSingleUnit(args);
 
       await vcpLog(cwd, {
         source: SRC, event: 'complete', decision: 'info',
-        details: `event=${result.event} units=${result.units.length} slug=${result.slug}`,
+        details: `event=${result.event} unit=${result.unitId} attempt=${result.attempt}/${result.maxAttempts}`,
       }, debug);
 
       console.log(JSON.stringify(result, null, 2));
 
-      if (result.event === 'build_loop_error') process.exit(2);
+      if (result.event === 'unit_error') process.exit(1);
     } catch (err) {
       const msg = (err as Error).message;
       console.log(JSON.stringify({
-        event: 'build_loop_error',
-        slug: '',
-        terminalPlanStatus: 'build',
-        nextStep: 'report_error',
-        taskOperations: [],
-        units: [],
+        event: 'unit_error',
+        unitId: 0,
+        unitPath: '',
+        attempt: 0,
+        maxAttempts: 0,
+        outcome: 'failed',
         summary: msg,
-        error: { message: msg },
+        error: msg,
       }));
       await vcpLog(cwd, { source: SRC, event: 'fatal', decision: 'error', details: msg }, debug);
       process.exit(1);

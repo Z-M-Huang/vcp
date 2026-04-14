@@ -26,7 +26,8 @@ import { discoverSystemPrompts, getSystemPrompt, writeCustomPrompt, deleteCustom
 import { loadChatroomConfig, saveChatroomConfig, validateChatroomConfig, DEFAULT_CHATROOM_CONFIG } from './chatroom-config.ts';
 import type { ChatroomConfig } from '../types/chatroom.ts';
 import type { Preset } from '../types/presets.ts';
-import { STAGE_DEFINITIONS } from '../types/stage-definitions.ts';
+import { STAGE_DEFINITIONS, OPTIONAL_STAGE_TYPES } from '../types/stage-definitions.ts';
+import type { StageType } from '../types/stage-definitions.ts';
 import type { DevBuddyConfig, StageExecutor } from '../types/pipeline.ts';
 import { VALID_STAGE_TYPES, MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 
@@ -745,7 +746,14 @@ async function handleApiRequest(
     if (pathname === '/api/stages') {
       if (req.method === 'GET') {
         const config = loadDevBuddyConfig();
-        return jsonResponse({ stages: config.stages }, 200, corsHeaders);
+        // Ensure optional stages always appear in the response (empty executors = disabled)
+        const stages = { ...config.stages };
+        for (const optStage of OPTIONAL_STAGE_TYPES) {
+          if (!stages[optStage as StageType]) {
+            stages[optStage as StageType] = { executors: [] };
+          }
+        }
+        return jsonResponse({ stages }, 200, corsHeaders);
       }
     }
 

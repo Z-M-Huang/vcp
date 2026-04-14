@@ -29,13 +29,16 @@ On first run:
 
 1. **Generate slug** from the feature description (lowercase, hyphens, no special chars).
 
-2. **Create plan directory and file:**
+2. **Check for existing plan** at `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md`.
+   If it exists → follow **Cross-Session Resume** instead of continuing here.
+
+3. **Create plan directory and file:**
    ```bash
    mkdir -p "${CLAUDE_PROJECT_DIR}/.vcp/plan"
    ```
    Write initial plan at `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md` with `**Status:** discover`.
 
-3. **Create 6 pipeline stage tasks** with dependency chain:
+4. **Create 6 pipeline stage tasks** with dependency chain:
 
    Use TaskCreate for each, then TaskUpdate to set `addBlockedBy`. Track the returned task IDs.
 
@@ -57,14 +60,14 @@ On first run:
    - The state machine query command: `bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" --plan "{plan}" --action next`
    - Resume instruction: "Read plan file, query state machine, continue loop."
 
-4. **Register task IDs** in the state file for resume persistence:
+5. **Register task IDs** in the state file for resume persistence:
    ```bash
    bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
      --plan "{plan}" --action register-task --ref "stage:{stage}" --task-id "{id}"
    ```
    Run once per task (6 calls total).
 
-5. **Enter the main orchestration loop.**
+6. **Enter the main orchestration loop.**
 
 ---
 
@@ -82,18 +85,26 @@ On first run:
 
    - **`invoke_skill`** — Route by `stageType`:
 
-     **Build stage** (`stageType: "ralph-build"`): Do NOT use the Skill tool. Instead, invoke `build-loop-runner.ts` via Bash — it owns the entire inner build loop mechanically:
+     **Build stage** (`stageType: "ralph-build"`): Drive unit-by-unit. The runner owns the full retry loop per unit.
+     The state machine's `invoke_skill` action includes `unitId` and `unitPath`. Process the `update_tasks` action normally (marks unit `in_progress`), then dispatch via Bash with `run_in_background: true`:
      ```bash
      bun "${CLAUDE_PLUGIN_ROOT}/scripts/build-loop-runner.ts" \
-       --plan "{plan}" --cwd "${CLAUDE_PROJECT_DIR}"
+       --plan "{plan}" --cwd "${CLAUDE_PROJECT_DIR}" --unit {unitId} 2>&1
      ```
-     The script loops internally: queries the state machine, dispatches each unit to the configured executor via `stage-runner.ts`, runs backpressure, writes unit status, and continues until all units are done (or blocked/failed). It returns a single JSON blob:
+     **IMPORTANT:** The Bash tool has a hard max timeout of 600,000ms (10 min). Units with large implementations or multiple retry attempts can take much longer. Always use `run_in_background: true` to prevent the Bash tool from killing the process prematurely.
+
+     After launching:
+     1. Save the returned `task_id` from the Bash tool.
+     2. Poll with `TaskOutput(task_id, block: true, timeout: 600000)`.
+     3. If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
+
+     The script outputs JSON when the unit is done or failed (all retries are internal):
      ```json
-     {"event": "build_loop_complete", "taskOperations": [...], "units": [...], "summary": "..."}
+     {"event": "unit_done", "unitId": 3, "outcome": "done", "attempt": 1, "maxAttempts": 3, "summary": "..."}
      ```
-     After the script returns:
-     1. **Replay `taskOperations`** — For each op, resolve the `ref` to a task ID via the state file's `taskIds` map, then call TaskUpdate with the specified status.
-     2. **Check `event`**: `build_loop_complete` → re-query the state machine. `build_loop_blocked` → report `blocked.reason` to user. `build_loop_error` → report `error.message` to user.
+     After the script completes:
+     1. **Evaluate `event`**: `unit_done` → TaskUpdate unit task to `completed`. `unit_failed` → TaskUpdate unit task to `failed`. `unit_error` → TaskUpdate unit task to `failed`, report error to user.
+     2. **Re-query the state machine** — it returns the next build action (another unit) or transitions to review.
 
      **All other stages**: Use the Skill tool to call the named skill (e.g., `/dev-buddy-discover`). If `unitId` and `unitPath` are present, pass this context to the skill.
 
@@ -135,6 +146,23 @@ On first run:
 
    This is a **hard failure**, not a warning. It prevents the primary failure mode where the decomposition LLM produces abbreviated unit files without contracts or test stubs.
 
+   Also validate test stub quality in each unit file:
+   ```bash
+   for f in ${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph/{SLUG}/unit-*.md; do
+     stubs=$(sed -n '/^### Test Stubs/,/^###/p' "$f" | head -100)
+     expect_count=$(echo "$stubs" | grep -c 'expect(' 2>/dev/null || echo 0)
+     if [ "$expect_count" -eq 0 ]; then
+       echo "WEAK_STUBS: No expect() assertions in $(basename $f)"
+     fi
+   done
+   ```
+
+   **If ANY unit has zero `expect()` calls in its Test Stubs section:**
+   1. Do NOT proceed to `decompose-review` user checkpoint
+   2. Write the plan status back to `decompose`
+   3. Write a `## Feedback` section listing the weak stubs per unit file
+   4. Re-query the state machine (triggers decomposition re-run with feedback)
+
 5. **Post-review source verification** (after code review returns `approved`, before transitioning to UAT):
 
    If any unit files contain `### Authoritative Sources` blocks:
@@ -175,7 +203,7 @@ After decompose-review is approved and the Decomposition task is marked complete
 
 2. **Create one task per unit** via TaskCreate:
    - Subject: `"Unit {id}: {title}"`
-   - Description: `"Build unit {id}. Plan: .vcp/plan/ralph/{SLUG}/unit-{id}.md"`
+   - Description: `"Build unit {id}.\nPlan: .vcp/plan/ralph/{SLUG}/unit-{id}.md\nCommand (run_in_background: true): bun \"${CLAUDE_PLUGIN_ROOT}/scripts/build-loop-runner.ts\" --plan \"{plan}\" --cwd \"${CLAUDE_PROJECT_DIR}\" --unit {id} 2>&1"`
    - Metadata: `{type: 'unit', unitId: id, slug: '{SLUG}', plan: '{plan path}'}`
 
 3. **Set inter-unit dependencies** — For each unit with `dependsOn`, call TaskUpdate with `addBlockedBy` mapping `dependsOn` unit IDs to their corresponding task IDs.
@@ -229,3 +257,56 @@ After context compaction:
 4. **Read the plan file** for current `**Status:**`.
 
 5. **Re-enter the main loop** at step 1 (query state machine). The state machine reads the plan file and returns the correct next action.
+
+---
+
+## Cross-Session Resume
+
+When `/dev-buddy-ralph` is invoked in a new session and a plan file already exists:
+
+1. **Generate slug** from the feature description.
+2. **Check for existing plan** at `${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md`.
+   If no → normal initialization (first run). If yes → continue below.
+
+3. **Check if tasks already exist** — `TaskList()`.
+   - If tasks exist with matching slug metadata → use existing **Resume Protocol** (context compaction case). Skip to step 8.
+   - If no matching tasks → cross-session restart (below).
+
+4. **Read plan status directly** — do NOT use `--action next` for probing (it has side effects).
+   ```bash
+   grep '^\*\*Status:\*\*' "${CLAUDE_PROJECT_DIR}/.vcp/plan/ralph-{SLUG}.md"
+   ```
+   Extract the status value (e.g., `build`, `review`, `uat`, `done`).
+
+5. **Recreate stage tasks** — Create all 6 stage tasks via TaskCreate with dependency chain.
+   Determine completed stages from the extracted status:
+
+   | Plan Status | Completed Stages |
+   |-------------|-----------------|
+   | `discover` / `discover-review` | none |
+   | `requirements` / `requirements-review` | Discovery |
+   | `decompose` / `decompose-review` | Discovery, Requirements |
+   | `build` | Discovery, Requirements, Decomposition |
+   | `review` | Discovery, Requirements, Decomposition (Development stays `in_progress`) |
+   | `uat` | Discovery, Requirements, Decomposition (Development, Code Review stay `in_progress` per loop-back rules) |
+   | `done` | All 6 completed |
+
+   Mark completed stage tasks immediately via TaskUpdate. For `in_progress` stages (review/UAT loop-back), mark them `in_progress`.
+
+6. **Recreate unit tasks** (if status >= `build`):
+   Use `--action list-units` (side-effect-free — only reads unit files):
+   ```bash
+   bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
+     --plan "{plan}" --action list-units
+   ```
+   For each unit:
+   - Create task via TaskCreate with subject `"Unit {id}: {title}"`, description including the build command, and metadata `{type: 'unit', unitId: id, slug, plan}`
+   - If unit status is `done` → TaskUpdate to `completed`
+   - If unit status is `failed` → TaskUpdate to `failed`
+   - If unit status is `pending` → leave as open
+   Set inter-unit dependencies via TaskUpdate `addBlockedBy`.
+   Block the Development milestone by all unit task IDs.
+
+7. **Register all new task IDs** in the state file via `--action register-task`.
+
+8. **Enter the main orchestration loop** — the first `--action next` call is the real one that processes actions.

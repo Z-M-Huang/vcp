@@ -109,6 +109,13 @@ describe('exampleFn', () => {
 
 Stubs must cover: happy path, each error condition, and at least one edge case.
 
+**Hard requirements for test stubs:**
+- Every test stub MUST import from the actual source file path listed in Files to Touch
+- Every `it()`/`test()` block MUST contain at least one `expect()` with a concrete expected value
+- At minimum: one test per happy path, one per error condition from Interface Contract
+- Test file paths MUST match the project's test directory conventions
+- Do NOT use: `toBeTruthy()`, `toBeDefined()`, `toBeInstanceOf()` as the sole assertion — these are tautological
+
 ### What to Implement
 - **Current state:** {what the code/app looks like now — from discovery findings}
 - **Target state:** {what it should look like after — from requirements/ACs}
@@ -151,6 +158,9 @@ Before completing, verify:
 - [ ] Units with cross-component ACs (referencing ≥2 source files) have a Data Flow Trace
 - [ ] Units referencing ADRs/wiki/specs have an Authoritative Sources block
 - [ ] ACs are copied as full Given/When/Then text, not just AC-N IDs
+- [ ] Every test stub has concrete assertions (no toBeTruthy/toBeDefined as sole check)
+- [ ] Every test stub imports from the actual source file path
+- [ ] Error condition coverage: every error in Interface Contract has a test stub
 
 ## Anti-Patterns
 
