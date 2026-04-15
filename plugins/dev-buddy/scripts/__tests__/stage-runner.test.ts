@@ -9,6 +9,7 @@ import {
   parseArgs,
   StageProgress,
   runExecutorWithProgress,
+  buildSubscriptionArgs,
   type Segment,
   type DispatchResult,
   type StageProgressState,
@@ -656,4 +657,96 @@ describe('runExecutorWithProgress', () => {
 
   // Note: These are contract tests verifying the wrapper's behavior with
   // a real StageProgress instance (file I/O) but without real subprocesses.
+});
+
+// ─── buildSubscriptionArgs ────────────────────────────────────────────────
+
+describe('buildSubscriptionArgs', () => {
+  test('uses --allowed-tools flag (not --tools) when allowedTools is non-empty', () => {
+    const args = buildSubscriptionArgs({
+      model: 'sonnet',
+      systemPrompt: 'sys',
+      allowedTools: 'Read,Write,Edit,Bash,Glob,Grep',
+      task: 'do the thing',
+    });
+    expect(args).toContain('--allowed-tools');
+    expect(args).not.toContain('--tools');
+  });
+
+  test('inserts `--` terminator immediately before the task positional', () => {
+    // Regression for the variadic-consumption bug: `--allowed-tools <tools...>`
+    // is declared variadic in the Claude CLI's argparse, so without `--` the
+    // trailing task is swallowed into the tools list and `-p` errors with
+    // "Input must be provided either through stdin or as a prompt argument".
+    const args = buildSubscriptionArgs({
+      model: 'sonnet',
+      systemPrompt: 'sys',
+      allowedTools: 'Read,Bash',
+      task: 'do the thing',
+    });
+    const dashDashIdx = args.indexOf('--');
+    const taskIdx = args.indexOf('do the thing');
+    expect(dashDashIdx).toBeGreaterThan(-1);
+    expect(taskIdx).toBe(dashDashIdx + 1);
+    // Nothing should appear after the task
+    expect(args.length).toBe(taskIdx + 1);
+  });
+
+  test('inserts `--` terminator even when allowedTools is empty', () => {
+    // Defensive: if a future stage has no tool restriction, we still want the
+    // terminator so a task string that happens to start with `-` is not
+    // mis-parsed as a flag.
+    const args = buildSubscriptionArgs({
+      model: 'sonnet',
+      systemPrompt: 'sys',
+      allowedTools: '',
+      task: '--this-looks-like-a-flag',
+    });
+    expect(args).not.toContain('--allowed-tools');
+    const dashDashIdx = args.indexOf('--');
+    expect(dashDashIdx).toBe(args.length - 2);
+    expect(args[args.length - 1]).toBe('--this-looks-like-a-flag');
+  });
+
+  test('includes -p, --model, --system-prompt, --output-format json, --permission-mode bypassPermissions', () => {
+    const args = buildSubscriptionArgs({
+      model: 'sonnet',
+      systemPrompt: 'you are a reviewer',
+      allowedTools: 'Read',
+      task: 'review this',
+    });
+    expect(args[0]).toBe('-p');
+    expect(args).toContain('--model');
+    expect(args[args.indexOf('--model') + 1]).toBe('sonnet');
+    expect(args).toContain('--system-prompt');
+    expect(args[args.indexOf('--system-prompt') + 1]).toBe('you are a reviewer');
+    expect(args).toContain('--output-format');
+    expect(args[args.indexOf('--output-format') + 1]).toBe('json');
+    expect(args).toContain('--permission-mode');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('bypassPermissions');
+  });
+
+  test('does NOT include --bare (would force ANTHROPIC_API_KEY auth and break OAuth subscription)', () => {
+    // Regression: --bare explicitly ignores OAuth / keychain, forcing
+    // ANTHROPIC_API_KEY or apiKeyHelper. Subscription presets depend on
+    // `claude /login`, so any subscription dispatch built with --bare
+    // errors with "Not logged in · Please run /login".
+    const args = buildSubscriptionArgs({
+      model: 'sonnet',
+      systemPrompt: 'sys',
+      allowedTools: 'Read',
+      task: 'do thing',
+    });
+    expect(args).not.toContain('--bare');
+  });
+
+  test('task containing spaces is preserved as a single argv element', () => {
+    const args = buildSubscriptionArgs({
+      model: 'sonnet',
+      systemPrompt: 'sys',
+      allowedTools: 'Bash',
+      task: 'do the thing with multiple words',
+    });
+    expect(args[args.length - 1]).toBe('do the thing with multiple words');
+  });
 });

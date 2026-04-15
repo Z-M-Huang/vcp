@@ -314,6 +314,45 @@ interface DispatchResult {
 }
 
 /**
+ * Build the argv for a subscription-preset `claude -p` invocation.
+ *
+ * Three correctness details the caller must not lose:
+ *   1. The Claude CLI flag is `--allowed-tools` (aliased `--allowedTools`).
+ *      The permission-allowlist semantic matches what stage definitions
+ *      declare and aligns with the API path below (line ~370).
+ *   2. `--allowed-tools <tools...>` is declared *variadic* in the CLI's
+ *      argparse. Without a `--` terminator, the following positional
+ *      (`task`) is consumed into the tools list and `-p` is left without
+ *      a prompt — the CLI errors with "Input must be provided either
+ *      through stdin or as a prompt argument when using --print". Insert
+ *      `--` before `task` so the positional is always parsed as the prompt.
+ *   3. Do NOT add `--bare`. It forces Anthropic auth to be strictly
+ *      ANTHROPIC_API_KEY / apiKeyHelper and explicitly ignores the user's
+ *      OAuth login + keychain. Subscription presets depend on the user
+ *      having run `claude /login`, so `--bare` makes every subscription
+ *      dispatch fail with "Not logged in".
+ */
+export function buildSubscriptionArgs(opts: {
+  model: string;
+  systemPrompt: string;
+  allowedTools: string;
+  task: string;
+}): string[] {
+  const args = [
+    '-p',
+    '--model', opts.model,
+    '--system-prompt', opts.systemPrompt,
+    '--output-format', 'json',
+    '--permission-mode', 'bypassPermissions',
+  ];
+  if (opts.allowedTools) {
+    args.push('--allowed-tools', opts.allowedTools);
+  }
+  args.push('--', opts.task);
+  return args;
+}
+
+/**
  * Dispatch a single executor as a subprocess. Returns a promise that resolves
  * when the subprocess completes.
  */
@@ -335,19 +374,14 @@ function dispatchExecutor(
     const stderrChunks: Buffer[] = [];
 
     if (preset.type === 'subscription') {
-      // Subscription: claude -p
-      const args = [
-        '-p',
-        '--model', executor.model,
-        '--system-prompt', composedPrompt,
-        '--output-format', 'json',
-        '--bare',
-        '--permission-mode', 'bypassPermissions',
-      ];
-      if (allowedTools) {
-        args.push('--tools', allowedTools);
-      }
-      args.push(task);
+      // Subscription: claude -p — see buildSubscriptionArgs for the two
+      // correctness details (flag name, variadic terminator).
+      const args = buildSubscriptionArgs({
+        model: executor.model,
+        systemPrompt: composedPrompt,
+        allowedTools,
+        task,
+      });
 
       proc = spawn('claude', args, {
         stdio: ['inherit', 'pipe', 'pipe'],

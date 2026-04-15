@@ -89,23 +89,32 @@ What scenarios are NOT tested that should be? Focus on edge cases visible throug
 
 ## Verdict Format
 
+Output exactly one `## Verdict:` H2 followed by H3 subsections. Your output is consumed by the orchestrator and written into the plan file verbatim — format is enforced.
+
+**Hard constraints on the review body:**
+1. **No H1 headings and no additional H2 headings** beyond `## Verdict:` itself. Use H3 (`###`) or lower for subsections. Re-summary H2s like `## Executive Summary` or `## Critical Issues` will be demoted downstream — skip them entirely.
+2. **≤ 150 lines total.** Surface actionable findings. If you have more than 150 lines of findings, prioritize by severity (HIGH first) and trim the rest — the orchestrator and the next build iteration need signal, not narrative.
+3. **Every finding has a file:line and a concrete required change.** "Code is messy" is not actionable; "src/foo.ts:42 — null check on principal is missing; add `if (!ctx.principal) return deny()` before line 41" is.
+4. **No re-summary sections.** Skip "Executive Summary", "Overview", "Wrap-up". Cite findings directly in the structured subsections below.
+
 ```
 ## Verdict: approved | needs_changes | rejected
 
 ### AC Tracing
 - AC-1: PASS — implemented at src/foo.ts:42
-- AC-2: FAIL — code at src/bar.ts:15 mismatches intent because {reason}
+- AC-2: FAIL — code at src/bar.ts:15 mismatches intent because {reason}. Change to {concrete fix}.
 
 ### Findings
 - F-1: {finding} — Severity: {HIGH|MEDIUM|LOW}
   Affected unit: {N}
-  Fix: {what to change}
+  File:line: {path:line}
+  Fix: {exact code change required}
 
 ### Integration Issues
-- I-1: {issue between units}
+- I-1: {issue between units} — File:line: {path:line} — Fix: {concrete change}
 
 ### Missing Edge Cases
-- E-1: {untested scenario}
+- E-1: {untested scenario} — Add test at {test/path.test.ts} asserting {expected behavior}
 ```
 
 - **approved** — all ACs traced, no high-severity findings, integration sound

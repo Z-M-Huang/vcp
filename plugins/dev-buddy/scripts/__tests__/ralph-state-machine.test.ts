@@ -84,6 +84,8 @@ describe('Type definitions and constants', () => {
       units: [],
       lastAction: 'init',
       lastTimestamp: '2026-04-10T00:00:00.000Z',
+      taskIds: {},
+      blockedBy: {},
     };
     expect(state.slug).toBe('test-feature');
     expect(state.status).toBe('discover');
@@ -182,22 +184,23 @@ describe('Action output types', () => {
     expect(action.sectionHeading).toBe('## Discovery');
   });
 
-  test('TaskAction has create/update/complete arrays', () => {
+  test('TaskAction carries discriminated operations (update + set_blocked_by)', () => {
     const action: import('../ralph-state-machine.ts').TaskAction = {
       type: 'update_tasks',
-      create: [{ description: 'Stage: Build', status: 'pending' }],
-      update: [{ id: 'T-1', status: 'completed' }],
-      complete: ['T-2'],
+      operations: [
+        { action: 'update', ref: 'stage:build', status: 'completed' },
+        { action: 'set_blocked_by', ref: 'unit:3', blockedBy: ['unit:1', 'unit:2'] },
+      ],
     };
-    expect(action.create).toHaveLength(1);
-    expect(action.update).toHaveLength(1);
-    expect(action.complete).toHaveLength(1);
+    expect(action.operations).toHaveLength(2);
+    expect(action.operations[0].action).toBe('update');
+    expect(action.operations[1].action).toBe('set_blocked_by');
   });
 
   test('StateMachineOutput bundles actions and state', () => {
     const output: import('../ralph-state-machine.ts').StateMachineOutput = {
       actions: [{ type: 'done', summary: 'complete' }],
-      state: { slug: 'x', status: 'done', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '2026-04-10T00:00:00Z' },
+      state: { slug: 'x', status: 'done', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '2026-04-10T00:00:00Z', taskIds: {}, blockedBy: {} },
     };
     expect(output.actions).toHaveLength(1);
   });
@@ -632,6 +635,38 @@ describe('parseUnitPlan', () => {
   });
 });
 
+describe('detectUnitStateContradiction', () => {
+  test('returns null when header status is not done', () => {
+    const { detectUnitStateContradiction } = require('../ralph-state-machine.ts');
+    const content = '# Unit 1\n**Status:** pending\n## Latest Build Attempt\n**Outcome:** failed\n';
+    expect(detectUnitStateContradiction(content)).toBeNull();
+  });
+
+  test('returns null when header is done and tail has no contradictions', () => {
+    const { detectUnitStateContradiction } = require('../ralph-state-machine.ts');
+    const content = '# Unit 1\n**Status:** done\n## Latest Build Attempt\n**Outcome:** done\n';
+    expect(detectUnitStateContradiction(content)).toBeNull();
+  });
+
+  test('returns null when no Latest Build Attempt section exists', () => {
+    const { detectUnitStateContradiction } = require('../ralph-state-machine.ts');
+    const content = '# Unit 1\n**Status:** done\n### Done When\nAll tests pass.';
+    expect(detectUnitStateContradiction(content)).toBeNull();
+  });
+
+  test('detects **Outcome:** failed in tail when header is done', () => {
+    const { detectUnitStateContradiction } = require('../ralph-state-machine.ts');
+    const content = '# Unit 1\n**Status:** done\n## Latest Build Attempt\n**Attempt:** 5/5\n**Outcome:** failed\n';
+    expect(detectUnitStateContradiction(content)).toContain('outcome=failed');
+  });
+
+  test('detects Attempt budget exhausted in tail when header is done', () => {
+    const { detectUnitStateContradiction } = require('../ralph-state-machine.ts');
+    const content = '# Unit 1\n**Status:** done\n## Latest Build Attempt\nAttempt budget exhausted (5/5).\n';
+    expect(detectUnitStateContradiction(content)).toContain('budget exhausted');
+  });
+});
+
 describe('getNextBuildUnit', () => {
   test('returns first pending unit with no dependencies', () => {
     const { getNextBuildUnit } = require('../ralph-state-machine.ts');
@@ -1053,7 +1088,15 @@ describe('listUnits', () => {
     ].join('\n'));
     const result = listUnits(tmpDir, 'test-feature');
     expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({ id: 1, title: 'Login form component', status: 'pending', dependsOn: [] });
+    expect(result[0]).toEqual({
+      id: 1,
+      title: 'Login form component',
+      status: 'pending',
+      dependsOn: [],
+      ref: 'unit:1',
+      subject: 'Unit 1: Login form component',
+      blockedByRefs: [],
+    });
   });
 
   test('parses multiple units with dependency DAG', () => {
@@ -1130,6 +1173,165 @@ describe('listUnits', () => {
     const result = listUnits(tmpDir, 'test-feature');
     expect(result.map((u: any) => u.id)).toEqual([1, 2, 3]);
   });
+
+  test('populates ref/subject/blockedByRefs on every entry (extended shape)', () => {
+    const { listUnits } = require('../ralph-state-machine.ts');
+    const { tmpDir, unitsDir } = makeUnitDir();
+    writeFileSync(path.join(unitsDir, 'unit-1.md'), '## Unit 1: Base\n\n**Status:** pending\n\n## Dependencies\n- Depends on: none');
+    writeFileSync(path.join(unitsDir, 'unit-2.md'), '## Unit 2: Mid\n\n**Status:** pending\n\n## Dependencies\n- Depends on: Unit 1');
+    writeFileSync(path.join(unitsDir, 'unit-3.md'), '## Unit 3: Top\n\n**Status:** pending\n\n## Dependencies\n- Depends on: Unit 1, Unit 2');
+    const result = listUnits(tmpDir, 'test-feature');
+    expect(result[0].ref).toBe('unit:1');
+    expect(result[0].subject).toBe('Unit 1: Base');
+    expect(result[0].blockedByRefs).toEqual([]);
+    expect(result[1].ref).toBe('unit:2');
+    expect(result[1].subject).toBe('Unit 2: Mid');
+    expect(result[1].blockedByRefs).toEqual(['unit:1']);
+    expect(result[2].ref).toBe('unit:3');
+    expect(result[2].subject).toBe('Unit 3: Top');
+    expect(result[2].blockedByRefs).toEqual(['unit:1', 'unit:2']);
+  });
+});
+
+// ─── verifyTaskGraph ────────────────────────────────────────────────────────
+
+describe('verifyTaskGraph', () => {
+  const mkEntry = (id: number, blockedBy: number[] = []) => ({
+    id,
+    title: `Unit ${id}`,
+    status: 'pending' as const,
+    dependsOn: blockedBy,
+    ref: `unit:${id}`,
+    subject: `Unit ${id}: title`,
+    blockedByRefs: blockedBy.map(i => `unit:${i}`),
+  });
+
+  test('ok=true when state fully matches expected graph', () => {
+    const { verifyTaskGraph } = require('../ralph-state-machine.ts');
+    const expected = [mkEntry(1), mkEntry(2, [1]), mkEntry(3, [1, 2])];
+    const state = { 'unit:1': [], 'unit:2': ['unit:1'], 'unit:3': ['unit:1', 'unit:2'] };
+    const { ok, diff } = verifyTaskGraph(expected, state);
+    expect(ok).toBe(true);
+    expect(diff).toEqual({ missingRefs: [], extraRefs: [], mismatchedEdges: [] });
+  });
+
+  test('flags missing ref when state.blockedBy has no entry for unit', () => {
+    const { verifyTaskGraph } = require('../ralph-state-machine.ts');
+    const expected = [mkEntry(1), mkEntry(2, [1])];
+    const state = { 'unit:1': [] }; // unit:2 missing entirely
+    const { ok, diff } = verifyTaskGraph(expected, state);
+    expect(ok).toBe(false);
+    expect(diff.missingRefs).toEqual(['unit:2']);
+  });
+
+  test('flags extra ref for unknown unit: keys in state', () => {
+    const { verifyTaskGraph } = require('../ralph-state-machine.ts');
+    const expected = [mkEntry(1)];
+    const state = { 'unit:1': [], 'unit:99': [] };
+    const { ok, diff } = verifyTaskGraph(expected, state);
+    expect(ok).toBe(false);
+    expect(diff.extraRefs).toEqual(['unit:99']);
+  });
+
+  test('flags mismatched edges regardless of element order', () => {
+    const { verifyTaskGraph } = require('../ralph-state-machine.ts');
+    const expected = [mkEntry(1), mkEntry(2), mkEntry(3, [1, 2])];
+    const state = { 'unit:1': [], 'unit:2': [], 'unit:3': ['unit:1'] }; // missing unit:2 edge
+    const { ok, diff } = verifyTaskGraph(expected, state);
+    expect(ok).toBe(false);
+    expect(diff.mismatchedEdges).toHaveLength(1);
+    expect(diff.mismatchedEdges[0].ref).toBe('unit:3');
+  });
+
+  test('treats reordered edges as equal (sorts before compare)', () => {
+    const { verifyTaskGraph } = require('../ralph-state-machine.ts');
+    const expected = [mkEntry(1), mkEntry(2), mkEntry(3, [1, 2])];
+    const state = { 'unit:1': [], 'unit:2': [], 'unit:3': ['unit:2', 'unit:1'] };
+    const { ok } = verifyTaskGraph(expected, state);
+    expect(ok).toBe(true);
+  });
+
+  test('ignores non-unit refs in state (stage:* keys do not count as extra)', () => {
+    const { verifyTaskGraph } = require('../ralph-state-machine.ts');
+    const expected = [mkEntry(1)];
+    const state = { 'unit:1': [], 'stage:build': [] };
+    const { ok, diff } = verifyTaskGraph(expected, state);
+    expect(ok).toBe(true);
+    expect(diff.extraRefs).toEqual([]);
+  });
+});
+
+// ─── registerTaskGraph (state.ts) ───────────────────────────────────────────
+
+describe('registerTaskGraph', () => {
+  const tmpDirs: string[] = [];
+  afterAll(() => { tmpDirs.forEach(d => rmSync(d, { recursive: true, force: true })); });
+
+  test('creates state file with taskIds + blockedBy when state absent', () => {
+    const { registerTaskGraph, loadState } = require('../ralph-state-machine.ts');
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'rtg-'));
+    tmpDirs.push(tmpDir);
+    registerTaskGraph(tmpDir, 'feat', {
+      taskIds: { 'unit:1': 't1', 'unit:2': 't2' },
+      blockedBy: { 'unit:1': [], 'unit:2': ['unit:1'] },
+    });
+    const state = loadState(tmpDir, 'feat');
+    expect(state.taskIds).toEqual({ 'unit:1': 't1', 'unit:2': 't2' });
+    expect(state.blockedBy).toEqual({ 'unit:1': [], 'unit:2': ['unit:1'] });
+  });
+
+  test('merges taskIds with existing state (no clobber)', () => {
+    const { registerTaskGraph, registerTaskId, loadState } = require('../ralph-state-machine.ts');
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'rtg-'));
+    tmpDirs.push(tmpDir);
+    registerTaskId(tmpDir, 'feat', 'stage:discover', 'stage-task-1');
+    registerTaskGraph(tmpDir, 'feat', {
+      taskIds: { 'unit:1': 't1' },
+      blockedBy: { 'unit:1': [] },
+    });
+    const state = loadState(tmpDir, 'feat');
+    expect(state.taskIds).toEqual({ 'stage:discover': 'stage-task-1', 'unit:1': 't1' });
+  });
+
+  test('loads state file lacking blockedBy field as blockedBy={} (backward-compat)', () => {
+    const { loadState, saveState, registerTaskGraph } = require('../ralph-state-machine.ts');
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'rtg-'));
+    tmpDirs.push(tmpDir);
+    // Write a legacy state file without blockedBy
+    const stateDir = path.join(tmpDir, '.vcp', 'plan', '.state');
+    mkdirSync(stateDir, { recursive: true });
+    const legacy = {
+      slug: 'feat', status: 'build', outerIteration: 0, reviewIteration: 0,
+      units: [], lastAction: 'legacy', lastTimestamp: '2026-04-01',
+      taskIds: { 'stage:discover': 't0' },
+    };
+    writeFileSync(path.join(stateDir, 'ralph-feat.json'), JSON.stringify(legacy));
+    const loaded = loadState(tmpDir, 'feat');
+    expect(loaded.blockedBy).toEqual({});
+    // Adding new edges via registerTaskGraph must not throw
+    registerTaskGraph(tmpDir, 'feat', {
+      taskIds: { 'unit:1': 't1' },
+      blockedBy: { 'unit:1': [] },
+    });
+    const after = loadState(tmpDir, 'feat');
+    expect(after.taskIds['stage:discover']).toBe('t0');
+    expect(after.blockedBy).toEqual({ 'unit:1': [] });
+  });
+
+  test('is a single read-modify-write (state file mtime advances once per call)', () => {
+    const { registerTaskGraph } = require('../ralph-state-machine.ts');
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'rtg-'));
+    tmpDirs.push(tmpDir);
+    registerTaskGraph(tmpDir, 'feat', {
+      taskIds: { 'unit:1': 't1', 'unit:2': 't2', 'unit:3': 't3' },
+      blockedBy: { 'unit:1': [], 'unit:2': ['unit:1'], 'unit:3': ['unit:1', 'unit:2'] },
+    });
+    const stateFile = path.join(tmpDir, '.vcp', 'plan', '.state', 'ralph-feat.json');
+    expect(existsSync(stateFile)).toBe(true);
+    const json = JSON.parse(readFileSync(stateFile, 'utf-8'));
+    expect(Object.keys(json.taskIds)).toHaveLength(3);
+    expect(Object.keys(json.blockedBy)).toHaveLength(3);
+  });
 });
 
 // ─── computeNextAction — build unit-specific dispatch ─────────────────────
@@ -1148,7 +1350,7 @@ describe('computeNextAction — build unit dispatch', () => {
     mkdirSync(unitsDir, { recursive: true });
     writeFileSync(path.join(unitsDir, 'unit-1.md'), validUnit(1, 'A'));
     writeFileSync(path.join(unitsDir, 'unit-2.md'), validUnit(2, 'B', { dependsOn: 'Unit 1' }));
-    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} };
+    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {}, blockedBy: {} };
     const result = computeNextAction(state, buildPlanData, tmpDir, config);
     const skill = result.actions.find((a: any) => a.type === 'invoke_skill');
     expect(skill.unitId).toBe(1);
@@ -1163,7 +1365,7 @@ describe('computeNextAction — build unit dispatch', () => {
     mkdirSync(unitsDir, { recursive: true });
     writeFileSync(path.join(unitsDir, 'unit-1.md'), validUnit(1, 'A', { status: 'done' }));
     writeFileSync(path.join(unitsDir, 'unit-2.md'), validUnit(2, 'B', { dependsOn: 'Unit 1' }));
-    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} };
+    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {}, blockedBy: {} };
     const result = computeNextAction(state, buildPlanData, tmpDir, config);
     const skill = result.actions.find((a: any) => a.type === 'invoke_skill');
     expect(skill.unitId).toBe(2);
@@ -1177,12 +1379,49 @@ describe('computeNextAction — build unit dispatch', () => {
     mkdirSync(unitsDir, { recursive: true });
     writeFileSync(path.join(unitsDir, 'unit-1.md'), validUnit(1, 'A', { status: 'done' }));
     writeFileSync(path.join(unitsDir, 'unit-2.md'), validUnit(2, 'B', { status: 'done' }));
-    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} };
+    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {}, blockedBy: {} };
     const result = computeNextAction(state, buildPlanData, tmpDir, config);
     const writePlan = result.actions.find((a: any) => a.type === 'write_plan');
     expect(writePlan).toBeDefined();
     expect(writePlan.edits[0].new_string).toContain('review');
     expect(result.state.status).toBe('review');
+  });
+
+  test('all units done but one has tail Outcome: failed blocks promotion', () => {
+    const { computeNextAction } = require('../ralph-state-machine.ts');
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sm-bud-'));
+    tmpDirs.push(tmpDir);
+    const unitsDir = path.join(tmpDir, '.vcp', 'plan', 'ralph', 'test');
+    mkdirSync(unitsDir, { recursive: true });
+    writeFileSync(path.join(unitsDir, 'unit-1.md'), validUnit(1, 'A', { status: 'done' }));
+    const contradictory = validUnit(2, 'B', { status: 'done' }) +
+      '\n## Latest Build Attempt\n\n**Attempt:** 5/5\n**Outcome:** failed\n';
+    writeFileSync(path.join(unitsDir, 'unit-2.md'), contradictory);
+    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {}, blockedBy: {} };
+    const result = computeNextAction(state, buildPlanData, tmpDir, config);
+    const blocked = result.actions.find((a: any) => a.type === 'blocked');
+    expect(blocked).toBeDefined();
+    expect(blocked.reason).toContain('Inconsistent unit state');
+    expect(blocked.preconditionError).toContain('unit-2');
+    expect(blocked.preconditionError).toContain('outcome=failed');
+    expect(result.actions.find((a: any) => a.type === 'write_plan')).toBeUndefined();
+  });
+
+  test('all units done but one has tail Attempt budget exhausted blocks promotion', () => {
+    const { computeNextAction } = require('../ralph-state-machine.ts');
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sm-bud-'));
+    tmpDirs.push(tmpDir);
+    const unitsDir = path.join(tmpDir, '.vcp', 'plan', 'ralph', 'test');
+    mkdirSync(unitsDir, { recursive: true });
+    const exhausted = validUnit(1, 'A', { status: 'done' }) +
+      '\n## Latest Build Attempt\n\nAttempt budget exhausted (5/5).\n';
+    writeFileSync(path.join(unitsDir, 'unit-1.md'), exhausted);
+    writeFileSync(path.join(unitsDir, 'unit-2.md'), validUnit(2, 'B', { status: 'done' }));
+    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {}, blockedBy: {} };
+    const result = computeNextAction(state, buildPlanData, tmpDir, config);
+    const blocked = result.actions.find((a: any) => a.type === 'blocked');
+    expect(blocked).toBeDefined();
+    expect(blocked.preconditionError).toContain('budget exhausted');
   });
 
   test('no eligible unit (deps blocked) returns BlockedAction', () => {
@@ -1193,7 +1432,7 @@ describe('computeNextAction — build unit dispatch', () => {
     mkdirSync(unitsDir, { recursive: true });
     writeFileSync(path.join(unitsDir, 'unit-1.md'), validUnit(1, 'A', { status: 'failed' }));
     writeFileSync(path.join(unitsDir, 'unit-2.md'), validUnit(2, 'B', { dependsOn: 'Unit 1' }));
-    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} };
+    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {}, blockedBy: {} };
     const result = computeNextAction(state, buildPlanData, tmpDir, config);
     const blocked = result.actions.find((a: any) => a.type === 'blocked');
     expect(blocked).toBeDefined();
@@ -1207,7 +1446,7 @@ describe('computeNextAction — build unit dispatch', () => {
     const unitsDir = path.join(tmpDir, '.vcp', 'plan', 'ralph', 'test');
     mkdirSync(unitsDir, { recursive: true });
     writeFileSync(path.join(unitsDir, 'unit-1.md'), validUnit(1, 'A'));
-    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} };
+    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {}, blockedBy: {} };
     const result = computeNextAction(state, buildPlanData, tmpDir, config);
     const taskAction = result.actions.find((a: any) => a.type === 'update_tasks');
     expect(taskAction).toBeDefined();
@@ -1224,7 +1463,7 @@ describe('computeNextAction — TaskAction emission', () => {
 
   test('discover emits TaskAction with stage:discover in_progress', () => {
     const { computeNextAction } = require('../ralph-state-machine.ts');
-    const state = { slug: 'test', status: 'discover', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} };
+    const state = { slug: 'test', status: 'discover', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {}, blockedBy: {} };
     const planData = { status: 'discover', hasDiscovery: false, hasRequirements: false, hasACs: false, hasUATs: false, hasVerdict: false, verdictValue: null, unitCount: 0, definedUATIds: [] as string[], passedUATIds: [] as string[] };
     const result = computeNextAction(state, planData, '/tmp', config);
     const taskAction = result.actions.find((a: any) => a.type === 'update_tasks');
@@ -1239,7 +1478,7 @@ describe('computeNextAction — TaskAction emission', () => {
     const unitsDir = path.join(tmpDir, '.vcp', 'plan', 'ralph', 'test');
     mkdirSync(unitsDir, { recursive: true });
     writeFileSync(path.join(unitsDir, 'unit-1.md'), validUnit(1, 'A', { status: 'done' }));
-    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {} };
+    const state = { slug: 'test', status: 'build', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '', taskIds: {}, blockedBy: {} };
     const planData = { status: 'build' as any, hasDiscovery: true, hasRequirements: true, hasACs: true, hasUATs: true, hasVerdict: false, verdictValue: null, unitCount: 1, definedUATIds: [] as string[], passedUATIds: [] as string[] };
     const result = computeNextAction(state, planData, tmpDir, config);
     const taskAction = result.actions.find((a: any) => a.type === 'update_tasks');
@@ -1274,7 +1513,7 @@ describe('registerTaskId', () => {
     tmpDirs.push(tmpDir);
     saveState(tmpDir, 'test-slug', {
       slug: 'test-slug', status: 'build', outerIteration: 2, reviewIteration: 1,
-      units: [], lastAction: 'next', lastTimestamp: '2026-04-10', taskIds: { 'stage:discover': 'task-1' },
+      units: [], lastAction: 'next', lastTimestamp: '2026-04-10', taskIds: { 'stage:discover': 'task-1' }, blockedBy: {},
     });
     registerTaskId(tmpDir, 'test-slug', 'stage:requirements', 'task-2');
     const state = loadState(tmpDir, 'test-slug');

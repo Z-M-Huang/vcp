@@ -22,6 +22,12 @@ export interface StateMachineState {
   lastAction: string;
   lastTimestamp: string;
   taskIds: Record<string, string>;
+  /**
+   * Ref→[ref] map mirroring the unit DAG: `blockedBy["unit:3"] = ["unit:1", "unit:2"]`.
+   * Populated by `registerTaskGraph`; compared against `listUnits()` output by `verify-task-graph`.
+   * Execution order is already enforced from unit-file `dependsOn`; this is the task-board projection.
+   */
+  blockedBy: Record<string, string[]>;
 }
 
 // ─── ACTION OUTPUT TYPES ───────────────────────────────────────────────────
@@ -60,13 +66,22 @@ export interface WritePlanAction {
   edits: Array<{ old_string: string; new_string: string }>;
 }
 
+/** Single operation within a TaskAction — discriminated on `action`. */
+export type TaskOperation =
+  | {
+      action: 'update';
+      ref: string;
+      status: 'in_progress' | 'completed';
+    }
+  | {
+      action: 'set_blocked_by';
+      ref: string;
+      blockedBy: string[];
+    };
+
 export interface TaskAction {
   type: 'update_tasks';
-  operations: Array<{
-    action: 'update';
-    ref: string;
-    status: 'in_progress' | 'completed';
-  }>;
+  operations: TaskOperation[];
 }
 
 export interface DoneAction { type: 'done'; summary: string; }
@@ -112,6 +127,12 @@ export interface UnitListEntry {
   title: string;
   status: 'pending' | 'done' | 'failed';
   dependsOn: number[];
+  /** Stable ref used in the state file's taskIds/blockedBy maps: `"unit:${id}"`. */
+  ref: string;
+  /** Human-readable task subject: `"Unit ${id}: ${title}"`. */
+  subject: string;
+  /** Refs of blocking units, mirroring dependsOn: `dependsOn.map(id => "unit:"+id)`. */
+  blockedByRefs: string[];
 }
 
 /** Result of running a single backpressure command. */
@@ -140,6 +161,12 @@ export interface UnitBuildDispatchResult {
   }>;
   phase?: string;
   error?: string;
+  /**
+   * Captured when the dispatch subprocess exited non-zero or stage-runner
+   * returned an error event. Null otherwise. Contains raw stdout/stderr
+   * head+tail excerpts — not redacted.
+   */
+  mechanicalContext?: MechanicalContext | null;
 }
 
 /** Patch applied to a unit plan file's metadata by the build loop runner. */
@@ -147,6 +174,13 @@ export interface UnitStatusPatch {
   status: 'pending' | 'done' | 'failed';
   attempts: number;
   appendResult: string;
+  /**
+   * Three-way semantics for the runner-owned `## Review Feedback` block:
+   *   `undefined` → preserve whatever feedback is currently in the file
+   *   `''`        → explicitly clear the block (write empty body)
+   *   `'<text>'`  → replace the block body with the given text
+   */
+  reviewFeedback?: string;
 }
 
 /** Result of a single-unit build invocation (single-unit-per-invocation model). */
@@ -169,6 +203,43 @@ export interface UnitReviewResult {
   passed: boolean;
   /** Reviewer findings (empty if passed/skipped). */
   feedback: string;
+}
+
+// ─── MECHANICAL FAILURE CONTEXT ─────────────────────────────────────────────
+// Captured when a build attempt fails (dispatch subprocess non-zero exit, or a
+// backpressure command fails). Flows in-memory between attempts inside a
+// single `runSingleUnit` invocation so the retry's dispatch prompt shows the
+// previous failure's stdout/stderr excerpts instead of "(none — first attempt)".
+// Not persisted — cross-process restarts lose the context, same as v0.5.4.
+
+/**
+ * Compile/test failure details captured from a non-zero exit (dispatch or
+ * backpressure). Head + tail excerpts survive truncation on either edge of a
+ * long output stream. Bodies are persisted verbatim into the prompt — if a
+ * build tool echoes secrets to stdout/stderr those secrets land in the prompt.
+ */
+export interface MechanicalContext {
+  source: 'dispatch' | 'backpressure';
+  command: string;
+  exitCode: number;
+  stdoutHead: string;
+  stdoutTail: string;
+  stderrHead: string;
+  stderrTail: string;
+}
+
+/**
+ * Snapshot of a build attempt, passed from one iteration of the runSingleUnit
+ * retry loop into the next. `null` on the first attempt.
+ */
+export interface LatestAttemptState {
+  attempt: number;
+  dispatchEvent: 'complete' | 'error' | 'cancelled' | null;
+  dispatchError: string | null;
+  backpressure: Array<{ name: string; exitCode: number }>;
+  outcome: 'done' | 'retry' | 'failed';
+  /** Compile/test failure context. `null` when outcome is 'done' or dispatch succeeded. */
+  mechanicalContext: MechanicalContext | null;
 }
 
 /** Pipeline stages in execution order (10 entries, including 3 review gates). */

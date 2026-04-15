@@ -135,8 +135,8 @@ sequenceDiagram
             CC->>CC: TaskUpdate(unit N → in_progress)
             CC->>BLR: Bash: --plan X --cwd Y --unit N
             loop 重试循环（机械化，runner 内部）
-                BLR->>FS: 写入 Attempts++（崩溃安全）
-                BLR->>SR: subprocess: --stage-type ralph-build --task-stdin
+                BLR->>FS: writeRunnerTail({status: pending, attempts++})
+                BLR->>SR: subprocess: --stage-type ralph-build --task-stdin<br/>（提示词 = STATIC PLAN + [PRIOR MECHANICAL FAILURE] + PRIOR REVIEW FEEDBACK + INSTRUCTION）
                 SR->>EX: 分发已配置的构建执行器
                 EX-->>SR: 实现结果
                 SR-->>BLR: JSON: {synthesis}
@@ -147,15 +147,17 @@ sequenceDiagram
                         SR->>EX: 分发审查执行器
                         EX-->>SR: 审查判定
                         SR-->>BLR: JSON: {synthesis: PASS|NEEDS_CHANGES}
+                        Note over BLR: 失败封闭解析：格式错误 → NEEDS_CHANGES
                         alt NEEDS_CHANGES + 剩余尝试
-                            BLR->>FS: 写入 Review Feedback + Status: pending
+                            BLR->>FS: writeRunnerTail({reviewFeedback, status: pending})
                         end
                     end
-                    BLR->>FS: 写入 Status: done
+                    BLR->>FS: writeRunnerTail({status: done, reviewFeedback: ''})
                 else 失败 + 剩余尝试
-                    BLR->>FS: 写入 Status: pending（重试）
+                    Note over BLR: 将 mechanicalContext 保留在内存中供下次分发提示使用
+                    BLR->>FS: writeRunnerTail({status: pending, latestAttempt})
                 else 失败 + 尝试耗尽
-                    BLR->>FS: 写入 Status: failed
+                    BLR->>FS: writeRunnerTail({status: failed, latestAttempt})
                 end
             end
             BLR-->>CC: JSON: {event: unit_done|unit_failed}
@@ -204,11 +206,15 @@ sequenceDiagram
     end
 ```
 
+**机械故障上下文**：当分发或反压以非零退出时，runner 会捕获 stdout+stderr 头尾摘录（每段 ≤1000 字符，原文），在同一 `runSingleUnit` 调用中以内存变量形式传递给下次尝试。重试的分发提示会包含 `--- PRIOR MECHANICAL FAILURE ---` 块，让执行器在追求语义修改前先恢复绿色状态。摘录不跨进程持久化——单元中途崩溃会丢失机械上下文（审查反馈通过单元文件尾部仍然存活）。
+
 **脚本执行边界：**
 - **ralph-state-machine.ts**（被动）— 被查询时计算下一步动作。CC 在每次阶段转换前通过 Bash 调用它。读取计划 + 单元文件，返回 JSON 格式的下一步动作。从不主动驱动执行。
 - **stage-runner.ts**（分发）— 多执行器分发器。CC 通过 Bash 为所有阶段调用它。加载配置，解析系统提示词，生成执行器（subscription/API/CLI），合成输出。
 - **build-loop-runner.ts**（单元执行器）— 拥有单个单元的执行及内部重试。CC 通过 Bash 以 `--unit N` 参数逐单元调用；它在内部重试：分发执行器（subprocess 到 stage-runner），运行反压（spawnSync），可选语义审查（subprocess 到 stage-runner 使用 unit-review），写入单元状态（fs）。当单元完成或失败时返回 JSON。
 - **CC 主进程**（LLM）— 驱动 pipeline：查询 SM，调用脚本，验证合成结果，展示用户检查点，更新任务。通过状态机查询和任务管理驱动逐单元构建推进。
+
+**任务面板投影：** CC 编排器为每个阶段创建一个任务并以 `blockedBy` 串联；分解阶段完成后，再为每个分解单元创建一个单元任务，其 `blockedBy` 镜像单元 DAG。批量注册通过 `ralph-state-machine.ts --action register-task-graph` 一次原子写入完成。`--action verify-task-graph` 在每次构建阶段 `next` 查询时对漂移发出警告但不阻塞执行——单元文件中的 `dependsOn` 仍是构建顺序的权威来源；任务面板只是该 DAG 的人类可见投影。
 
 **双嵌套循环 + 评审门控：**
 - **内循环（BUILD -> CODE REVIEW）：** 逐单元 Ralph 循环——从磁盘读取全新上下文，实现，机械反压（test/typecheck/lint），可选逐单元语义审查，重试上限 `max_build_attempts`。代码评审可将单元打回重做。逐单元重试循环通过 `build-loop-runner.ts --unit N` 完全机械化执行。单元间推进由 CC 编排器通过状态机查询和任务管理驱动。

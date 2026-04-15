@@ -21,14 +21,23 @@ Verify that ONE unit's implementation actually meets its acceptance criteria and
 
 ## Verdict Format
 
-Output exactly one of these headings:
+Output exactly two H2 sections — `## Verdict:` and `## Review Feedback`. The body of `## Review Feedback` is read by the build runner and pasted into the next attempt's prompt verbatim. Format is enforced.
+
+**Hard constraints on the body of `## Review Feedback`:**
+1. **No H1 or H2 headings inside the body.** Use H3 (`###`) or lower. The runner demotes any H1/H2 it finds, but you should write H3+ to begin with — anything else is a smell that you're re-summarizing.
+2. **≤ 150 lines total.** The reviewer's job is to surface the actionable findings that the next build attempt must address. Long narrative summaries crowd out the signal.
+3. **No re-summary sections.** Skip "Executive Summary", "Overview", "Critical Issues" wrapper headings. List the findings directly as bullets or H3 sections.
+4. **Each finding has a file:line and a concrete required change.** "Code is messy" is not actionable; "src/foo.ts:42 — null check on principal is missing; add `if (!ctx.principal) return deny()` before line 41" is.
 
 ### PASS
 ```
 ## Verdict: PASS
 
-All ACs traced successfully. Implementation matches intent.
+## Review Feedback
+(no findings — all ACs satisfied)
 ```
+
+(The `## Review Feedback` heading must still be present, with an empty/no-findings body, so the runner's parser is unambiguous.)
 
 ### NEEDS_CHANGES
 ```
@@ -36,9 +45,9 @@ All ACs traced successfully. Implementation matches intent.
 
 ## Review Feedback
 
-- **AC-N violated** (file:line): {what's wrong and what it should do}
-- **Contract mismatch** (file:line): {export signature differs from contract}
-- **Tautological test** (file:line): {test always passes regardless of implementation}
+- **AC-N violated** (src/foo.ts:42): missing null check on `ctx.principal`. Add an explicit deny branch before line 41.
+- **Contract mismatch** (src/bar.ts:10): exported `process()` returns `void` but the contract specifies `Promise<Result>`. Wrap the body in `async` and return `{ ok: true, value }`.
+- **Tautological test** (test/baz.test.ts:18): `expect(result).toBeDefined()` passes for any non-undefined value. Assert the concrete shape: `expect(result).toEqual({ ok: true, value: 42 })`.
 ```
 
 ## Synthesis Rule (Multi-Executor)

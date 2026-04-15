@@ -6,18 +6,18 @@ import { loadDevBuddyConfig } from './pipeline-config.ts';
 
 // Re-export submodules so existing callers (tests, skills, CLI) keep working
 export * from './ralph/types.ts';
-export { parsePlanFile, parseUnitPlan, getNextBuildUnit, listUnits } from './ralph/parsers.ts';
-export { loadState, saveState, registerTaskId } from './ralph/state.ts';
+export { parsePlanFile, parseUnitPlan, getNextBuildUnit, listUnits, detectUnitStateContradiction } from './ralph/parsers.ts';
+export { loadState, saveState, registerTaskId, registerTaskGraph } from './ralph/state.ts';
 
 // Local imports for this file's logic
 import type {
   PlanStatus, PlanFileData, UnitPlanData, StateMachineState, StateMachineOutput,
   Action, SkillAction, CheckpointAction, WritePlanAction, TaskAction,
-  DoneAction, ErrorAction, BlockedAction, BackpressureResult,
+  DoneAction, ErrorAction, BlockedAction, BackpressureResult, UnitListEntry,
 } from './ralph/types.ts';
 import { STATUS_TO_SKILL, STATUS_TO_STAGE_TYPE } from './ralph/types.ts';
-import { parsePlanFile, parseUnitPlan, getNextBuildUnit, listUnits } from './ralph/parsers.ts';
-import { loadState, saveState, registerTaskId } from './ralph/state.ts';
+import { parsePlanFile, parseUnitPlan, getNextBuildUnit, listUnits, detectUnitStateContradiction } from './ralph/parsers.ts';
+import { loadState, saveState, registerTaskId, registerTaskGraph } from './ralph/state.ts';
 
 // ─── EXECUTOR CONFIG RESOLUTION ───────────────────────────────────────────
 
@@ -326,18 +326,36 @@ export function computeNextAction(
       };
     }
 
-    const units: UnitPlanData[] = unitFiles.map(f => {
+    const parsedUnits = unitFiles.map(f => {
       const id = parseInt(f.match(/unit-(\d+)\.md/)![1], 10);
       const content = fs.readFileSync(path.join(unitsDir, f), 'utf-8');
-      return parseUnitPlan(content, id);
-    }).sort((a, b) => a.id - b.id);
+      return { content, parsed: parseUnitPlan(content, id) };
+    }).sort((a, b) => a.parsed.id - b.parsed.id);
 
+    const units: UnitPlanData[] = parsedUnits.map(u => u.parsed);
     const nextUnit = getNextBuildUnit(units);
 
     if (!nextUnit) {
       // All units done → transition to review
       const allDone = units.every(u => u.status === 'done');
       if (allDone) {
+        // Guard against header/tail contradictions (e.g. status=done but
+        // latest attempt outcome=failed). Refuse to promote on stale lies;
+        // operator must resolve the unit file or re-run build.
+        const contradictions = parsedUnits
+          .map(u => ({ id: u.parsed.id, issue: detectUnitStateContradiction(u.content) }))
+          .filter((c): c is { id: number; issue: string } => c.issue !== null);
+        if (contradictions.length > 0) {
+          const summary = contradictions.map(c => `unit-${c.id}: ${c.issue}`).join('; ');
+          return {
+            actions: [{
+              type: 'blocked',
+              reason: 'Inconsistent unit state — refusing to advance build→review',
+              preconditionError: summary,
+            } as BlockedAction],
+            state,
+          };
+        }
         const writePlan: WritePlanAction = {
           type: 'write_plan',
           edits: [
@@ -439,11 +457,57 @@ export function runBackpressure(commands: string[], cwd: string): BackpressureRe
   return results;
 }
 
+// ─── TASK GRAPH VERIFICATION ────────────────────────────────────────────────
+
+/** Structured diff between expected and actual task-graph edges. */
+export interface TaskGraphDiff {
+  /** Unit refs missing entirely from state.blockedBy. */
+  missingRefs: string[];
+  /** Refs present in state.blockedBy but absent from the current unit list. */
+  extraRefs: string[];
+  /** Refs where state.blockedBy[ref] does not match the expected edges. */
+  mismatchedEdges: Array<{ ref: string; expected: string[]; actual: string[] }>;
+}
+
+/** Pure-function core of verify-task-graph. Compares expected edges to state. */
+export function verifyTaskGraph(
+  expected: UnitListEntry[],
+  stateBlockedBy: Record<string, string[]>,
+): { ok: boolean; diff: TaskGraphDiff } {
+  const missingRefs: string[] = [];
+  const mismatchedEdges: Array<{ ref: string; expected: string[]; actual: string[] }> = [];
+  const expectedRefs = new Set(expected.map(e => e.ref));
+
+  for (const entry of expected) {
+    const actual = stateBlockedBy[entry.ref];
+    if (actual === undefined) {
+      missingRefs.push(entry.ref);
+      continue;
+    }
+    const expectedSorted = [...entry.blockedByRefs].sort();
+    const actualSorted = [...actual].sort();
+    if (JSON.stringify(expectedSorted) !== JSON.stringify(actualSorted)) {
+      mismatchedEdges.push({
+        ref: entry.ref,
+        expected: entry.blockedByRefs,
+        actual,
+      });
+    }
+  }
+
+  const extraRefs = Object.keys(stateBlockedBy).filter(ref =>
+    ref.startsWith('unit:') && !expectedRefs.has(ref),
+  );
+
+  const ok = missingRefs.length === 0 && extraRefs.length === 0 && mismatchedEdges.length === 0;
+  return { ok, diff: { missingRefs, extraRefs, mismatchedEdges } };
+}
+
 // ─── CLI ENTRY POINT ─────────────────────────────────────────────────────────
 
 /**
  * Parse CLI arguments for the state machine entry point.
- * Expects: --plan <path> --action <action> [--ref <ref>] [--task-id <id>]
+ * Expects: --plan <path> --action <action> [--ref <ref>] [--task-id <id>] [--data <json|@path>]
  * Throws if --plan or --action flags are missing.
  */
 export function parseCliArgs(argv: string[]): {
@@ -451,6 +515,7 @@ export function parseCliArgs(argv: string[]): {
   action: string;
   ref?: string;
   taskId?: string;
+  data?: string;
 } {
   const planIdx = argv.indexOf('--plan');
   if (planIdx === -1 || planIdx + 1 >= argv.length) {
@@ -460,7 +525,7 @@ export function parseCliArgs(argv: string[]): {
   if (actionIdx === -1 || actionIdx + 1 >= argv.length) {
     throw new Error('Missing required flag: --action <action>');
   }
-  const result: { planPath: string; action: string; ref?: string; taskId?: string } = {
+  const result: { planPath: string; action: string; ref?: string; taskId?: string; data?: string } = {
     planPath: argv[planIdx + 1],
     action: argv[actionIdx + 1],
   };
@@ -472,7 +537,26 @@ export function parseCliArgs(argv: string[]): {
   if (taskIdIdx !== -1 && taskIdIdx + 1 < argv.length) {
     result.taskId = argv[taskIdIdx + 1];
   }
+  const dataIdx = argv.indexOf('--data');
+  if (dataIdx !== -1 && dataIdx + 1 < argv.length) {
+    result.data = argv[dataIdx + 1];
+  }
   return result;
+}
+
+/**
+ * Resolve `--data` argument: raw JSON string, or `@path/to/file.json` to read from disk.
+ * Path form avoids OS argv size limits for large graphs.
+ */
+export function resolveDataArg(raw: string): unknown {
+  let text: string;
+  if (raw.startsWith('@')) {
+    const filePath = raw.slice(1);
+    text = fs.readFileSync(filePath, 'utf-8');
+  } else {
+    text = raw;
+  }
+  return JSON.parse(text);
 }
 
 /**
@@ -488,7 +572,7 @@ export function main(planPath: string, action: string): StateMachineOutput {
     const errorState: StateMachineState = {
       slug: '', status: 'discover', outerIteration: 0, reviewIteration: 0,
       units: [], lastAction: action, lastTimestamp: new Date().toISOString(),
-      taskIds: {},
+      taskIds: {}, blockedBy: {},
     };
     return {
       actions: [{ type: 'error', message: `Plan file not found: ${planPath}` } as ErrorAction],
@@ -502,7 +586,7 @@ export function main(planPath: string, action: string): StateMachineOutput {
     const errorState: StateMachineState = {
       slug: '', status: 'discover', outerIteration: 0, reviewIteration: 0,
       units: [], lastAction: action, lastTimestamp: new Date().toISOString(),
-      taskIds: {},
+      taskIds: {}, blockedBy: {},
     };
     return {
       actions: [{ type: 'error', message: `Cannot extract slug from plan filename: ${path.basename(planPath)}` } as ErrorAction],
@@ -529,6 +613,7 @@ export function main(planPath: string, action: string): StateMachineOutput {
       lastAction: action,
       lastTimestamp: new Date().toISOString(),
       taskIds: {},
+      blockedBy: {},
     };
   }
 
@@ -614,6 +699,77 @@ if (import.meta.main) {
         process.exit(0);
       }
 
+      // ─── register-task-graph: bulk-register taskIds + blockedBy ──────
+      if (action === 'register-task-graph') {
+        if (!parsed.data) {
+          console.error('register-task-graph requires --data <json|@path>');
+          await log('register-task-graph', 'error', 'missing --data');
+          process.exit(1);
+        }
+        const slugMatch = path.basename(planPath).match(/^ralph-(.+)\.md$/);
+        if (!slugMatch) {
+          console.error(`Cannot extract slug from: ${path.basename(planPath)}`);
+          await log('register-task-graph', 'error', `bad slug from ${path.basename(planPath)}`);
+          process.exit(1);
+        }
+        let payload: { taskIds: Record<string, string>; blockedBy: Record<string, string[]> };
+        try {
+          const raw = resolveDataArg(parsed.data);
+          if (typeof raw !== 'object' || raw === null) {
+            throw new Error('--data must be a JSON object');
+          }
+          const obj = raw as Record<string, unknown>;
+          if (typeof obj.taskIds !== 'object' || obj.taskIds === null) {
+            throw new Error('--data.taskIds must be an object');
+          }
+          if (typeof obj.blockedBy !== 'object' || obj.blockedBy === null) {
+            throw new Error('--data.blockedBy must be an object');
+          }
+          payload = {
+            taskIds: obj.taskIds as Record<string, string>,
+            blockedBy: obj.blockedBy as Record<string, string[]>,
+          };
+        } catch (err) {
+          console.error(`Failed to parse --data: ${(err as Error).message}`);
+          await log('register-task-graph', 'error', `parse-error: ${(err as Error).message}`);
+          process.exit(1);
+        }
+        registerTaskGraph(projectDir, slugMatch[1], payload);
+        const refCount = Object.keys(payload.taskIds).length;
+        const edgeCount = Object.values(payload.blockedBy).reduce((n, refs) => n + refs.length, 0);
+        // Stats from the post-write state (merged with any prior entries).
+        const postState = loadState(projectDir, slugMatch[1]);
+        const knownRefs = postState ? Object.keys(postState.taskIds).length : refCount;
+        const knownEdges = postState
+          ? Object.values(postState.blockedBy).reduce((n, refs) => n + refs.length, 0)
+          : edgeCount;
+        await log('register_task_graph.write', 'info',
+          `refCount=${refCount} edgeCount=${edgeCount} knownRefs=${knownRefs} knownEdges=${knownEdges}`);
+        console.log(JSON.stringify({ registered: { refCount, edgeCount } }));
+        process.exit(0);
+      }
+
+      // ─── verify-task-graph: compare state.blockedBy to listUnits() ───
+      if (action === 'verify-task-graph') {
+        const slugMatch = path.basename(planPath).match(/^ralph-(.+)\.md$/);
+        if (!slugMatch) {
+          console.error(`Cannot extract slug from: ${path.basename(planPath)}`);
+          await log('task_graph.verify', 'error', `bad slug from ${path.basename(planPath)}`);
+          process.exit(1);
+        }
+        const units = listUnits(projectDir, slugMatch[1]);
+        const state = loadState(projectDir, slugMatch[1]);
+        const { ok, diff } = verifyTaskGraph(units, state?.blockedBy ?? {});
+        await log('task_graph.verify', ok ? 'allow' : 'warn',
+          `ok=${ok} missing=${diff.missingRefs.length} extra=${diff.extraRefs.length} mismatched=${diff.mismatchedEdges.length} firstDiffs=${JSON.stringify([
+            ...diff.missingRefs.slice(0, 2).map(r => ({ missing: r })),
+            ...diff.extraRefs.slice(0, 2).map(r => ({ extra: r })),
+            ...diff.mismatchedEdges.slice(0, 2),
+          ]).slice(0, 500)}`);
+        console.log(JSON.stringify({ ok, diff }, null, 2));
+        process.exit(0);
+      }
+
       // ─── next: standard state machine evaluation ─────────────────────
       // Read plan and log parsed state
       const content = fs.readFileSync(planPath, 'utf-8');
@@ -656,7 +812,11 @@ if (import.meta.main) {
             await log('action-write-plan', 'info', `edits=${act.edits.length} targets=${act.edits.map(e => e.new_string.substring(0, 40)).join('; ')}`);
             break;
           case 'update_tasks':
-            await log('action-update-tasks', 'info', act.operations.map(o => `${o.ref}→${o.status}`).join(', '));
+            await log('action-update-tasks', 'info', act.operations.map(o =>
+              o.action === 'update'
+                ? `${o.ref}→${o.status}`
+                : `${o.ref} blockedBy=[${o.blockedBy.join(',')}]`,
+            ).join(', '));
             break;
           case 'done':
             await log('action-done', 'info', act.summary);
@@ -676,8 +836,34 @@ if (import.meta.main) {
       // Log final state
       await log('state-saved', 'info', `status=${result.state.status} outerIter=${result.state.outerIteration} reviewIter=${result.state.reviewIteration}`);
 
+      // Build-stage task-graph drift surfacing: include warnings in the JSON
+      // so the orchestrator can show the user without making them re-run verify.
+      let outputPayload: { actions: typeof result.actions; state: typeof result.state; warnings?: string[] } = result;
+      if (result.state.status === 'build') {
+        const units = listUnits(projectDir, slug);
+        const { ok, diff } = verifyTaskGraph(units, result.state.blockedBy ?? {});
+        if (!ok) {
+          const warnings: string[] = [];
+          if (diff.missingRefs.length > 0) {
+            warnings.push(`Task graph missing ${diff.missingRefs.length} ref(s): ${diff.missingRefs.slice(0, 5).join(', ')}${diff.missingRefs.length > 5 ? '…' : ''}`);
+          }
+          if (diff.extraRefs.length > 0) {
+            warnings.push(`Task graph has ${diff.extraRefs.length} stale ref(s): ${diff.extraRefs.slice(0, 5).join(', ')}${diff.extraRefs.length > 5 ? '…' : ''}`);
+          }
+          if (diff.mismatchedEdges.length > 0) {
+            const sample = diff.mismatchedEdges.slice(0, 3).map(m =>
+              `${m.ref} expected=[${m.expected.join(',')}] actual=[${m.actual.join(',')}]`,
+            ).join('; ');
+            warnings.push(`Task graph has ${diff.mismatchedEdges.length} mismatched edge(s): ${sample}${diff.mismatchedEdges.length > 3 ? '…' : ''}`);
+          }
+          outputPayload = { ...result, warnings };
+          await log('task_graph.verify', 'warn',
+            `ok=false missing=${diff.missingRefs.length} extra=${diff.extraRefs.length} mismatched=${diff.mismatchedEdges.length}`);
+        }
+      }
+
       // Console output for LLM
-      console.log(JSON.stringify(result, null, 2));
+      console.log(JSON.stringify(outputPayload, null, 2));
 
       // Exit 1 if the result contains an error action
       const hasError = result.actions.some(a => a.type === 'error');

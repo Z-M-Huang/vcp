@@ -125,6 +125,34 @@ export function parseUnitPlan(content: string, unitId: number): UnitPlanData {
 }
 
 /**
+ * Detect header/tail state contradictions in a unit plan file. Returns a
+ * short description of the contradiction, or null if none.
+ *
+ * A contradiction exists when the header says `**Status:** done` but the
+ * runner-owned tail (`## Latest Build Attempt`) carries evidence the unit
+ * did not actually succeed — either `**Outcome:** failed` or
+ * `Attempt budget exhausted`. This catches state drift left behind when
+ * a stage advanced the header without refreshing the tail, which can
+ * cause the state machine to promote units on stale success claims.
+ */
+export function detectUnitStateContradiction(content: string): string | null {
+  const statusMatch = content.match(/\*\*Status:\*\*\s*(\S+)/);
+  if (!statusMatch || statusMatch[1].toLowerCase() !== 'done') return null;
+
+  const attemptHeading = content.match(/^##\s+Latest Build Attempt\s*$/m);
+  if (!attemptHeading || attemptHeading.index === undefined) return null;
+  const tail = content.slice(attemptHeading.index + attemptHeading[0].length);
+
+  if (/\*\*Outcome:\*\*\s*failed/.test(tail)) {
+    return 'header status=done but latest attempt outcome=failed';
+  }
+  if (/Attempt budget exhausted/.test(tail)) {
+    return 'header status=done but latest attempt says budget exhausted';
+  }
+  return null;
+}
+
+/**
  * Find the next unit eligible for building.
  * Returns the first unit where status='pending' and all dependsOn units are 'done'.
  * Returns null if no unit is eligible (all done, all failed, or unmet dependencies).
@@ -182,6 +210,9 @@ export function listUnits(projectDir: string, slug: string): UnitListEntry[] {
       title,
       status: parsed.status,
       dependsOn: parsed.dependsOn,
+      ref: `unit:${id}`,
+      subject: `Unit ${id}: ${title}`,
+      blockedByRefs: parsed.dependsOn.map(depId => `unit:${depId}`),
     });
   }
 

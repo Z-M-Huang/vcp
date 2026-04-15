@@ -27,7 +27,68 @@ import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
 import type { StageType } from '../types/stage-definitions.ts';
 import type {
   BackpressureResult, UnitBuildDispatchResult, SingleUnitResult, UnitReviewResult,
+  LatestAttemptState, MechanicalContext,
 } from './ralph/types.ts';
+import {
+  RUNNER_TAIL_MARKER,
+  writeRunnerTail,
+  writeUnitStatus,
+  splitUnitFile,
+  extractBackpressureCommands,
+  upsertMetadataLine,
+  replaceOrAppendSection,
+  demoteFeedbackHeadings,
+  listDoneWhenCandidates,
+} from './ralph/unit-file.ts';
+import type { RunnerTailPath, RunnerTailResult } from './ralph/unit-file.ts';
+
+// Re-export unit-file helpers so existing callers (tests, scripts) that import
+// from build-loop-runner.ts keep working without path changes.
+export {
+  RUNNER_TAIL_MARKER,
+  writeRunnerTail,
+  writeUnitStatus,
+  splitUnitFile,
+  extractBackpressureCommands,
+  upsertMetadataLine,
+  replaceOrAppendSection,
+  demoteFeedbackHeadings,
+  listDoneWhenCandidates,
+};
+export type { RunnerTailPath, RunnerTailResult };
+
+/** Maximum head/tail excerpt size per channel in a {@link MechanicalContext}. */
+export const MECHANICAL_CONTEXT_EXCERPT_MAX = 1000;
+
+/**
+ * Build a {@link MechanicalContext} from raw stdout/stderr + exit code.
+ * Head and tail are captured separately so both preamble (usually
+ * tool-version banners) and the tail (usually the failure summary) survive
+ * truncation. Excerpts are kept verbatim — if a build tool echoes secrets
+ * they land in the next attempt's dispatch prompt.
+ */
+export function buildMechanicalContext(
+  source: 'dispatch' | 'backpressure',
+  command: string,
+  exitCode: number,
+  stdout: string,
+  stderr: string,
+): MechanicalContext {
+  const MAX = MECHANICAL_CONTEXT_EXCERPT_MAX;
+  const stdoutHead = stdout.length <= MAX ? stdout : stdout.slice(0, MAX);
+  const stdoutTail = stdout.length <= MAX ? '' : stdout.slice(-MAX);
+  const stderrHead = stderr.length <= MAX ? stderr : stderr.slice(0, MAX);
+  const stderrTail = stderr.length <= MAX ? '' : stderr.slice(-MAX);
+  return {
+    source,
+    command,
+    exitCode,
+    stdoutHead,
+    stdoutTail,
+    stderrHead,
+    stderrTail,
+  };
+}
 
 // ─── CLI ARG PARSING ────────────────────────────────────────────────────────
 
@@ -51,78 +112,50 @@ export function parseBuildLoopArgs(argv: string[]): { planPath: string; cwd: str
   return { planPath: argv[planIdx + 1], cwd: argv[cwdIdx + 1], unitId };
 }
 
-// ─── UNIT FILE MUTATION HELPERS ─────────────────────────────────────────────
-
 /**
- * Find `**{label}:** value` in content and replace, or insert below the title if absent.
- * Idempotent: works whether the field exists or not.
+ * Emit observability events for a single `writeUnitStatus` call. Always emits
+ * `runner_tail.write`; conditionally emits `review.feedback_preserved` when
+ * the caller passed `reviewFeedback: undefined`, and `runner_tail.anchor_candidates`
+ * in debug mode when the legacy Done-When fallback was used. Fire-and-forget.
  */
-export function upsertMetadataLine(content: string, label: string, value: string): string {
-  const pattern = new RegExp(`\\*\\*${label}:\\*\\*\\s*\\S+`);
-  const replacement = `**${label}:** ${value}`;
-  if (pattern.test(content)) {
-    return content.replace(pattern, replacement);
-  }
-  // Insert after the first heading line (# Unit N: ...)
-  const titleMatch = content.match(/^#.+$/m);
-  if (titleMatch && titleMatch.index !== undefined) {
-    const insertPos = titleMatch.index + titleMatch[0].length;
-    return content.slice(0, insertPos) + '\n' + replacement + content.slice(insertPos);
-  }
-  // No title found — prepend
-  return replacement + '\n' + content;
-}
+function logRunnerTailWrite(
+  cwd: string,
+  unitId: number,
+  result: RunnerTailResult & { preWriteContent: string },
+  debug: boolean,
+): void {
+  vcpLog(cwd, {
+    source: 'build-loop-runner',
+    event: 'runner_tail.write',
+    decision: 'info',
+    details:
+      `unitId=${unitId} path=${result.path} ` +
+      `bytesBefore=${result.bytesBefore} bytesAfter=${result.bytesAfter} ` +
+      `hadExistingFeedback=${result.hadExistingFeedback} ` +
+      `feedbackChars=${result.feedbackChars}`,
+  }, debug).catch(() => {});
 
-/**
- * Find a section by heading and replace its body, or append the section at end.
- * The section ends at the next heading of same or higher level, or EOF.
- */
-export function replaceOrAppendSection(content: string, heading: string, body: string): string {
-  const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const sectionRegex = new RegExp(`(^${escapedHeading}\\s*$)([\\s\\S]*?)(?=^#{1,3} |$(?!\\n))`, 'm');
-  const match = content.match(sectionRegex);
-  if (match && match.index !== undefined) {
-    const start = match.index;
-    const end = start + match[0].length;
-    return content.slice(0, start) + heading + '\n\n' + body + '\n\n' + content.slice(end);
+  if (result.preservedFeedback && result.preservedFeedbackReason) {
+    vcpLog(cwd, {
+      source: 'build-loop-runner',
+      event: 'review.feedback_preserved',
+      decision: 'info',
+      details: `unitId=${unitId} reason=${result.preservedFeedbackReason}`,
+    }, debug).catch(() => {});
   }
-  // Append at end
-  return content.trimEnd() + '\n\n' + heading + '\n\n' + body + '\n';
-}
 
-/**
- * Write unit status, attempts, and build attempt summary to a unit plan file.
- * Uses atomic temp-file + rename to prevent partial writes.
- */
-export function writeUnitStatus(unitPath: string, patch: import('./ralph/types.ts').UnitStatusPatch): void {
-  let content = fs.readFileSync(unitPath, 'utf-8');
-  content = upsertMetadataLine(content, 'Status', patch.status);
-  content = upsertMetadataLine(content, 'Attempts', String(patch.attempts));
-  content = replaceOrAppendSection(content, '## Latest Build Attempt', patch.appendResult);
-  // Atomic write
-  const tempPath = `${unitPath}.tmp-${process.pid}-${Date.now()}`;
-  try {
-    fs.writeFileSync(tempPath, content, 'utf-8');
-    fs.renameSync(tempPath, unitPath);
-  } catch (err) {
-    try { fs.unlinkSync(tempPath); } catch { /* ignore cleanup failure */ }
-    throw err;
+  if (debug && result.path === 'legacy_done_when') {
+    const candidates = listDoneWhenCandidates(result.preWriteContent);
+    vcpLog(cwd, {
+      source: 'build-loop-runner',
+      event: 'runner_tail.anchor_candidates',
+      decision: 'info',
+      details:
+        `unitId=${unitId} candidates=${candidates.length} ` +
+        `positions=[${candidates.join(',')}] ` +
+        `chosen=${candidates[candidates.length - 1] ?? -1}`,
+    }, debug).catch(() => {});
   }
-}
-
-// ─── BACKPRESSURE EXTRACTION ────────────────────────────────────────────────
-
-/**
- * Extract backpressure commands from unit file content.
- * Matches both ## Backpressure and ### Backpressure headings.
- */
-export function extractBackpressureCommands(content: string): string[] {
-  const match = content.match(/^#{2,3} Backpressure\s*$/m);
-  if (!match || match.index === undefined) return [];
-  const after = content.slice(match.index + match[0].length);
-  const nextHeading = after.search(/\n#{2,3} /);
-  const section = nextHeading === -1 ? after : after.slice(0, nextHeading);
-  return [...section.matchAll(/`([^`]+)`/g)].map(m => m[1].trim()).filter(Boolean);
 }
 
 // ─── UNIT PATH RESOLUTION ──────────────────────────────────────────────────
@@ -204,29 +237,176 @@ function spawnStageRunner(
 
 // ─── BUILD DISPATCH ─────────────────────────────────────────────────────────
 
+/**
+ * Format a {@link MechanicalContext} into a prompt-ready text block. Empty
+ * channels are skipped. Head and tail are labelled so the executor can tell
+ * which came from where.
+ */
+function renderMechanicalBlock(ctx: MechanicalContext): string {
+  const lines: string[] = [];
+  lines.push(`Source: ${ctx.source}`);
+  lines.push(`Command: ${ctx.command}`);
+  lines.push(`Exit code: ${ctx.exitCode}`);
+  if (ctx.stdoutHead) lines.push('', 'stdout (head):', ctx.stdoutHead);
+  if (ctx.stdoutTail) lines.push('', 'stdout (tail):', ctx.stdoutTail);
+  if (ctx.stderrHead) lines.push('', 'stderr (head):', ctx.stderrHead);
+  if (ctx.stderrTail) lines.push('', 'stderr (tail):', ctx.stderrTail);
+  return lines.join('\n');
+}
+
+/** Which prior-context block (if any) occupies the priority slot. */
+export type DispatchPriority = 'mechanical_first' | 'review_first' | 'none';
+
+export interface ComposeBuildDispatchPromptResult {
+  prompt: string;
+  staticPlanChars: number;
+  feedbackChars: number;
+  mechanicalChars: number;
+  priority: DispatchPriority;
+}
+
+/**
+ * Compose the build-stage executor prompt from a static unit plan and the
+ * prior-attempt context. Layout depends on what the previous attempt left
+ * behind:
+ *
+ *   1. **Mechanical-first** (highest priority): previous attempt ended in
+ *      `outcome === 'retry'` with a `mechanicalContext`. The executor must
+ *      restore a green mechanical state (compile/test passing) before
+ *      pursuing deeper semantic changes.
+ *   2. **Review-first**: no mechanical failure, but `reviewFeedback` is
+ *      non-empty. The executor must address every finding.
+ *   3. **None**: pristine unit or prior attempt was clean — only the static
+ *      plan is shown.
+ *
+ * `previousAttempt` flows in-memory between iterations of the runSingleUnit
+ * retry loop — there is no sidecar persistence. Cross-process restarts lose
+ * the mechanical excerpt; the review-feedback body still survives via the
+ * unit markdown.
+ */
+export function composeBuildDispatchPrompt(
+  staticPlan: string,
+  reviewFeedback: string,
+  previousAttempt: LatestAttemptState | null,
+  unitPath: string,
+): ComposeBuildDispatchPromptResult {
+  const feedback = reviewFeedback ?? '';
+  const hasMechanical =
+    previousAttempt !== null &&
+    previousAttempt.outcome === 'retry' &&
+    previousAttempt.mechanicalContext !== null;
+  const mechanicalBlock = hasMechanical
+    ? renderMechanicalBlock(previousAttempt!.mechanicalContext!)
+    : '';
+
+  const priority: DispatchPriority = hasMechanical
+    ? 'mechanical_first'
+    : feedback.trim().length > 0 ? 'review_first' : 'none';
+
+  const header = [
+    'Orchestrated single-unit build.',
+    `Unit plan path: ${unitPath}`,
+    'Do NOT write **Status:** or decide pass/fail — the outer runner handles that.',
+    'Do NOT modify the unit plan file itself.',
+  ];
+
+  const staticBlock = ['--- STATIC UNIT PLAN ---', staticPlan];
+
+  const mechanicalSection = hasMechanical ? [
+    '',
+    '--- PRIOR MECHANICAL FAILURE ---',
+    mechanicalBlock,
+    '',
+    'The previous attempt failed a compile/test check. Restore the green mechanical state first (fix compile/test errors). Preserve any unresolved review intent, but do NOT pursue deeper semantic changes until the unit builds and tests pass.',
+  ] : [];
+
+  const reviewBlock = priority === 'review_first' ? [
+    '',
+    '--- PRIOR REVIEW FEEDBACK (ADDRESS EVERY FINDING) ---',
+    feedback,
+  ] : priority === 'mechanical_first' && feedback.trim().length > 0 ? [
+    '',
+    '--- PRIOR REVIEW FEEDBACK (ADDRESS AFTER MECHANICAL IS GREEN) ---',
+    feedback,
+  ] : priority === 'none' ? [
+    '',
+    '--- PRIOR REVIEW FEEDBACK (ADDRESS EVERY FINDING) ---',
+    '(none — first attempt for this unit)',
+  ] : [];
+
+  const instruction = priority === 'mechanical_first' ? [
+    '',
+    '--- INSTRUCTION ---',
+    'If review feedback and mechanical state conflict, restore mechanical first. Address every review finding once the unit compiles and tests pass. New work that does neither will fail review again.',
+  ] : [
+    '',
+    '--- INSTRUCTION ---',
+    'If prior review feedback exists above, address each finding one-by-one before adding any new code. New work that does not address the listed findings will fail review again.',
+  ];
+
+  const prompt = [
+    ...header,
+    '',
+    ...staticBlock,
+    ...mechanicalSection,
+    ...reviewBlock,
+    ...instruction,
+  ].join('\n');
+
+  return {
+    prompt,
+    staticPlanChars: staticPlan.length,
+    feedbackChars: feedback.length,
+    mechanicalChars: mechanicalBlock.length,
+    priority,
+  };
+}
+
+/**
+ * Convenience wrapper: split unit file content into static plan + review
+ * feedback, then compose the dispatch prompt with the supplied prior-attempt
+ * context. Used by {@link dispatchBuildUnitDefault}; tests prefer the pure
+ * {@link composeBuildDispatchPrompt} for predictability.
+ */
+export function composeBuildDispatchPromptFromUnitFile(
+  unitContent: string,
+  unitPath: string,
+  previousAttempt: LatestAttemptState | null,
+): ComposeBuildDispatchPromptResult {
+  const { staticPlan, reviewFeedback } = splitUnitFile(unitContent);
+  return composeBuildDispatchPrompt(staticPlan, reviewFeedback, previousAttempt, unitPath);
+}
+
 async function dispatchBuildUnitDefault(
   planPath: string,
   cwd: string,
   unitPath: string,
   debugEnabled: boolean,
+  previousAttempt: LatestAttemptState | null,
 ): Promise<UnitBuildDispatchResult> {
   const unitContent = fs.readFileSync(unitPath, 'utf-8');
-  const task = [
-    'Orchestrated single-unit build.',
-    `Unit plan path: ${unitPath}`,
-    'Read and implement the following unit plan.',
-    'Do NOT write **Status:** or decide pass/fail — the outer runner handles that.',
-    'Do NOT modify the unit plan file itself.',
-    '',
-    unitContent,
-  ].join('\n');
+  const composed = composeBuildDispatchPromptFromUnitFile(unitContent, unitPath, previousAttempt);
+  const task = composed.prompt;
+  vcpLog(cwd, {
+    source: 'build-loop-runner', event: 'build_dispatch.composed', decision: 'info',
+    details:
+      `staticPlan=${composed.staticPlanChars} feedback=${composed.feedbackChars} ` +
+      `mechanical=${composed.mechanicalChars} priority=${composed.priority}`,
+  }, debugEnabled).catch(() => {});
 
   const { stdout, stderr, code } = await spawnStageRunner('ralph-build', task, planPath, cwd, debugEnabled);
+
+  // Only build mechanical context on genuine mechanical failures (non-zero
+  // exit, unparseable stdout, or a stage-level error event). A successful
+  // `event: 'complete'` path attaches `mechanicalContext: null`.
+  const buildDispatchMechanical = (): MechanicalContext =>
+    buildMechanicalContext('dispatch', 'stage-runner ralph-build', code ?? -1, stdout, stderr);
 
   if (!stdout) {
     return {
       event: 'error', stage: 'ralph-build', phase: 'dispatch_failed',
       error: `Failed to start stage-runner: ${stderr}`,
+      mechanicalContext: buildDispatchMechanical(),
     };
   }
 
@@ -237,40 +417,66 @@ async function dispatchBuildUnitDefault(
         event: 'complete', stage: 'ralph-build',
         synthesis: parsed.synthesis ?? null,
         workerOutputs: parsed.worker_outputs ?? [],
+        mechanicalContext: null,
       };
     }
     return {
       event: 'error', stage: 'ralph-build',
       phase: parsed.phase ?? 'dispatch',
       error: parsed.error ?? 'stage-runner returned non-complete event',
+      mechanicalContext: buildDispatchMechanical(),
     };
   } catch {
     const stderrExcerpt = stderr.trim() ? ` stderr=${stderr.slice(0, 500)}` : '';
     return {
       event: 'error', stage: 'ralph-build', phase: 'dispatch_failed',
       error: `stage-runner exited ${code}, stdout not parseable: ${stdout.slice(0, 500)}${stderrExcerpt}`,
+      mechanicalContext: buildDispatchMechanical(),
     };
   }
 }
 
 // ─── PER-UNIT SEMANTIC REVIEW ──────────────────────────────────────────────
 
+/** Maximum bytes of raw output retained when feedback is unparseable. */
+export const UNPARSEABLE_RAW_OUTPUT_CAP = 5000;
+
 /**
- * Parse a review verdict from synthesized review output.
- * Searches for `## Verdict: PASS` or `## Verdict: NEEDS_CHANGES`.
- * Fail-open: unparseable output → treat as PASS + log warning.
+ * Parse a review verdict from synthesized review output. **Fail-closed.**
+ *
+ * - Verdict `PASS` → `{ passed: true, feedback: '' }`
+ * - Verdict `NEEDS_CHANGES` → `{ passed: false, feedback: <captured + demoted> }`
+ *   - Feedback body is the text after `## Review Feedback` heading line to EOF.
+ *   - If no `## Review Feedback` heading, falls back to everything after the verdict line.
+ *   - Captured body is run through {@link demoteFeedbackHeadings} so any H1/H2
+ *     inside cannot break out of the runner-tail region when written.
+ * - Missing or unrecognized verdict → `{ passed: false, feedback: '<error + truncated raw output>' }`.
+ *   Malformed review output blocks the unit from advancing instead of silently passing.
  */
 export function parseReviewVerdict(output: string): { passed: boolean; feedback: string } {
   const verdictMatch = output.match(/^##\s+Verdict:\s*(PASS|NEEDS_CHANGES)\s*$/im);
   if (!verdictMatch) {
-    return { passed: true, feedback: '' };
+    const truncated = output.length > UNPARSEABLE_RAW_OUTPUT_CAP
+      ? output.slice(0, UNPARSEABLE_RAW_OUTPUT_CAP) + '\n\n…[truncated]'
+      : output;
+    return {
+      passed: false,
+      feedback: `Review output unparseable — no recognized verdict header. Raw output:\n\n${truncated}`,
+    };
   }
   if (verdictMatch[1].toUpperCase() === 'PASS') {
     return { passed: true, feedback: '' };
   }
-  // Extract feedback: everything after "## Review Feedback" heading, or everything after the verdict
-  const feedbackMatch = output.match(/^##\s+Review Feedback\s*$([\s\S]*?)(?=^##\s|$(?!\n))/im);
-  const feedback = feedbackMatch ? feedbackMatch[1].trim() : output.slice(verdictMatch.index! + verdictMatch[0].length).trim();
+
+  // NEEDS_CHANGES — capture feedback body
+  let feedback: string;
+  const fbHeadingMatch = output.match(/^##\s+Review Feedback\s*$/m);
+  if (fbHeadingMatch && fbHeadingMatch.index !== undefined) {
+    feedback = output.slice(fbHeadingMatch.index + fbHeadingMatch[0].length).trim();
+  } else {
+    feedback = output.slice(verdictMatch.index! + verdictMatch[0].length).trim();
+  }
+  feedback = demoteFeedbackHeadings(feedback);
   return { passed: false, feedback };
 }
 
@@ -298,7 +504,20 @@ export function readFilesTouched(unitContent: string, cwd: string): string {
   return parts.join('\n\n');
 }
 
-/** Dispatch per-unit semantic review via stage-runner subprocess. Fail-open on any error. */
+/**
+ * Dispatch per-unit semantic review via stage-runner subprocess. **Fail-closed.**
+ *
+ * Returns `passed: false` (with a diagnostic feedback message) when any of:
+ *   - The stage-runner subprocess fails to start or returns empty stdout
+ *   - The stdout is not parseable JSON
+ *   - The parsed event is not `complete`
+ *   - The synthesis is missing or its verdict is unrecognized (handled in `parseReviewVerdict`)
+ *   - An unexpected exception bubbles up
+ *
+ * The configured-reviewer skip path lives outside this function — when no
+ * reviewers are configured for the `unit-review` stage, the caller installs
+ * a noop `reviewFn` that returns `{ skipped: true, passed: true, feedback: '' }`.
+ */
 async function dispatchUnitReviewDefault(
   planPath: string,
   cwd: string,
@@ -321,36 +540,66 @@ async function dispatchUnitReviewDefault(
       'Produce a verdict: ## Verdict: PASS or ## Verdict: NEEDS_CHANGES',
     ].join('\n');
 
-    const { stdout } = await spawnStageRunner('unit-review', task, planPath, cwd, debugEnabled);
+    const { stdout, stderr } = await spawnStageRunner('unit-review', task, planPath, cwd, debugEnabled);
 
     if (!stdout) {
-      return { skipped: false, passed: true, feedback: '' };
+      const stderrExcerpt = stderr.trim() ? ` stderr=${stderr.slice(0, 500)}` : '';
+      vcpLog(cwd, {
+        source: 'build-loop-runner', event: 'unit_review_empty_stdout', decision: 'warn',
+        details: `stage-runner returned no stdout.${stderrExcerpt}`,
+      }, debugEnabled).catch(() => {});
+      return {
+        skipped: false,
+        passed: false,
+        feedback: `Review executor returned empty output. The unit cannot advance until the reviewer produces a verdict.${stderrExcerpt}`,
+      };
     }
 
+    let parsed: { event?: string; synthesis?: string; error?: string };
     try {
-      const parsed = JSON.parse(stdout);
-      if (parsed.event === 'complete' && parsed.synthesis) {
-        return { skipped: false, ...parseReviewVerdict(parsed.synthesis) };
-      }
-      // Non-complete event — fail-open
-      vcpLog(cwd, {
-        source: 'build-loop-runner', event: 'unit_review_non_complete', decision: 'warn',
-        details: `stage-runner returned: ${stdout.slice(0, 500)}`,
-      }, debugEnabled).catch(() => {});
-      return { skipped: false, passed: true, feedback: '' };
+      parsed = JSON.parse(stdout);
     } catch {
       vcpLog(cwd, {
         source: 'build-loop-runner', event: 'unit_review_parse_error', decision: 'warn',
-        details: `stdout not parseable: ${stdout.slice(0, 500)}`,
+        details: `stdout not parseable JSON: ${stdout.slice(0, 500)}`,
       }, debugEnabled).catch(() => {});
-      return { skipped: false, passed: true, feedback: '' };
+      return {
+        skipped: false,
+        passed: false,
+        feedback: `Review executor stdout was not valid JSON. Raw output:\n\n${stdout.slice(0, UNPARSEABLE_RAW_OUTPUT_CAP)}`,
+      };
     }
+
+    if (parsed.event !== 'complete' || !parsed.synthesis) {
+      vcpLog(cwd, {
+        source: 'build-loop-runner', event: 'unit_review_non_complete', decision: 'warn',
+        details: `event=${parsed.event} synthesis=${parsed.synthesis ? 'present' : 'missing'}`,
+      }, debugEnabled).catch(() => {});
+      const detail = parsed.error ? `: ${parsed.error}` : '';
+      return {
+        skipped: false,
+        passed: false,
+        feedback: `Review executor errored (event=${parsed.event ?? 'unknown'})${detail}. The unit cannot advance until a verdict is produced.`,
+      };
+    }
+
+    const verdict = parseReviewVerdict(parsed.synthesis);
+    vcpLog(cwd, {
+      source: 'build-loop-runner', event: 'review.parse_result', decision: verdict.passed ? 'allow' : 'warn',
+      details: `passed=${verdict.passed} feedbackChars=${verdict.feedback.length}`,
+    }, debugEnabled).catch(() => {});
+    return { skipped: false, ...verdict };
   } catch (err) {
+    const msg = (err as Error).message;
     vcpLog(cwd, {
       source: 'build-loop-runner', event: 'unit_review_error', decision: 'warn',
-      details: `Review dispatch failed: ${(err as Error).message}`,
+      details: `Review dispatch threw: ${msg}`,
     }, debugEnabled).catch(() => {});
-    return { skipped: false, passed: true, feedback: '' };
+    return {
+      skipped: false,
+      passed: false,
+      feedback: `Review dispatch threw: ${msg}. The unit cannot advance until the reviewer succeeds.`,
+    };
   }
 }
 
@@ -361,6 +610,45 @@ function isUnitReviewEnabled(config: { stages: Record<string, { executors: unkno
 }
 
 // ─── RESULT BUILDERS ────────────────────────────────────────────────────────
+
+/**
+ * Compose a {@link LatestAttemptState} snapshot used as the in-memory carry
+ * from one retry iteration to the next. Priority for `mechanicalContext`:
+ *   1. `dispatch.mechanicalContext` when present (dispatch-level failure).
+ *   2. Otherwise, the first failing backpressure command's stdout/stderr.
+ *   3. Otherwise, null (clean attempt or review-only failure).
+ */
+export function buildLatestAttemptState(
+  dispatch: UnitBuildDispatchResult,
+  backpressure: BackpressureResult[],
+  outcome: 'done' | 'retry' | 'failed',
+  attempt: number,
+): LatestAttemptState {
+  let mechanicalContext: MechanicalContext | null = null;
+  if (dispatch.mechanicalContext) {
+    mechanicalContext = dispatch.mechanicalContext;
+  } else {
+    const firstFailure = backpressure.find(bp => !bp.passed);
+    if (firstFailure) {
+      mechanicalContext = buildMechanicalContext(
+        'backpressure',
+        firstFailure.command,
+        firstFailure.exitCode,
+        firstFailure.stdout,
+        firstFailure.stderr,
+      );
+    }
+  }
+
+  return {
+    attempt,
+    dispatchEvent: dispatch.event ?? null,
+    dispatchError: dispatch.error ?? null,
+    backpressure: backpressure.map(bp => ({ name: bp.command, exitCode: bp.exitCode })),
+    outcome,
+    mechanicalContext,
+  };
+}
 
 function renderAttemptSummary(
   dispatch: UnitBuildDispatchResult,
@@ -386,7 +674,7 @@ function renderAttemptSummary(
 // ─── SINGLE UNIT BUILD ─────────────────────────────────────────────────────
 
 export interface BuildLoopOverrides {
-  dispatchFn?: (planPath: string, cwd: string, unitPath: string, debug: boolean) => Promise<UnitBuildDispatchResult>;
+  dispatchFn?: (planPath: string, cwd: string, unitPath: string, debug: boolean, previousAttempt: LatestAttemptState | null) => Promise<UnitBuildDispatchResult>;
   backpressureFn?: typeof runBackpressure;
   reviewFn?: (planPath: string, cwd: string, unitPath: string, debug: boolean) => Promise<UnitReviewResult>;
 }
@@ -463,11 +751,12 @@ export async function runSingleUnit(
 
   // Guard: attempt budget already exhausted
   if (unit.attempts >= maxAttempts) {
-    writeUnitStatus(unitPath, {
+    const r = writeUnitStatus(unitPath, {
       status: 'failed',
       attempts: unit.attempts,
       appendResult: `Attempt budget exhausted (${unit.attempts}/${maxAttempts}).`,
     });
+    logRunnerTailWrite(args.cwd, args.unitId, r, debug);
     return {
       event: 'unit_failed', unitId: args.unitId, unitPath,
       attempt: unit.attempts, maxAttempts, outcome: 'failed',
@@ -476,19 +765,27 @@ export async function runSingleUnit(
   }
 
   let lastAttempt = unit.attempts;
+  // In-memory carry: last attempt's mechanical result flows into the next
+  // dispatch prompt so retry attempts see the stdout/stderr excerpts from the
+  // prior failure. Reset to null on the first iteration; cross-process
+  // restarts of build-loop-runner start from null again (the unit markdown
+  // still carries the review-feedback body).
+  let previousAttempt: LatestAttemptState | null = null;
 
   while (lastAttempt < maxAttempts) {
     const nextAttempt = lastAttempt + 1;
 
     // Crash-safe: consume attempt before dispatch
-    writeUnitStatus(unitPath, {
+    const rStart = writeUnitStatus(unitPath, {
       status: 'pending',
       attempts: nextAttempt,
       appendResult: `Attempt ${nextAttempt}/${maxAttempts} started.`,
     });
+    logRunnerTailWrite(args.cwd, args.unitId, rStart, debug);
 
-    // Dispatch build executor
-    const dispatch = await dispatchFn(args.planPath, args.cwd, unitPath, debug);
+    // Dispatch build executor — previousAttempt drives mechanical-first
+    // priority in the composed prompt.
+    const dispatch = await dispatchFn(args.planPath, args.cwd, unitPath, debug, previousAttempt);
 
     // Re-read unit file (executor may have modified project files)
     const refreshedContent = fs.readFileSync(unitPath, 'utf-8');
@@ -497,12 +794,14 @@ export async function runSingleUnit(
     // Zero backpressure commands = hard failure
     if (commands.length === 0) {
       const isExhausted = nextAttempt >= maxAttempts;
-      writeUnitStatus(unitPath, {
+      const outcome = isExhausted ? 'failed' : 'retry';
+      const rNoBp = writeUnitStatus(unitPath, {
         status: isExhausted ? 'failed' : 'pending',
         attempts: nextAttempt,
-        appendResult: renderAttemptSummary(dispatch, [], isExhausted ? 'failed' : 'retry', nextAttempt, maxAttempts) +
+        appendResult: renderAttemptSummary(dispatch, [], outcome, nextAttempt, maxAttempts) +
           '\n\n**Note:** No backpressure commands found in unit file.',
       });
+      logRunnerTailWrite(args.cwd, args.unitId, rNoBp, debug);
       if (isExhausted) {
         return {
           event: 'unit_failed', unitId: args.unitId, unitPath,
@@ -510,6 +809,7 @@ export async function runSingleUnit(
           summary: `Unit ${args.unitId} failed: no backpressure commands (attempt ${nextAttempt}/${maxAttempts}).`,
         };
       }
+      previousAttempt = buildLatestAttemptState(dispatch, [], outcome, nextAttempt);
       lastAttempt = nextAttempt;
       continue;
     }
@@ -524,30 +824,28 @@ export async function runSingleUnit(
       backpressure.every(r => r.passed);
 
     if (passed) {
-      // Per-unit semantic review (if configured) — fail-open on any error
+      // Per-unit semantic review (if configured). Fail-closed: catastrophic
+      // exceptions in the reviewer block the unit instead of silently passing.
       let review: UnitReviewResult;
       try {
         review = await reviewFn(args.planPath, args.cwd, unitPath, debug);
-      } catch {
-        review = { skipped: false, passed: true, feedback: '' };
+      } catch (err) {
+        review = {
+          skipped: false,
+          passed: false,
+          feedback: `Review function threw: ${(err as Error).message}. Cannot advance.`,
+        };
       }
 
       if (review.skipped || review.passed) {
-        // Clear stale review feedback from prior failed attempts
-        if (refreshedContent.includes('## Review Feedback')) {
-          const cleaned = replaceOrAppendSection(refreshedContent, '## Review Feedback', '');
-          const tempClean = `${unitPath}.tmp-${process.pid}-${Date.now()}`;
-          try {
-            fs.writeFileSync(tempClean, cleaned, 'utf-8');
-            fs.renameSync(tempClean, unitPath);
-          } catch { try { fs.unlinkSync(tempClean); } catch { /* ignore */ } }
-        }
-
-        writeUnitStatus(unitPath, {
+        // Success path — clear any stale feedback from prior failed attempts.
+        const rDone = writeUnitStatus(unitPath, {
           status: 'done',
           attempts: nextAttempt,
           appendResult: renderAttemptSummary(dispatch, backpressure, 'done', nextAttempt, maxAttempts),
+          reviewFeedback: '',
         });
+        logRunnerTailWrite(args.cwd, args.unitId, rDone, debug);
         return {
           event: 'unit_done', unitId: args.unitId, unitPath,
           attempt: nextAttempt, maxAttempts, outcome: 'done',
@@ -555,22 +853,20 @@ export async function runSingleUnit(
         };
       }
 
-      // Review failed — write feedback for next attempt
-      const withFeedback = replaceOrAppendSection(refreshedContent, '## Review Feedback', review.feedback);
-      const tempFeedback = `${unitPath}.tmp-${process.pid}-${Date.now()}`;
-      try {
-        fs.writeFileSync(tempFeedback, withFeedback, 'utf-8');
-        fs.renameSync(tempFeedback, unitPath);
-      } catch { try { fs.unlinkSync(tempFeedback); } catch { /* ignore */ } }
-
+      // Review failed — store feedback under ## Review Feedback only.
+      // Note: feedback is NOT duplicated into Latest Build Attempt anymore;
+      // the latter carries only mechanical results.
       const isExhausted = nextAttempt >= maxAttempts;
-      writeUnitStatus(unitPath, {
+      const reviewOutcome = isExhausted ? 'failed' : 'retry';
+      const rReviewFail = writeUnitStatus(unitPath, {
         status: isExhausted ? 'failed' : 'pending',
         attempts: nextAttempt,
         appendResult: renderAttemptSummary(dispatch, backpressure,
-          isExhausted ? 'failed' : 'retry', nextAttempt, maxAttempts) +
-          '\n\n**Review Verdict:** NEEDS_CHANGES\n' + review.feedback,
+          reviewOutcome, nextAttempt, maxAttempts) +
+          '\n\n**Review Verdict:** NEEDS_CHANGES (see ## Review Feedback)',
+        reviewFeedback: review.feedback,
       });
+      logRunnerTailWrite(args.cwd, args.unitId, rReviewFail, debug);
 
       if (isExhausted) {
         return {
@@ -579,17 +875,22 @@ export async function runSingleUnit(
           summary: `Unit ${args.unitId} failed review after ${nextAttempt}/${maxAttempts} attempts.`,
         };
       }
+      // Review-only failure: no mechanical context to forward. Reset
+      // previousAttempt so the next dispatch routes via review_first, not
+      // mechanical_first.
+      previousAttempt = buildLatestAttemptState(dispatch, backpressure, reviewOutcome, nextAttempt);
       lastAttempt = nextAttempt;
       continue;
     }
 
     // Failed — check if exhausted
     if (nextAttempt >= maxAttempts) {
-      writeUnitStatus(unitPath, {
+      const rFail = writeUnitStatus(unitPath, {
         status: 'failed',
         attempts: nextAttempt,
         appendResult: renderAttemptSummary(dispatch, backpressure, 'failed', nextAttempt, maxAttempts),
       });
+      logRunnerTailWrite(args.cwd, args.unitId, rFail, debug);
       return {
         event: 'unit_failed', unitId: args.unitId, unitPath,
         attempt: nextAttempt, maxAttempts, outcome: 'failed',
@@ -598,11 +899,13 @@ export async function runSingleUnit(
     }
 
     // Retry — write pending and continue loop
-    writeUnitStatus(unitPath, {
+    const rRetry = writeUnitStatus(unitPath, {
       status: 'pending',
       attempts: nextAttempt,
       appendResult: renderAttemptSummary(dispatch, backpressure, 'retry', nextAttempt, maxAttempts),
     });
+    logRunnerTailWrite(args.cwd, args.unitId, rRetry, debug);
+    previousAttempt = buildLatestAttemptState(dispatch, backpressure, 'retry', nextAttempt);
     lastAttempt = nextAttempt;
   }
 

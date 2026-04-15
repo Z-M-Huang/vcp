@@ -135,8 +135,8 @@ sequenceDiagram
             CC->>CC: TaskUpdate(unit N → in_progress)
             CC->>BLR: Bash: --plan X --cwd Y --unit N
             loop Retry loop (mechanical, inside runner)
-                BLR->>FS: Write Attempts++ (crash-safe)
-                BLR->>SR: subprocess: --stage-type ralph-build --task-stdin
+                BLR->>FS: writeRunnerTail({status: pending, attempts++})
+                BLR->>SR: subprocess: --stage-type ralph-build --task-stdin<br/>(prompt = STATIC PLAN + [PRIOR MECHANICAL FAILURE] + PRIOR REVIEW FEEDBACK + INSTRUCTION)
                 SR->>EX: Dispatch configured build executor
                 EX-->>SR: Implementation result
                 SR-->>BLR: JSON: {synthesis}
@@ -147,15 +147,17 @@ sequenceDiagram
                         SR->>EX: Dispatch reviewer executor(s)
                         EX-->>SR: Review verdict
                         SR-->>BLR: JSON: {synthesis: PASS|NEEDS_CHANGES}
+                        Note over BLR: Fail-closed parsing: malformed output → NEEDS_CHANGES
                         alt NEEDS_CHANGES + attempts remain
-                            BLR->>FS: Write Review Feedback + Status: pending
+                            BLR->>FS: writeRunnerTail({reviewFeedback, status: pending})
                         end
                     end
-                    BLR->>FS: Write Status: done
+                    BLR->>FS: writeRunnerTail({status: done, reviewFeedback: ''})
                 else fail + attempts remain
-                    BLR->>FS: Write Status: pending (retry)
+                    Note over BLR: Carry mechanicalContext in-memory for next attempt's dispatch prompt
+                    BLR->>FS: writeRunnerTail({status: pending, latestAttempt})
                 else fail + exhausted
-                    BLR->>FS: Write Status: failed
+                    BLR->>FS: writeRunnerTail({status: failed, latestAttempt})
                 end
             end
             BLR-->>CC: JSON: {event: unit_done|unit_failed}
@@ -204,11 +206,15 @@ sequenceDiagram
     end
 ```
 
+**Mechanical failure context:** on a non-zero exit from dispatch or backpressure, the runner captures stdout+stderr head+tail excerpts (≤1000 chars each, verbatim) and carries them in-memory into the next attempt within the same `runSingleUnit` invocation. The retry's dispatch prompt includes a `--- PRIOR MECHANICAL FAILURE ---` block so the executor can restore the green state before pursuing semantic changes. Excerpts are not persisted across process restarts — a mid-unit crash loses the mechanical context (review feedback survives via the unit-file tail).
+
 **Script enforcement boundaries:**
 - **ralph-state-machine.ts** (passive) — Computes next action when queried. CC calls it via Bash before every stage transition. Reads plan + unit files, returns JSON with the next action. Never drives execution.
 - **stage-runner.ts** (dispatch) — Multi-executor dispatcher. CC calls it via Bash for all stages. Loads config, resolves system prompts, spawns executors (subscription/API/CLI), synthesizes outputs.
 - **build-loop-runner.ts** (single-unit executor) — Owns single-unit execution with internal retries. CC calls it per unit via Bash with `--unit N`; it retries internally: dispatches executor (subprocess to stage-runner), runs backpressure (spawnSync), optional semantic review (subprocess to stage-runner with unit-review), writes unit status (fs). Returns JSON when the unit is done or failed.
 - **CC Main Process** (LLM) — Drives the pipeline: queries SM, invokes scripts, validates synthesis, presents user checkpoints, updates tasks. Drives unit-to-unit build progression via state machine queries and task management.
+
+**Task-board projection:** the CC orchestrator creates one task per stage with `blockedBy` chaining, then (post-decompose) registers a unit task per decomposition unit with `blockedBy` mirroring the unit DAG. Bulk registration happens via `ralph-state-machine.ts --action register-task-graph` (single atomic state write). `--action verify-task-graph` warns on drift at every subsequent build-stage `next` query without blocking execution — unit-file `dependsOn` remains authoritative for build ordering; the task board is a human-visibility projection of that DAG.
 
 **Two nested loops + review gate:**
 - **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), optional per-unit semantic review, retry up to `max_build_attempts`. Code review can send units back for rework. Per-unit retry loop is fully mechanical via `build-loop-runner.ts --unit N`. Unit-to-unit progression is driven by the CC orchestrator via state machine queries and task management.
