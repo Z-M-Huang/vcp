@@ -493,7 +493,7 @@ describe('cross-component: stage-runner output → state machine review gate', (
     const cp = result.actions.find((a: any) => a.type === 'user_checkpoint');
     expect(cp).toBeDefined();
     expect(cp.stage).toBe('decompose');
-    expect(cp.approveStatus).toBe('build');
+    expect(cp.approveStatus).toBe('plan_lint');
   });
 });
 
@@ -608,6 +608,30 @@ describe('StageProgress', () => {
     const progress = new StageProgress('ralph-requirements', makeExecutors(1), tmpDir);
     expect(progress.getFilePath()).toContain('stage-progress-ralph-requirements-');
     expect(progress.getFilePath()).toContain(String(process.pid));
+  });
+
+  test('slugHint scopes file under ralph-{slug}/progress/ (§7)', () => {
+    const tmpDir = makeTmpDir();
+    const progress = new StageProgress('ralph-build', makeExecutors(1), tmpDir, 'test-slug');
+    const p = progress.getFilePath();
+    expect(p).toContain(path.join('.state', 'ralph-test-slug', 'progress'));
+    expect(p).toContain(`stage-progress-ralph-build-${process.pid}.json`);
+    // File must actually be writable at that path (parent dirs created atomically)
+    expect(fs.existsSync(p)).toBe(true);
+  });
+
+  test('null slugHint keeps legacy flat path (non-ralph callers)', () => {
+    const tmpDir = makeTmpDir();
+    const progress = new StageProgress('discovery', makeExecutors(1), tmpDir, null);
+    const p = progress.getFilePath();
+    expect(p).toBe(path.join(tmpDir, '.vcp', 'plan', '.state', `stage-progress-discovery-${process.pid}.json`));
+  });
+
+  test('omitted slugHint defaults to legacy flat path (backwards compat)', () => {
+    const tmpDir = makeTmpDir();
+    const progress = new StageProgress('discovery', makeExecutors(1), tmpDir);
+    const p = progress.getFilePath();
+    expect(p).toBe(path.join(tmpDir, '.vcp', 'plan', '.state', `stage-progress-discovery-${process.pid}.json`));
   });
 
   test('single-executor stage does not write stderr progress lines', () => {

@@ -6,23 +6,18 @@ import {
   parseBuildLoopArgs,
   upsertMetadataLine,
   replaceOrAppendSection,
-  writeUnitStatus,
-  writeRunnerTail,
-  RUNNER_TAIL_MARKER,
-  demoteFeedbackHeadings,
   splitUnitFile,
   composeBuildDispatchPrompt,
   composeBuildDispatchPromptFromUnitFile,
   extractBackpressureCommands,
   resolveUnitPath,
-  runSingleUnit,
+  runSingleAttempt,
   parseReviewVerdict,
   readFilesTouched,
   buildMechanicalContext,
-  buildLatestAttemptState,
 } from '../build-loop-runner.ts';
+import { RUNNER_TAIL_MARKER, demoteFeedbackHeadings } from '../ralph/unit-file.ts';
 import type {
-  UnitReviewResult,
   LatestAttemptState,
   MechanicalContext,
   UnitBuildDispatchResult,
@@ -95,6 +90,16 @@ describe('parseBuildLoopArgs', () => {
     expect(() => parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a', '--cwd', '/c', '--unit', '0'])).toThrow('Invalid --unit');
     expect(() => parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a', '--cwd', '/c', '--unit', '-1'])).toThrow('Invalid --unit');
   });
+
+  test('parses optional --lease flag', () => {
+    const result = parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a/b.md', '--cwd', '/c', '--unit', '1', '--lease', 'tok-abc']);
+    expect(result.lease).toBe('tok-abc');
+  });
+
+  test('lease is undefined when not provided', () => {
+    const result = parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a/b.md', '--cwd', '/c', '--unit', '1']);
+    expect(result.lease).toBeUndefined();
+  });
 });
 
 // ─── upsertMetadataLine ───────────────────────────────────────────────────
@@ -150,267 +155,6 @@ describe('replaceOrAppendSection', () => {
   });
 });
 
-// ─── writeRunnerTail ──────────────────────────────────────────────────────
-
-describe('writeRunnerTail', () => {
-  test('marker path: truncates from marker to EOF and re-emits tail', () => {
-    const content = [
-      '# Unit 1: Test',
-      '**Status:** pending',
-      '',
-      '### Done When',
-      'pass.',
-      '',
-      RUNNER_TAIL_MARKER,
-      '## Review Feedback',
-      'OLD feedback',
-      '',
-      '## Latest Build Attempt',
-      'OLD attempt',
-    ].join('\n');
-    const result = writeRunnerTail(content, { reviewFeedback: 'NEW feedback', latestAttempt: 'NEW attempt' });
-    expect(result.path).toBe('marker');
-    expect(result.content).toContain('NEW feedback');
-    expect(result.content).toContain('NEW attempt');
-    expect(result.content).not.toContain('OLD feedback');
-    expect(result.content).not.toContain('OLD attempt');
-    // Marker appears exactly once
-    expect(result.content.split(RUNNER_TAIL_MARKER).length - 1).toBe(1);
-  });
-
-  test('legacy_done_when path: splices tail right after Done When', () => {
-    const content = [
-      '# Unit 1: Test',
-      '**Status:** pending',
-      '',
-      '### Done When',
-      'All pass.',
-      '',
-      '## Orphaned Garbage Section From The Bug',
-      'should be discarded.',
-    ].join('\n');
-    const result = writeRunnerTail(content, { reviewFeedback: 'fb', latestAttempt: 'att' });
-    expect(result.path).toBe('legacy_done_when');
-    expect(result.content).toContain(RUNNER_TAIL_MARKER);
-    expect(result.content).toContain('All pass.');
-    expect(result.content).not.toContain('Orphaned Garbage Section');
-    expect(result.content).not.toContain('should be discarded');
-  });
-
-  test('legacy_done_when path: ignores Done When inside fenced code block', () => {
-    const content = [
-      '# Unit 1: Test',
-      '',
-      '### What to Implement',
-      'Example:',
-      '```markdown',
-      '## Done When',
-      'fake heading inside fence',
-      '```',
-      '',
-      '### Done When',
-      'real heading.',
-    ].join('\n');
-    const result = writeRunnerTail(content, { reviewFeedback: 'fb', latestAttempt: 'att' });
-    expect(result.path).toBe('legacy_done_when');
-    // The real heading "real heading." should be retained
-    expect(result.content).toContain('real heading.');
-    // The fenced fake heading should be retained too (it's part of the static plan)
-    expect(result.content).toContain('fake heading inside fence');
-  });
-
-  test('legacy_done_when path: picks the LAST Done When when multiple exist', () => {
-    const content = [
-      '# Unit 1',
-      '## Done When',
-      'first one (malformed).',
-      '## Other Section',
-      'middle.',
-      '## Done When',
-      'real (last) one.',
-    ].join('\n');
-    const result = writeRunnerTail(content, { reviewFeedback: 'fb', latestAttempt: 'att' });
-    expect(result.path).toBe('legacy_done_when');
-    // Both "real (last) one." and the earlier "first one (malformed)." should be retained
-    expect(result.content).toContain('first one (malformed).');
-    expect(result.content).toContain('middle.');
-    expect(result.content).toContain('real (last) one.');
-    // Marker comes after the LAST Done When section
-    const lastDoneWhenIdx = result.content.lastIndexOf('## Done When');
-    const markerIdx = result.content.indexOf(RUNNER_TAIL_MARKER);
-    expect(markerIdx).toBeGreaterThan(lastDoneWhenIdx);
-  });
-
-  test('append_eof path: no Done When and no marker — preserves content', () => {
-    const content = '# Unit 1: Test\n**Status:** pending\nNo Done When heading anywhere.';
-    const result = writeRunnerTail(content, { reviewFeedback: 'fb', latestAttempt: 'att' });
-    expect(result.path).toBe('append_eof');
-    expect(result.content).toContain('No Done When heading anywhere.');
-    expect(result.content).toContain(RUNNER_TAIL_MARKER);
-  });
-
-  test('reviewFeedback undefined: preserves existing feedback from file', () => {
-    const content = [
-      '# Unit 1', '### Done When', 'pass.', '',
-      RUNNER_TAIL_MARKER,
-      '## Review Feedback',
-      'PRESERVE THIS',
-      '',
-      '## Latest Build Attempt',
-      'old attempt',
-    ].join('\n');
-    const result = writeRunnerTail(content, { latestAttempt: 'new attempt' });
-    expect(result.preservedFeedback).toBe(true);
-    expect(result.content).toContain('PRESERVE THIS');
-    expect(result.content).toContain('new attempt');
-    expect(result.content).not.toContain('old attempt');
-  });
-
-  test('reviewFeedback empty string: explicitly clears the block', () => {
-    const content = [
-      '# Unit 1', '### Done When', 'pass.', '',
-      RUNNER_TAIL_MARKER,
-      '## Review Feedback',
-      'CLEAR ME',
-      '',
-      '## Latest Build Attempt',
-      'old',
-    ].join('\n');
-    const result = writeRunnerTail(content, { reviewFeedback: '', latestAttempt: 'new' });
-    expect(result.preservedFeedback).toBe(false);
-    expect(result.content).not.toContain('CLEAR ME');
-    expect(result.content).toContain('## Review Feedback');
-    expect(result.feedbackChars).toBe(0);
-  });
-
-  test('reviewFeedback string: replaces existing feedback', () => {
-    const content = [
-      '# Unit 1', '### Done When', 'pass.', '',
-      RUNNER_TAIL_MARKER,
-      '## Review Feedback',
-      'OLD',
-      '',
-      '## Latest Build Attempt',
-      'a',
-    ].join('\n');
-    const result = writeRunnerTail(content, { reviewFeedback: 'NEW', latestAttempt: 'b' });
-    expect(result.preservedFeedback).toBe(false);
-    expect(result.content).not.toContain('OLD');
-    expect(result.content).toContain('NEW');
-  });
-
-  test('round-trip stability: repeated calls with same args produce identical output', () => {
-    const content = '# Unit 1\n### Done When\npass.\n';
-    const r1 = writeRunnerTail(content, { reviewFeedback: 'fb', latestAttempt: 'att' });
-    const r2 = writeRunnerTail(r1.content, { reviewFeedback: 'fb', latestAttempt: 'att' });
-    expect(r2.content).toBe(r1.content);
-    expect(r2.path).toBe('marker');
-  });
-
-  test('append_eof: file with only fenced Done When (no real heading) — does not truncate fence', () => {
-    const content = [
-      '# Unit 1',
-      '```markdown',
-      '## Done When',
-      'fenced.',
-      '```',
-      'tail content',
-    ].join('\n');
-    const result = writeRunnerTail(content, { reviewFeedback: 'fb', latestAttempt: 'att' });
-    expect(result.path).toBe('append_eof');
-    expect(result.content).toContain('fenced.');
-    expect(result.content).toContain('tail content');
-  });
-
-  test('legacy bug fixture: replaceOrAppendSection-style unit file collapses to clean tail after one write', () => {
-    // Simulates the dense-mem unit-12.md bug: multiple orphaned H2 subsections
-    // from feedback runs accumulated by the old naive-regex replacer, plus an
-    // empty `## Review Feedback` anchor near EOF.
-    const legacy = [
-      '# Unit 12: Audit handler',
-      '**Status:** pending',
-      '**Attempts:** 4',
-      '',
-      '### Entropy', 'LOW',
-      '',
-      '### Acceptance Criteria',
-      '- AC-1: Deny on nil principal',
-      '',
-      '### Done When',
-      '- Tests pass for nil principal path.',
-      '',
-      // --- orphaned feedback from attempts 1-3 (the bug) ---
-      '## Executive Summary',
-      'Reviewer ran once at T0, left residue.',
-      '',
-      '## Critical Issues',
-      '- Null check missing at src/audit.ts:42',
-      '',
-      '## Executive Summary',
-      'Reviewer ran again at T1, more residue.',
-      '',
-      '## Critical Issues',
-      '- Null check STILL missing at src/audit.ts:42',
-      '',
-      // --- empty anchor that the old code wrote each attempt ---
-      '## Review Feedback',
-      '',
-      '## Latest Build Attempt',
-      'Mechanical commands passed; review failed.',
-    ].join('\n');
-
-    const result = writeRunnerTail(legacy, {
-      reviewFeedback: '- AC-1 violated (src/audit.ts:42): add `if (!ctx.principal) return deny()`',
-      latestAttempt: 'Attempt 5 backpressure: tests pass.',
-    });
-
-    // Legacy path: no marker, Done When is the last anchor → legacy_done_when
-    expect(result.path).toBe('legacy_done_when');
-    // Exactly one marker
-    expect(result.content.split(RUNNER_TAIL_MARKER).length - 1).toBe(1);
-    // Exactly one `## Review Feedback` and one `## Latest Build Attempt`
-    expect(result.content.split('## Review Feedback').length - 1).toBe(1);
-    expect(result.content.split('## Latest Build Attempt').length - 1).toBe(1);
-    // No orphaned H2 subsections survived
-    expect(result.content).not.toContain('## Executive Summary');
-    expect(result.content).not.toContain('## Critical Issues');
-    // New feedback present; old residue gone
-    expect(result.content).toContain('AC-1 violated');
-    expect(result.content).not.toContain('Reviewer ran once at T0');
-    expect(result.content).not.toContain('Reviewer ran again at T1');
-    expect(result.content).not.toContain('Null check STILL missing');
-    // Static plan preserved through Done When
-    expect(result.content).toContain('AC-1: Deny on nil principal');
-    expect(result.content).toContain('Tests pass for nil principal path.');
-    // Output size bounded: ≤ legacy + new feedback + small constants
-    expect(result.content.length).toBeLessThanOrEqual(legacy.length + result.feedbackChars + 512);
-    // Telemetry fields populated
-    expect(result.bytesBefore).toBe(legacy.length);
-    expect(result.bytesAfter).toBe(result.content.length);
-    expect(result.hadExistingFeedback).toBe(false); // empty anchor body = no prior feedback
-  });
-
-  test('second write on a legacy-cleaned file uses marker path (round-trip)', () => {
-    const legacy = [
-      '# Unit 1', '### Done When', 'pass.',
-      '',
-      '## Orphaned Section From Bug',
-      'residue',
-      '',
-      '## Review Feedback',
-      '',
-      '## Latest Build Attempt',
-      'old',
-    ].join('\n');
-    const first = writeRunnerTail(legacy, { reviewFeedback: 'fb1', latestAttempt: 'att1' });
-    expect(first.path).toBe('legacy_done_when');
-    const second = writeRunnerTail(first.content, { reviewFeedback: 'fb2', latestAttempt: 'att2' });
-    expect(second.path).toBe('marker');
-    expect(second.content).toContain('fb2');
-    expect(second.content).not.toContain('fb1');
-    expect(second.content).not.toContain('Orphaned Section From Bug');
-  });
-});
 
 describe('splitUnitFile', () => {
   test('marker present: static plan = before marker, feedback = body of ## Review Feedback in tail', () => {
@@ -457,19 +201,19 @@ describe('splitUnitFile', () => {
 });
 
 describe('composeBuildDispatchPrompt (direct API)', () => {
-  test('pristine state → priority=none, placeholder feedback', () => {
+  test('pristine state → priority=none, no review or mechanical blocks', () => {
     const { prompt, priority, feedbackChars, mechanicalChars } =
       composeBuildDispatchPrompt('# Unit 1\n### Done When\npass.', '', null, '/p/u-1.md');
     expect(priority).toBe('none');
-    expect(prompt).toContain('--- STATIC UNIT PLAN ---');
-    expect(prompt).toContain('--- PRIOR REVIEW FEEDBACK (ADDRESS EVERY FINDING) ---');
-    expect(prompt).toContain('(none — first attempt for this unit)');
-    expect(prompt).not.toContain('--- PRIOR MECHANICAL FAILURE ---');
+    expect(prompt).toContain('--- STATIC UNIT PLAN (authoritative contract');
+    expect(prompt).not.toContain('--- PRIOR REVIEW FEEDBACK');
+    expect(prompt).not.toContain('--- PRIOR MECHANICAL FAILURE');
+    expect(prompt).toMatch(/first attempt for this unit/i);
     expect(feedbackChars).toBe(0);
     expect(mechanicalChars).toBe(0);
   });
 
-  test('review feedback only → priority=review_first, address-every-finding label', () => {
+  test('review feedback only → priority=review_first, MUST ADDRESS heading', () => {
     const { prompt, priority, feedbackChars, mechanicalChars } =
       composeBuildDispatchPrompt(
         '# Unit 1\n### Done When\npass.',
@@ -478,16 +222,16 @@ describe('composeBuildDispatchPrompt (direct API)', () => {
         '/p/u-1.md',
       );
     expect(priority).toBe('review_first');
-    expect(prompt).toContain('--- PRIOR REVIEW FEEDBACK (ADDRESS EVERY FINDING) ---');
+    expect(prompt).toContain('--- PRIOR REVIEW FEEDBACK (MUST ADDRESS');
     expect(prompt).toContain('AC-1 violated');
-    expect(prompt).not.toContain('--- PRIOR MECHANICAL FAILURE ---');
+    expect(prompt).not.toContain('--- PRIOR MECHANICAL FAILURE');
     expect(prompt).not.toContain('ADDRESS AFTER MECHANICAL IS GREEN');
+    expect(prompt).not.toContain('ADDRESS EVERY FINDING');
     expect(feedbackChars).toBeGreaterThan(0);
     expect(mechanicalChars).toBe(0);
-    expect(prompt).toMatch(/address each finding/i);
   });
 
-  test('mechanical failure only → priority=mechanical_first, no review block', () => {
+  test('mechanical failure only → priority=mechanical_only, no review block', () => {
     const previousAttempt = makeLatestAttempt({
       mechanicalContext: makeMechanicalContext({
         command: 'go test ./...',
@@ -496,17 +240,17 @@ describe('composeBuildDispatchPrompt (direct API)', () => {
     });
     const { prompt, priority, mechanicalChars, feedbackChars } =
       composeBuildDispatchPrompt('# Unit 1\n### Done When\npass.', '', previousAttempt, '/p/u-1.md');
-    expect(priority).toBe('mechanical_first');
+    expect(priority).toBe('mechanical_only');
     expect(prompt).toContain('--- PRIOR MECHANICAL FAILURE ---');
     expect(prompt).toContain('Command: go test ./...');
     expect(prompt).toContain('FAIL: TestFoo');
     expect(prompt).not.toContain('--- PRIOR REVIEW FEEDBACK');
-    expect(prompt).toMatch(/restore mechanical first/i);
+    expect(prompt).toMatch(/Restore the green mechanical state/i);
     expect(mechanicalChars).toBeGreaterThan(0);
     expect(feedbackChars).toBe(0);
   });
 
-  test('mechanical + review feedback → mechanical first, review labelled AFTER MECHANICAL IS GREEN', () => {
+  test('mechanical + review feedback → REVIEW first, mechanical labeled "address alongside"', () => {
     const { prompt, priority } =
       composeBuildDispatchPrompt(
         '# Unit 1\n### Done When\npass.',
@@ -514,16 +258,18 @@ describe('composeBuildDispatchPrompt (direct API)', () => {
         makeLatestAttempt(),
         '/p/u-1.md',
       );
-    expect(priority).toBe('mechanical_first');
-    const mechanicalIdx = prompt.indexOf('--- PRIOR MECHANICAL FAILURE ---');
-    const reviewIdx = prompt.indexOf('--- PRIOR REVIEW FEEDBACK (ADDRESS AFTER MECHANICAL IS GREEN) ---');
-    expect(mechanicalIdx).toBeGreaterThan(0);
-    expect(reviewIdx).toBeGreaterThan(mechanicalIdx);
+    expect(priority).toBe('review_first');
+    const reviewIdx = prompt.indexOf('--- PRIOR REVIEW FEEDBACK (MUST ADDRESS');
+    const mechanicalIdx = prompt.indexOf('--- PRIOR MECHANICAL FAILURE (address alongside the review feedback) ---');
+    expect(reviewIdx).toBeGreaterThan(0);
+    expect(mechanicalIdx).toBeGreaterThan(reviewIdx);
     expect(prompt).toContain('AC-2 violated');
+    // §13: the "ADDRESS AFTER MECHANICAL IS GREEN" demotion is removed
+    expect(prompt).not.toContain('ADDRESS AFTER MECHANICAL IS GREEN');
     expect(prompt).not.toContain('ADDRESS EVERY FINDING');
   });
 
-  test('retry outcome without mechanicalContext → falls back to review_first (does not claim mechanical)', () => {
+  test('retry outcome without mechanicalContext → falls back to review_first', () => {
     const { prompt, priority } =
       composeBuildDispatchPrompt(
         '# Unit 1\n### Done When\npass.',
@@ -532,7 +278,7 @@ describe('composeBuildDispatchPrompt (direct API)', () => {
         '/p/u-1.md',
       );
     expect(priority).toBe('review_first');
-    expect(prompt).not.toContain('--- PRIOR MECHANICAL FAILURE ---');
+    expect(prompt).not.toContain('--- PRIOR MECHANICAL FAILURE');
   });
 
   test('always includes do-not-modify and unit plan path header', () => {
@@ -540,24 +286,39 @@ describe('composeBuildDispatchPrompt (direct API)', () => {
     expect(prompt).toMatch(/Do NOT modify the unit plan file/i);
     expect(prompt).toContain('Unit plan path: /path/to/unit-1.md');
   });
+
+  test('static plan is rendered last (stays on-screen as builder reads down)', () => {
+    const { prompt } = composeBuildDispatchPrompt(
+      '# Unit 1\n### Done When\npass.',
+      'AC-1 finding',
+      makeLatestAttempt(),
+      '/p/u-1.md',
+    );
+    const reviewIdx = prompt.indexOf('--- PRIOR REVIEW FEEDBACK');
+    const mechanicalIdx = prompt.indexOf('--- PRIOR MECHANICAL FAILURE');
+    const staticIdx = prompt.indexOf('--- STATIC UNIT PLAN');
+    expect(reviewIdx).toBeGreaterThan(-1);
+    expect(mechanicalIdx).toBeGreaterThan(reviewIdx);
+    expect(staticIdx).toBeGreaterThan(mechanicalIdx);
+  });
 });
 
 describe('composeBuildDispatchPromptFromUnitFile', () => {
-  test('first attempt: feedback section says (none)', () => {
+  test('first attempt: no prior-feedback block rendered', () => {
     const content = '# Unit 1\n### Done When\npass.\n';
     const { prompt, staticPlanChars, feedbackChars, priority } =
       composeBuildDispatchPromptFromUnitFile(content, '/path/to/unit-1.md', null);
     expect(priority).toBe('none');
-    expect(prompt).toContain('--- STATIC UNIT PLAN ---');
-    expect(prompt).toContain('--- PRIOR REVIEW FEEDBACK (ADDRESS EVERY FINDING) ---');
-    expect(prompt).toContain('(none — first attempt for this unit)');
+    expect(prompt).toContain('--- STATIC UNIT PLAN (authoritative contract');
+    expect(prompt).not.toContain('--- PRIOR REVIEW FEEDBACK');
+    expect(prompt).toMatch(/first attempt for this unit/i);
     expect(prompt).toContain('--- INSTRUCTION ---');
     expect(prompt).toContain('Unit plan path: /path/to/unit-1.md');
     expect(staticPlanChars).toBeGreaterThan(0);
     expect(feedbackChars).toBe(0);
   });
 
-  test('with feedback in markdown: feedback section contains the feedback body, not buried in plan', () => {
+  test('with feedback in markdown: feedback section appears BEFORE the static plan (§13)', () => {
     const content = [
       '# Unit 1',
       '### Done When',
@@ -575,18 +336,18 @@ describe('composeBuildDispatchPromptFromUnitFile', () => {
     expect(priority).toBe('review_first');
     expect(prompt).toContain('AC-1 violated: missing null check');
     expect(feedbackChars).toBeGreaterThan(0);
-    const feedbackHeaderIdx = prompt.indexOf('--- PRIOR REVIEW FEEDBACK');
+    const feedbackHeaderIdx = prompt.indexOf('--- PRIOR REVIEW FEEDBACK (MUST ADDRESS');
     const feedbackTextIdx = prompt.indexOf('AC-1 violated');
+    const staticStartIdx = prompt.indexOf('--- STATIC UNIT PLAN');
+    expect(feedbackHeaderIdx).toBeGreaterThan(-1);
     expect(feedbackTextIdx).toBeGreaterThan(feedbackHeaderIdx);
-    const staticStartIdx = prompt.indexOf('--- STATIC UNIT PLAN ---');
-    const staticContent = prompt.slice(staticStartIdx, feedbackHeaderIdx);
-    expect(staticContent).not.toContain('AC-1 violated');
+    // §13: review feedback comes BEFORE the static plan
+    expect(staticStartIdx).toBeGreaterThan(feedbackTextIdx);
   });
 
-  test('always includes do-not-modify instruction and address-feedback instruction', () => {
+  test('always includes do-not-modify instruction', () => {
     const { prompt } = composeBuildDispatchPromptFromUnitFile('# Unit 1\n### Done When\npass.', '/p/u-1.md', null);
     expect(prompt).toMatch(/Do NOT modify the unit plan file/i);
-    expect(prompt).toMatch(/address each finding/i);
   });
 });
 
@@ -605,35 +366,6 @@ describe('demoteFeedbackHeadings', () => {
   });
 });
 
-// ─── writeUnitStatus ──────────────────────────────────────────────────────
-
-describe('writeUnitStatus', () => {
-  test('writes status and attempts to real file', () => {
-    const tmp = makeTmpDir();
-    const unitPath = path.join(tmp, 'unit-1.md');
-    writeFileSync(unitPath, '# Unit 1: Test\n\n### Backpressure\n- `bun test`\n### Done When\nAll pass.');
-    writeUnitStatus(unitPath, { status: 'done', attempts: 1, appendResult: 'All passed.' });
-    const content = readFileSync(unitPath, 'utf-8');
-    expect(content).toContain('**Status:** done');
-    expect(content).toContain('**Attempts:** 1');
-    expect(content).toContain('## Latest Build Attempt');
-    expect(content).toContain('All passed.');
-  });
-
-  test('is idempotent — replaces on second write', () => {
-    const tmp = makeTmpDir();
-    const unitPath = path.join(tmp, 'unit-1.md');
-    writeFileSync(unitPath, '# Unit 1: Test\n**Status:** pending\n**Attempts:** 0');
-    writeUnitStatus(unitPath, { status: 'pending', attempts: 1, appendResult: 'Attempt 1 started.' });
-    writeUnitStatus(unitPath, { status: 'done', attempts: 1, appendResult: 'Attempt 1 passed.' });
-    const content = readFileSync(unitPath, 'utf-8');
-    expect(content).toContain('**Status:** done');
-    expect(content).toContain('**Attempts:** 1');
-    expect(content).toContain('Attempt 1 passed.');
-    // Should not contain the old attempt text as the main content
-    expect(content).not.toContain('Attempt 1 started.');
-  });
-});
 
 // ─── extractBackpressureCommands ──────────────────────────────────────────
 
@@ -672,25 +404,20 @@ describe('resolveUnitPath', () => {
   });
 });
 
-// ─── runSingleUnit integration tests ────────────────────────────────────
+// ─── runSingleAttempt integration tests ───────────────────────────────
 
 /** Create a minimal valid unit plan file. */
 function makeUnitPlan(id: number, opts: {
-  status?: string; dependsOn?: string; attempts?: number; maxAttempts?: number;
   backpressureCommands?: string[];
 } = {}): string {
-  const status = opts.status ?? 'pending';
-  const deps = opts.dependsOn ?? 'none';
-  const attempts = opts.attempts ?? 0;
-  const maxAttempts = opts.maxAttempts ?? 3;
   const bpCmds = opts.backpressureCommands ?? ['bun test'];
   return [
     `# Unit ${id}: Test Unit ${id}`,
     '',
-    `**Status:** ${status}`,
-    `**Attempts:** ${attempts}`,
-    `**Max Attempts:** ${maxAttempts}`,
-    `**Depends On:** ${deps}`,
+    '**Status:** pending',
+    '**Attempts:** 0',
+    '**Max Attempts:** 3',
+    '**Depends On:** none',
     '',
     '### Entropy', 'Low', '',
     '### Acceptance Criteria', '- AC-1: Test', '',
@@ -705,264 +432,228 @@ function makeUnitPlan(id: number, opts: {
   ].join('\n');
 }
 
-/** Set up a project directory with plan file, state, and unit files. */
+/** Set up a project directory with plan file and unit files (no state needed for BLR). */
 function setupProject(unitPlans: string[]): { projectDir: string; planPath: string; slug: string } {
   const projectDir = makeTmpDir();
   const slug = 'test-build';
   const planDir = path.join(projectDir, '.vcp', 'plan');
-  const stateDir = path.join(planDir, '.state');
   const unitsDir = path.join(planDir, 'ralph', slug);
-  mkdirSync(stateDir, { recursive: true });
   mkdirSync(unitsDir, { recursive: true });
 
-  // Write plan file
   const planPath = path.join(planDir, `ralph-${slug}.md`);
-  const unitTable = unitPlans.map((_, i) => `| ${i + 1} | Test Unit ${i + 1} | AC-1 | — | Low |`).join('\n');
-  writeFileSync(planPath, [
-    '# Test Feature',
-    '**Status:** build',
-    '## Discovery', 'Found things.',
-    '## Requirements', '### AC-1: Test', '### UAT-1: Test',
-    '## Units of Work',
-    '| Unit | Title | ACs | Depends On | Entropy |',
-    '|------|-------|-----|------------|---------|',
-    unitTable,
-  ].join('\n'));
+  writeFileSync(planPath, '# Test Feature\n**Status:** build\n');
 
-  // Write unit files
   for (let i = 0; i < unitPlans.length; i++) {
     writeFileSync(path.join(unitsDir, `unit-${i + 1}.md`), unitPlans[i]);
   }
 
-  // Write state file
-  const state = {
-    slug,
-    status: 'build',
-    outerIteration: 0,
-    reviewIteration: 0,
-    units: [],
-    lastAction: 'next',
-    lastTimestamp: new Date().toISOString(),
-    taskIds: {},
-  };
-  writeFileSync(path.join(stateDir, `ralph-${slug}.json`), JSON.stringify(state, null, 2));
-
   return { projectDir, planPath, slug };
 }
 
-describe('runSingleUnit', () => {
-  /** Skip review — avoids hitting real config/subprocess in unit tests */
-  const skipReview = async () => ({ skipped: true, passed: true, feedback: '' } as UnitReviewResult);
-
-  test('unit passes on first attempt', async () => {
+describe('runSingleAttempt', () => {
+  test('dispatch complete + backpressure passes → mechanical_pass', async () => {
     const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
 
-    const result = await runSingleUnit(
+    const result = await runSingleAttempt(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Implemented.' }),
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Implemented.' } as UnitBuildDispatchResult),
         backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        reviewFn: skipReview,
       },
     );
 
-    expect(result.event).toBe('unit_done');
-    expect(result.outcome).toBe('done');
-    expect(result.attempt).toBe(1);
+    expect(result.event).toBe('attempt_complete');
+    expect(result.outcome).toBe('mechanical_pass');
     expect(result.unitId).toBe(1);
+    expect(result.mechanicalContext).toBeNull();
+    expect(result.synthesis).toBe('Implemented.');
   });
 
-  test('unit retries then passes', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
+  test('dispatch complete + backpressure fails → mechanical_fail with context', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
 
-    let callCount = 0;
-    const result = await runSingleUnit(
+    const result = await runSingleAttempt(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => {
-          callCount++;
-          return { event: 'complete', stage: 'ralph-build', synthesis: 'Implemented.' };
-        },
-        backpressureFn: () => {
-          // Fail first 2, pass on 3rd
-          return [{ command: 'bun test', exitCode: callCount < 3 ? 1 : 0, stdout: '', stderr: '', passed: callCount >= 3 }];
-        },
-        reviewFn: skipReview,
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' } as UnitBuildDispatchResult),
+        backpressureFn: () => [{ command: 'bun test', exitCode: 1, stdout: 'FAIL', stderr: 'error TS2345', passed: false }],
       },
     );
 
-    expect(result.event).toBe('unit_done');
-    expect(result.attempt).toBe(3);
-    expect(callCount).toBe(3);
+    expect(result.event).toBe('attempt_complete');
+    expect(result.outcome).toBe('mechanical_fail');
+    expect(result.mechanicalContext).not.toBeNull();
+    expect(result.mechanicalContext!.source).toBe('backpressure');
+    expect(result.mechanicalContext!.command).toBe('bun test');
+    expect(result.mechanicalContext!.exitCode).toBe(1);
+    expect(result.backpressureResults).toHaveLength(1);
   });
 
-  test('unit exhausts all attempts', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 2 })]);
+  test('dispatch error → dispatch_error with context', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+    const dispatchCtx = makeMechanicalContext({ source: 'dispatch', command: 'stage-runner' });
 
-    let callCount = 0;
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => {
-          callCount++;
-          return { event: 'complete', stage: 'ralph-build', synthesis: 'Implemented.' };
-        },
-        backpressureFn: () => [{ command: 'bun test', exitCode: 1, stdout: '', stderr: 'fail', passed: false }],
-      },
-    );
-
-    expect(result.event).toBe('unit_failed');
-    expect(result.attempt).toBe(2);
-    expect(callCount).toBe(2);
-  });
-
-  test('already exhausted — dispatch not called', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { attempts: 2, maxAttempts: 2 })]);
-
-    let dispatchCalled = false;
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => { dispatchCalled = true; return { event: 'complete', stage: 'ralph-build' }; },
-        backpressureFn: () => [],
-      },
-    );
-
-    expect(result.event).toBe('unit_failed');
-    expect(dispatchCalled).toBe(false);
-  });
-
-  test('already done — returns unit_error', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { status: 'done', attempts: 1 })]);
-
-    let dispatchCalled = false;
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => { dispatchCalled = true; return { event: 'complete', stage: 'ralph-build' }; },
-        backpressureFn: () => [],
-      },
-    );
-
-    expect(result.event).toBe('unit_error');
-    expect(result.error).toContain('already done');
-    expect(dispatchCalled).toBe(false);
-  });
-
-  test('already failed — returns unit_error', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { status: 'failed', attempts: 3 })]);
-
-    let dispatchCalled = false;
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => { dispatchCalled = true; return { event: 'complete', stage: 'ralph-build' }; },
-        backpressureFn: () => [],
-      },
-    );
-
-    expect(result.event).toBe('unit_error');
-    expect(result.error).toContain('already failed');
-    expect(dispatchCalled).toBe(false);
-  });
-
-  test('dispatch error with retries left — continues to next attempt', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 2 })]);
-
-    let callCount = 0;
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => {
-          callCount++;
-          if (callCount === 1) {
-            return { event: 'error', stage: 'ralph-build', phase: 'dispatch_failed', error: 'stage-runner crashed' };
-          }
-          return { event: 'complete', stage: 'ralph-build', synthesis: 'OK' };
-        },
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        reviewFn: skipReview,
-      },
-    );
-
-    expect(result.event).toBe('unit_done');
-    expect(result.attempt).toBe(2);
-    expect(callCount).toBe(2);
-  });
-
-  test('dispatch error exhausted', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 1 })]);
-
-    const result = await runSingleUnit(
+    const result = await runSingleAttempt(
       { planPath, cwd: projectDir, unitId: 1 },
       {
         dispatchFn: async () => ({
-          event: 'error',
-          stage: 'ralph-build',
-          phase: 'dispatch_failed',
-          error: 'stage-runner crashed',
-        }),
+          event: 'error', stage: 'ralph-build', phase: 'dispatch_failed',
+          error: 'stage-runner crashed', mechanicalContext: dispatchCtx,
+        } as UnitBuildDispatchResult),
         backpressureFn: () => [],
       },
     );
 
-    expect(result.event).toBe('unit_failed');
-    expect(result.attempt).toBe(1);
+    expect(result.event).toBe('attempt_complete');
+    expect(result.outcome).toBe('dispatch_error');
+    expect(result.mechanicalContext).toEqual(dispatchCtx);
+    expect(result.backpressureResults).toHaveLength(0);
   });
 
-  test('zero backpressure commands — hard failure', async () => {
-    const { projectDir, planPath } = setupProject([
-      makeUnitPlan(1, { backpressureCommands: [], maxAttempts: 1 }),
-    ]);
-
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
-        backpressureFn: () => [],
-      },
-    );
-
-    expect(result.event).toBe('unit_failed');
-    expect(result.outcome).toBe('failed');
-  });
-
-  test('unit file not found — returns unit_error', async () => {
+  test('dispatch error without mechanicalContext → dispatch_error, null context', async () => {
     const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
 
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 99 },
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' }),
+        dispatchFn: async () => ({
+          event: 'error', stage: 'ralph-build', error: 'crashed',
+        } as UnitBuildDispatchResult),
         backpressureFn: () => [],
       },
     );
 
-    expect(result.event).toBe('unit_error');
-    expect(result.error).toContain('not found');
+    expect(result.outcome).toBe('dispatch_error');
+    expect(result.mechanicalContext).toBeNull();
   });
 
-  test('config cap overrides unit maxAttempts', async () => {
-    // Unit says maxAttempts: 10, but config caps at 3 (default)
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 10 })]);
+  test('zero backpressure commands → mechanical_pass (vacuous)', async () => {
+    const { projectDir, planPath } = setupProject([
+      makeUnitPlan(1, { backpressureCommands: [] }),
+    ]);
 
-    let callCount = 0;
-    const result = await runSingleUnit(
+    const result = await runSingleAttempt(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => {
-          callCount++;
-          return { event: 'complete', stage: 'ralph-build', synthesis: 'Done.' };
-        },
-        backpressureFn: () => [{ command: 'bun test', exitCode: 1, stdout: '', stderr: 'fail', passed: false }],
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' } as UnitBuildDispatchResult),
+        backpressureFn: () => [],
       },
     );
 
-    // Config max_build_attempts caps the unit's maxAttempts (10) — effective max is config value
-    expect(result.event).toBe('unit_failed');
-    expect(callCount).toBeLessThan(10);
-    expect(result.attempt).toBe(callCount);
-    expect(result.maxAttempts).toBeLessThan(10);
+    expect(result.event).toBe('attempt_complete');
+    expect(result.outcome).toBe('mechanical_pass');
+    expect(result.backpressureResults).toHaveLength(0);
+  });
+
+  test('lease echoed back in result', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1, lease: 'tok-abc-123' },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'OK' } as UnitBuildDispatchResult),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+      },
+    );
+
+    expect(result.lease).toBe('tok-abc-123');
+  });
+
+  test('lease is null when not provided', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+      },
+    );
+
+    expect(result.lease).toBeNull();
+  });
+
+  test('unit file not found → throws', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    await expect(runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 99 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
+        backpressureFn: () => [],
+      },
+    )).rejects.toThrow();
+  });
+
+  test('promptText passed through to dispatch', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+    let receivedPrompt: string | null = null;
+
+    await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1, promptText: 'SM-composed prompt text' },
+      {
+        dispatchFn: async (_plan, _cwd, _unit, _debug, prompt) => {
+          receivedPrompt = prompt;
+          return { event: 'complete', stage: 'ralph-build', synthesis: 'OK' } as UnitBuildDispatchResult;
+        },
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+      },
+    );
+
+    expect(receivedPrompt).toBe('SM-composed prompt text');
+  });
+
+  test('multiple backpressure: first fail builds context', async () => {
+    const { projectDir, planPath } = setupProject([
+      makeUnitPlan(1, { backpressureCommands: ['bun build', 'bun test', 'bun lint'] }),
+    ]);
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' } as UnitBuildDispatchResult),
+        backpressureFn: () => [
+          { command: 'bun build', exitCode: 0, stdout: '', stderr: '', passed: true },
+          { command: 'bun test', exitCode: 1, stdout: 'FAIL test1', stderr: 'err1', passed: false },
+          { command: 'bun lint', exitCode: 2, stdout: 'lint issues', stderr: 'err2', passed: false },
+        ],
+      },
+    );
+
+    expect(result.outcome).toBe('mechanical_fail');
+    expect(result.mechanicalContext!.command).toBe('bun test');
+    expect(result.mechanicalContext!.exitCode).toBe(1);
+    expect(result.backpressureResults).toHaveLength(3);
+  });
+
+  test('backpressure skipped when dispatch errors', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+    let bpCalled = false;
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'error', stage: 'ralph-build', error: 'fail' } as UnitBuildDispatchResult),
+        backpressureFn: () => { bpCalled = true; return []; },
+      },
+    );
+
+    expect(result.outcome).toBe('dispatch_error');
+    expect(bpCalled).toBe(false);
+  });
+
+  test('synthesis is null when dispatch has none', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+      },
+    );
+
+    expect(result.synthesis).toBeNull();
   });
 });
 
@@ -1062,139 +753,6 @@ describe('readFilesTouched', () => {
   });
 });
 
-// ─── runSingleUnit with review ────────────────────────────────────────
-
-describe('runSingleUnit with review', () => {
-  /** Helper: review returns skipped (disabled) */
-  const skippedReview: () => Promise<UnitReviewResult> = async () => ({ skipped: true, passed: true, feedback: '' });
-  /** Helper: review passes */
-  const passingReview: () => Promise<UnitReviewResult> = async () => ({ skipped: false, passed: true, feedback: '' });
-  /** Helper: review fails */
-  const failingReview = (feedback: string): (() => Promise<UnitReviewResult>) =>
-    async () => ({ skipped: false, passed: false, feedback });
-
-  test('review disabled (skipped) — unit_done same as before', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        reviewFn: skippedReview,
-      },
-    );
-
-    expect(result.event).toBe('unit_done');
-    expect(result.outcome).toBe('done');
-  });
-
-  test('review passes — unit_done', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        reviewFn: passingReview,
-      },
-    );
-
-    expect(result.event).toBe('unit_done');
-  });
-
-  test('review fails then passes on retry', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
-
-    let reviewCallCount = 0;
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        reviewFn: async () => {
-          reviewCallCount++;
-          if (reviewCallCount === 1) return { skipped: false, passed: false, feedback: 'AC-1 not met' };
-          return { skipped: false, passed: true, feedback: '' };
-        },
-      },
-    );
-
-    expect(result.event).toBe('unit_done');
-    expect(result.attempt).toBe(2);
-    expect(reviewCallCount).toBe(2);
-  });
-
-  test('review fails and budget exhausted — unit_failed', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 1 })]);
-
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        reviewFn: failingReview('AC-2 violated: returns wrong type'),
-      },
-    );
-
-    expect(result.event).toBe('unit_failed');
-    expect(result.attempt).toBe(1);
-    expect(result.summary).toContain('failed review');
-  });
-
-  test('review feedback written to unit file on failure', async () => {
-    const { projectDir, planPath, slug } = setupProject([makeUnitPlan(1, { maxAttempts: 2 })]);
-
-    let reviewCallCount = 0;
-    await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        reviewFn: async () => {
-          reviewCallCount++;
-          if (reviewCallCount === 1) return { skipped: false, passed: false, feedback: 'Missing error handling' };
-          return { skipped: false, passed: true, feedback: '' };
-        },
-      },
-    );
-
-    // After success, review feedback should be cleared
-    const unitPath = path.join(projectDir, '.vcp', 'plan', 'ralph', slug, 'unit-1.md');
-    const content = readFileSync(unitPath, 'utf-8');
-    // Body between ## Review Feedback and ## Latest Build Attempt should be blank
-    const fbIdx = content.indexOf('## Review Feedback');
-    const lbaIdx = content.indexOf('## Latest Build Attempt');
-    expect(fbIdx).toBeGreaterThan(-1);
-    expect(lbaIdx).toBeGreaterThan(fbIdx);
-    const body = content.slice(fbIdx + '## Review Feedback'.length, lbaIdx).trim();
-    expect(body).toBe('');
-    // Feedback from prior failed attempt should not survive
-    expect(content).not.toContain('Missing error handling');
-  });
-
-  test('review dispatch error (fail-closed) — unit_failed at exhaustion', async () => {
-    const { projectDir, planPath, slug } = setupProject([makeUnitPlan(1, { maxAttempts: 1 })]);
-
-    const result = await runSingleUnit(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' }),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        reviewFn: async () => { throw new Error('subprocess crashed'); },
-      },
-    );
-
-    // Fail-closed: catastrophic reviewer exception blocks the unit
-    expect(result.event).toBe('unit_failed');
-    const unitPath = path.join(projectDir, '.vcp', 'plan', 'ralph', slug, 'unit-1.md');
-    const content = readFileSync(unitPath, 'utf-8');
-    expect(content).toContain('Review function threw');
-    expect(content).toContain('subprocess crashed');
-  });
-});
-
 // ─── buildMechanicalContext ────────────────────────────────────────────────
 
 describe('buildMechanicalContext', () => {
@@ -1232,58 +790,4 @@ describe('buildMechanicalContext', () => {
   });
 });
 
-// ─── buildLatestAttemptState ────────────────────────────────────────────────
-
-describe('buildLatestAttemptState', () => {
-  function dispatchComplete(): UnitBuildDispatchResult {
-    return { event: 'complete', stage: 'ralph-build', synthesis: '', mechanicalContext: null };
-  }
-  function dispatchError(ctx: MechanicalContext | null = null): UnitBuildDispatchResult {
-    return { event: 'error', stage: 'ralph-build', error: 'dispatch failed', mechanicalContext: ctx };
-  }
-
-  test('prefers dispatch.mechanicalContext when present', () => {
-    const dispatchCtx: MechanicalContext = {
-      source: 'dispatch',
-      command: 'stage-runner',
-      exitCode: 2,
-      stdoutHead: 'out1',
-      stdoutTail: '',
-      stderrHead: 'err1',
-      stderrTail: '',
-    };
-    const bp: BackpressureResult[] = [
-      { command: 'bun test', exitCode: 1, stdout: 'test fail', stderr: '', passed: false },
-    ];
-    const state = buildLatestAttemptState(dispatchError(dispatchCtx), bp, 'retry', 2);
-    expect(state.mechanicalContext).toEqual(dispatchCtx);
-    expect(state.attempt).toBe(2);
-    expect(state.dispatchEvent).toBe('error');
-    expect(state.dispatchError).toBe('dispatch failed');
-    expect(state.outcome).toBe('retry');
-    expect(state.backpressure).toEqual([{ name: 'bun test', exitCode: 1 }]);
-  });
-
-  test('falls back to first failing backpressure command when dispatch is clean', () => {
-    const bp: BackpressureResult[] = [
-      { command: 'bun build', exitCode: 0, stdout: '', stderr: '', passed: true },
-      { command: 'bun test', exitCode: 1, stdout: 'assertion failed', stderr: 'err', passed: false },
-      { command: 'lint', exitCode: 2, stdout: 'style', stderr: '', passed: false },
-    ];
-    const state = buildLatestAttemptState(dispatchComplete(), bp, 'retry', 1);
-    expect(state.mechanicalContext).not.toBeNull();
-    expect(state.mechanicalContext!.source).toBe('backpressure');
-    expect(state.mechanicalContext!.command).toBe('bun test');
-    expect(state.mechanicalContext!.exitCode).toBe(1);
-  });
-
-  test('mechanicalContext null on done outcome with no failing commands', () => {
-    const bp: BackpressureResult[] = [
-      { command: 'bun test', exitCode: 0, stdout: '', stderr: '', passed: true },
-    ];
-    const state = buildLatestAttemptState(dispatchComplete(), bp, 'done', 3);
-    expect(state.mechanicalContext).toBeNull();
-    expect(state.outcome).toBe('done');
-  });
-});
 

@@ -85,26 +85,29 @@ On first run:
 
    - **`invoke_skill`** — Route by `stageType`:
 
-     **Build stage** (`stageType: "ralph-build"`): Drive unit-by-unit. The runner owns the full retry loop per unit.
-     The state machine's `invoke_skill` action includes `unitId` and `unitPath`. Process the `update_tasks` action normally (marks unit `in_progress`), then dispatch via Bash with `run_in_background: true`:
-     ```bash
-     bun "${CLAUDE_PLUGIN_ROOT}/scripts/build-loop-runner.ts" \
-       --plan "{plan}" --cwd "${CLAUDE_PROJECT_DIR}" --unit {unitId} 2>&1
-     ```
-     **IMPORTANT:** The Bash tool has a hard max timeout of 600,000ms (10 min). Units with large implementations or multiple retry attempts can take much longer. Always use `run_in_background: true` to prevent the Bash tool from killing the process prematurely.
+     **Build stage** (`stageType: "ralph-build"`): CC drives per-unit builds through the state machine. Each attempt is a discrete CC → SM → BLR → SM cycle.
 
-     After launching:
-     1. Save the returned `task_id` from the Bash tool.
-     2. Poll with `TaskOutput(task_id, block: true, timeout: 600000)`.
-     3. If TaskOutput returns but the task is still running (not complete), repeat `TaskOutput` with `timeout: 600000` until done.
-
-     The script outputs JSON when the unit is done or failed (all retries are internal):
-     ```json
-     {"event": "unit_done", "unitId": 3, "outcome": "done", "attempt": 1, "maxAttempts": 3, "summary": "..."}
-     ```
-     After the script completes:
-     1. **Evaluate `event`**: `unit_done` → TaskUpdate unit task to `completed`. `unit_failed` → TaskUpdate unit task to `failed`. `unit_error` → TaskUpdate unit task to `failed`, report error to user.
-     2. **Re-query the state machine** — it returns the next build action (another unit) or transitions to review.
+     **Per-attempt flow:**
+     1. Query SM: `--action compose_build_dispatch --unit {unitId}` — returns JSON with `prompt`, `lease`, `attempt`, `unitPath`.
+     2. Dispatch BLR as single-attempt executor with the composed prompt piped via stdin:
+        ```bash
+        echo '{prompt}' | bun "${CLAUDE_PLUGIN_ROOT}/scripts/build-loop-runner.ts" \
+          --plan "{plan}" --cwd "${CLAUDE_PROJECT_DIR}" --unit {unitId} --lease {lease} 2>&1
+        ```
+        **IMPORTANT:** Use `run_in_background: true` — the Bash tool hard-caps at 600,000ms.
+     3. Poll with `TaskOutput(task_id, block: true, timeout: 600000)`. Repeat until complete.
+     4. BLR returns single-attempt outcome JSON:
+        ```json
+        {"event": "attempt_complete", "unitId": 3, "outcome": "mechanical_pass", "mechanicalContext": null, "lease": "..."}
+        ```
+     5. Record result: `--action record_attempt_result --unit {unitId} --stdin` (pipe the outcome JSON).
+        SM returns next action: `dispatch_unit_review`, `retry_unit`, `escalate_stuck`, or `unit_failed`.
+     6. Route on `nextAction`:
+        - `dispatch_unit_review` → invoke stage-runner with `unit-review` stage type, parse verdict with `parseReviewVerdict`, then `--action record_review_result --unit {unitId} --stdin` (pipe `{passed, feedback, lease}`).
+        - `retry_unit` → loop back to step 1.
+        - `escalate_stuck` → report to user: identical failures detected, unit needs manual intervention.
+        - `unit_failed` → TaskUpdate unit task to `failed`.
+     7. After all units complete or fail, re-query SM `--action next` for the next stage transition.
 
      **All other stages**: Use the Skill tool to call the named skill (e.g., `/dev-buddy-discover`). If `unitId` and `unitPath` are present, pass this context to the skill.
 

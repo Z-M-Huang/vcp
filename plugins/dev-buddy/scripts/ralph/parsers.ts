@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { PlanStatus, PlanFileData, UnitPlanData, UnitListEntry } from './types.ts';
+import { readUnitState } from './unit-state.ts';
 
 // ─── PLAN FILE PARSING ─────────────────────────────────────────────────────
 
@@ -153,14 +154,46 @@ export function detectUnitStateContradiction(content: string): string | null {
 }
 
 /**
+ * Overlay runtime status from `.state/ralph-{slug}/units/unit-N.json` onto
+ * the parsed static-plan data from `unit-N.md`. When unit-N.json is present,
+ * its `status` and `attempts` win — unit-N.md is immutable post-decompose
+ * (§10) so its `**Status:**` / `**Attempts:**` header fields are stale
+ * snapshots after the first BLR invocation. Falls back to the markdown
+ * values when unit-N.json is missing (fresh plans, pre-migration fixtures).
+ */
+export function overlayRuntimeStatus(
+  base: UnitPlanData,
+  projectDir: string,
+  slug: string,
+): UnitPlanData {
+  const runtime = readUnitState(projectDir, slug, base.id);
+  if (!runtime) return base;
+  const status = runtime.status === 'done' ? 'done'
+    : runtime.status === 'failed' ? 'failed'
+    : 'pending';
+  return {
+    ...base,
+    status,
+    attempts: runtime.attempts,
+  };
+}
+
+/**
  * Find the next unit eligible for building.
  * Returns the first unit where status='pending' and all dependsOn units are 'done'.
  * Returns null if no unit is eligible (all done, all failed, or unmet dependencies).
+ *
+ * Ancestor-failure check (§6): a candidate unit whose dependency has
+ * status='failed' is skipped — the build can never succeed downstream of a
+ * failed ancestor, so surfacing it would waste attempts.
  */
 export function getNextBuildUnit(units: UnitPlanData[]): UnitPlanData | null {
   const statusById = new Map(units.map(u => [u.id, u.status]));
   for (const unit of units) {
     if (unit.status !== 'pending') continue;
+    // Ancestor-failure check: if any dep is failed, this unit is unreachable.
+    const hasFailedAncestor = unit.dependsOn.some(depId => statusById.get(depId) === 'failed');
+    if (hasFailedAncestor) continue;
     const depsReady = unit.dependsOn.every(depId => statusById.get(depId) === 'done');
     if (depsReady) return unit;
   }

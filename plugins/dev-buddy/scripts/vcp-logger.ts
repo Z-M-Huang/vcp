@@ -6,7 +6,7 @@
  * 3 versions (.log, .log.1, .log.2). Never throws — logging failures are
  * silently ignored to prevent breaking plugin execution.
  */
-import { appendFile, chmod, readFile, mkdir, stat, rename, unlink } from 'fs/promises';
+import { appendFile, chmod, readFile, mkdir, stat, rename, unlink, open } from 'fs/promises';
 import { isAbsolute, join } from 'path';
 import { homedir } from 'os';
 
@@ -15,6 +15,31 @@ export interface LogEntry {
   event: string;
   decision: 'allow' | 'block' | 'warn' | 'info' | 'error';
   details?: string;
+  /**
+   * When true, fsync the log file before returning. Use sparingly — only for
+   * post-mortem payloads that must survive a crash of the same process
+   * (§11: backpressure.fail, review.needs_changes, review.feedback.cleared).
+   * The log remains best-effort under rotation; durable truth lives in
+   * units/unit-N.json.attemptHistory.
+   */
+  fsync?: boolean;
+}
+
+/** Hard per-event cap for log payloads (§11 — "DEBUG level allows volume"). */
+export const LOG_PAYLOAD_MAX_BYTES = 16 * 1024;
+
+/**
+ * Cap a log payload at LOG_PAYLOAD_MAX_BYTES, appending a `...truncated`
+ * marker when over the limit. Operates on UTF-8 byte length so multi-byte
+ * characters are counted correctly.
+ */
+export function capLogPayload(payload: string, maxBytes: number = LOG_PAYLOAD_MAX_BYTES): string {
+  const buf = Buffer.from(payload, 'utf8');
+  if (buf.byteLength <= maxBytes) return payload;
+  const marker = '\n...truncated';
+  const markerBytes = Buffer.byteLength(marker, 'utf8');
+  const keep = Math.max(0, maxBytes - markerBytes);
+  return buf.slice(0, keep).toString('utf8') + marker;
 }
 
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -58,7 +83,19 @@ export async function vcpLog(
     const ts = new Date().toISOString();
     const det = entry.details ? ` — ${entry.details}` : '';
     const line = `${ts} [${entry.event}] ${entry.source}: ${entry.decision}${det}\n`;
-    await appendFile(logFile, line);
+    if (entry.fsync) {
+      // Append + fsync to survive a same-process crash. The log remains
+      // best-effort across rotation + heavy parallel writes (§11 caveat).
+      const fh = await open(logFile, 'a');
+      try {
+        await fh.appendFile(line);
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+    } else {
+      await appendFile(logFile, line);
+    }
     // Set restrictive permissions on log file (contains API keys in masked form)
     // chmod is a no-op on Windows — that's acceptable
     try {

@@ -1,19 +1,76 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { StateMachineState } from './types.ts';
+import type { PlanState, PlanStatus, StateMachineState } from './types.ts';
+import { planJsonPath, planRoot, readPlanState, writePlanState } from './unit-state.ts';
+
+// ─── STATE PROJECTION (v2 plan.json → legacy StateMachineState) ─────────────
+//
+// Post-migration the runner keeps plan-level state in the v2 per-unit tree at
+// `.state/ralph-{slug}/plan.json`. The legacy monolith at
+// `.state/ralph-{slug}.json` is gone. The public contract of this module is
+// unchanged — callers still see `StateMachineState` — but reads and writes
+// are routed through the v2 plan.json via the `unit-state.ts` accessors.
+//
+// Vestigial fields that the legacy shape carried (`units: []`) are
+// synthesized on read and dropped on write.
+
+function projectPlanToStateMachine(plan: PlanState): StateMachineState {
+  return {
+    slug: plan.slug,
+    status: plan.status,
+    outerIteration: plan.outerIteration,
+    reviewIteration: plan.reviewIteration,
+    units: [], // vestigial — v2 stores per-unit state in units/unit-N.json
+    lastAction: plan.lastAction,
+    lastTimestamp: plan.lastTimestamp,
+    taskIds: plan.taskIds ?? {},
+    blockedBy: plan.blockedBy ?? {},
+  };
+}
+
+/**
+ * New-plan seed. Used only when no v2 plan.json exists and no legacy monolith
+ * exists either — i.e. the very first `--action next` on a never-started slug.
+ * The migrator covers the legacy-monolith case on its own.
+ */
+function initialPlanState(slug: string, status: PlanStatus, lastAction: string): PlanState {
+  const now = new Date().toISOString();
+  return {
+    slug,
+    schemaVersion: 2,
+    decomposeRunId: `seed-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`,
+    status,
+    outerIteration: 0,
+    reviewIteration: 0,
+    taskIds: {},
+    blockedBy: {},
+    unitIds: [],
+    unitFileHashes: {},
+    startedAt: now,
+    lastAction,
+    lastTimestamp: now,
+  };
+}
 
 // ─── STATE FILE I/O ─────────────────────────────────────────────────────────
 
 /**
- * Load persisted state from `.vcp/plan/.state/ralph-{slug}.json`.
- * Returns null if the file does not exist. Throws SyntaxError on malformed JSON.
+ * Load persisted state from `.vcp/plan/.state/ralph-{slug}/plan.json`.
+ * Returns null if no plan state exists yet. Throws SyntaxError on malformed JSON.
  *
- * Backward-compat: older state files lack `blockedBy`; default to `{}` on load.
+ * Fallback path: if plan.json is missing but the legacy monolith
+ * `.state/ralph-{slug}.json` still exists (pre-migration), read it directly so
+ * pre-migration test fixtures keep working. Post-migration the legacy file is
+ * gone and we only see plan.json.
  */
 export function loadState(projectDir: string, slug: string): StateMachineState | null {
-  const filePath = path.join(projectDir, '.vcp', 'plan', '.state', `ralph-${slug}.json`);
+  const plan = readPlanState(projectDir, slug);
+  if (plan) return projectPlanToStateMachine(plan);
+
+  const legacyPath = path.join(projectDir, '.vcp', 'plan', '.state', `ralph-${slug}.json`);
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
+    const raw = fs.readFileSync(legacyPath, 'utf-8');
     const parsed = JSON.parse(raw) as StateMachineState;
     if (!parsed.blockedBy) parsed.blockedBy = {};
     return parsed;
@@ -25,19 +82,69 @@ export function loadState(projectDir: string, slug: string): StateMachineState |
 }
 
 /**
- * Persist state to `.vcp/plan/.state/ralph-{slug}.json` atomically.
- * Uses temp file + rename so partial writes never corrupt state.
+ * Persist state. Writes to `.state/ralph-{slug}/plan.json` via the invariant-
+ * guarded v2 accessor. Creates the file on first write. The caller-supplied
+ * `StateMachineState` is projected onto the existing `PlanState` — v2-only
+ * fields (decomposeRunId, unitIds, unitFileHashes, completedAt, …) are
+ * preserved when they already exist.
  */
 export function saveState(projectDir: string, slug: string, state: StateMachineState): void {
-  const filePath = path.join(projectDir, '.vcp', 'plan', '.state', `ralph-${slug}.json`);
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  const base = ensurePlanStateForMutation(projectDir, slug, state.lastAction);
+  const now = new Date().toISOString();
+  const merged: PlanState = {
+    ...base,
+    status: state.status,
+    outerIteration: state.outerIteration,
+    reviewIteration: state.reviewIteration,
+    taskIds: state.taskIds ?? {},
+    blockedBy: state.blockedBy ?? {},
+    lastAction: state.lastAction,
+    lastTimestamp: state.lastTimestamp || now,
+  };
+  writePlanState(projectDir, slug, merged);
+}
+
+// ─── INTERNAL: SEED OR UPDATE PLAN STATE ────────────────────────────────────
+
+/**
+ * Returns a PlanState for mutation. Resolution order:
+ *   1. v2 plan.json if present
+ *   2. Legacy monolith (projected to PlanState) if present — preserves
+ *      taskIds, blockedBy, status, iterations across the first mutation that
+ *      lands before the migrator runs.
+ *   3. Fresh seed with status='discover'.
+ */
+function ensurePlanStateForMutation(
+  projectDir: string,
+  slug: string,
+  lastAction: string,
+): PlanState {
+  const existing = readPlanState(projectDir, slug);
+  if (existing) return existing;
+
+  const legacy = loadLegacyMonolith(projectDir, slug);
+  if (legacy) {
+    const seeded = initialPlanState(slug, legacy.status, lastAction);
+    return {
+      ...seeded,
+      outerIteration: legacy.outerIteration,
+      reviewIteration: legacy.reviewIteration,
+      taskIds: legacy.taskIds ?? {},
+      blockedBy: legacy.blockedBy ?? {},
+    };
+  }
+  return initialPlanState(slug, 'discover', lastAction);
+}
+
+function loadLegacyMonolith(projectDir: string, slug: string): StateMachineState | null {
+  const legacyPath = path.join(projectDir, '.vcp', 'plan', '.state', `ralph-${slug}.json`);
   try {
-    fs.writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf-8');
-    fs.renameSync(tempPath, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tempPath); } catch { /* ignore cleanup failure */ }
+    const raw = fs.readFileSync(legacyPath, 'utf-8');
+    const parsed = JSON.parse(raw) as StateMachineState;
+    if (!parsed.blockedBy) parsed.blockedBy = {};
+    return parsed;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
   }
 }
@@ -45,8 +152,8 @@ export function saveState(projectDir: string, slug: string, state: StateMachineS
 // ─── TASK ID PERSISTENCE ────────────────────────────────────────────────────
 
 /**
- * Register a task ID in the state file under taskIds[ref].
- * Creates the state file if it doesn't exist.
+ * Register a task ID in plan.json under taskIds[ref]. Creates plan.json if
+ * absent. Preserves all v2-only fields (decomposeRunId, unitIds, etc.).
  */
 export function registerTaskId(
   projectDir: string,
@@ -54,23 +161,14 @@ export function registerTaskId(
   ref: string,
   taskId: string,
 ): void {
-  let state = loadState(projectDir, slug);
-  if (!state) {
-    state = {
-      slug,
-      status: 'discover',
-      outerIteration: 0,
-      reviewIteration: 0,
-      units: [],
-      lastAction: 'register-task',
-      lastTimestamp: new Date().toISOString(),
-      taskIds: {},
-      blockedBy: {},
-    };
-  }
-  state.taskIds = { ...state.taskIds, [ref]: taskId };
-  state.lastTimestamp = new Date().toISOString();
-  saveState(projectDir, slug, state);
+  const plan = ensurePlanStateForMutation(projectDir, slug, 'register-task');
+  const next: PlanState = {
+    ...plan,
+    taskIds: { ...plan.taskIds, [ref]: taskId },
+    lastAction: 'register-task',
+    lastTimestamp: new Date().toISOString(),
+  };
+  writePlanState(projectDir, slug, next);
 }
 
 /**
@@ -85,22 +183,25 @@ export function registerTaskGraph(
   slug: string,
   payload: { taskIds: Record<string, string>; blockedBy: Record<string, string[]> },
 ): void {
-  let state = loadState(projectDir, slug);
-  if (!state) {
-    state = {
-      slug,
-      status: 'discover',
-      outerIteration: 0,
-      reviewIteration: 0,
-      units: [],
-      lastAction: 'register-task-graph',
-      lastTimestamp: new Date().toISOString(),
-      taskIds: {},
-      blockedBy: {},
-    };
-  }
-  state.taskIds = { ...state.taskIds, ...payload.taskIds };
-  state.blockedBy = { ...state.blockedBy, ...payload.blockedBy };
-  state.lastTimestamp = new Date().toISOString();
-  saveState(projectDir, slug, state);
+  const plan = ensurePlanStateForMutation(projectDir, slug, 'register-task-graph');
+  const next: PlanState = {
+    ...plan,
+    taskIds: { ...plan.taskIds, ...payload.taskIds },
+    blockedBy: { ...plan.blockedBy, ...payload.blockedBy },
+    lastAction: 'register-task-graph',
+    lastTimestamp: new Date().toISOString(),
+  };
+  writePlanState(projectDir, slug, next);
+}
+
+// ─── INTROSPECTION ──────────────────────────────────────────────────────────
+
+/** Used by tests to assert the v2 layout was written (plan.json exists). */
+export function planStatePath(projectDir: string, slug: string): string {
+  return planJsonPath(projectDir, slug);
+}
+
+/** Used by tests to assert the v2 layout was written (ralph-{slug}/ exists). */
+export function planStateRoot(projectDir: string, slug: string): string {
+  return planRoot(projectDir, slug);
 }

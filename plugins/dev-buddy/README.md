@@ -60,6 +60,11 @@ flowchart TD
     DC_UC -->|Approve| Q1
     DC_UC -->|Reject / Context| DC
 
+    Q1 -->|"invoke_skill: plan-lint"| PL
+    PL["PLAN-LINT — sandbox test validation<br/>🔧 CC → Bash: plan-lint.ts"]
+    PL -->|pass| Q1
+    PL -->|"reject (feature exists<br/>or test won't compile)"| DC
+
     Q1 -->|"invoke_skill: ralph-build<br/>(per unit)"| BUILD_ENTRY
 
     subgraph BUILD_MECHANICAL["build-loop-runner.ts --unit N — retry loop per unit"]
@@ -67,9 +72,9 @@ flowchart TD
         B_DISPATCH["subprocess: stage-runner.ts<br/>⟶ configured executor"]
         B_BP{"spawnSync: backpressure<br/>test, typecheck, lint"}
         B_REVIEW{"unit-review<br/>configured?"}
-        B_WRITE_PASS["Write Status: done"]
-        B_RETRY["Write Status: pending<br/>(retry)"]
-        B_FAILED["Write Status: failed"]
+        B_WRITE_PASS["unit-state.ts: mark done"]
+        B_RETRY["unit-state.ts: record retry"]
+        B_FAILED["unit-state.ts: mark failed"]
 
         BUILD_ENTRY --> B_DISPATCH
         B_DISPATCH --> B_BP
@@ -206,30 +211,45 @@ sequenceDiagram
     end
 ```
 
-**Mechanical failure context:** on a non-zero exit from dispatch or backpressure, the runner captures stdout+stderr head+tail excerpts (≤1000 chars each, verbatim) and carries them in-memory into the next attempt within the same `runSingleUnit` invocation. The retry's dispatch prompt includes a `--- PRIOR MECHANICAL FAILURE ---` block so the executor can restore the green state before pursuing semantic changes. Excerpts are not persisted across process restarts — a mid-unit crash loses the mechanical context (review feedback survives via the unit-file tail).
+**Mechanical failure context:** on a non-zero exit from dispatch or backpressure, the runner captures stdout+stderr head+tail excerpts (≤1000 chars each, verbatim) and carries them in-memory into the next attempt within the same `runSingleUnit` invocation. The retry's dispatch prompt includes a `--- PRIOR MECHANICAL FAILURE ---` block so the executor can restore the green state before pursuing semantic changes. Mechanical context and review feedback are persisted in `.vcp/plan/.state/ralph-{slug}/units/unit-N.json` and survive process restarts.
 
 **Script enforcement boundaries:**
 - **ralph-state-machine.ts** (passive) — Computes next action when queried. CC calls it via Bash before every stage transition. Reads plan + unit files, returns JSON with the next action. Never drives execution.
 - **stage-runner.ts** (dispatch) — Multi-executor dispatcher. CC calls it via Bash for all stages. Loads config, resolves system prompts, spawns executors (subscription/API/CLI), synthesizes outputs.
-- **build-loop-runner.ts** (single-unit executor) — Owns single-unit execution with internal retries. CC calls it per unit via Bash with `--unit N`; it retries internally: dispatches executor (subprocess to stage-runner), runs backpressure (spawnSync), optional semantic review (subprocess to stage-runner with unit-review), writes unit status (fs). Returns JSON when the unit is done or failed.
+- **build-loop-runner.ts** (single-unit executor) — Executes one unit's build attempts via stage-runner, runs backpressure, dispatches optional per-unit semantic review. Retry loop is internal; state is persisted to per-unit JSON files via `unit-state.ts` (not to unit-N.md). Returns JSON when the unit is done or failed.
 - **CC Main Process** (LLM) — Drives the pipeline: queries SM, invokes scripts, validates synthesis, presents user checkpoints, updates tasks. Drives unit-to-unit build progression via state machine queries and task management.
+
+**Per-unit state layout:** runtime state lives in `.vcp/plan/.state/ralph-{slug}/` — one small JSON per unit, not a single monolith. Layout:
+```
+.state/ralph-{slug}/
+├── plan.json              # plan-level: DAG, status, iterations, completedAt
+├── units/
+│   ├── unit-1.json        # per-unit: status, attempts, reviewFeedback, mechanicalContext
+│   └── unit-N.json
+└── progress/
+    └── stage-progress-*.json
+```
+Unit plan files (`unit-N.md`) are immutable after decompose — all dynamic state (review feedback, attempt history, mechanical context) lives in `units/unit-N.json`. Writes go through `ralph/unit-state.ts` with invariant guards.
+
+**Retention:** completed plans (those with `plan.json.completedAt` set by the state machine) are auto-archived to `.vcp/plan/.archive/` after 7 days. Configurable via `retention_days` in `~/.vcp/dev-buddy.json` (0 disables). Sweep runs once per 24h (configurable via `sweep_interval_hours`), gated by a `.sweep.marker` file. Archives are recoverable — `mv` the directory back to restore.
 
 **Task-board projection:** the CC orchestrator creates one task per stage with `blockedBy` chaining, then (post-decompose) registers a unit task per decomposition unit with `blockedBy` mirroring the unit DAG. Bulk registration happens via `ralph-state-machine.ts --action register-task-graph` (single atomic state write). `--action verify-task-graph` warns on drift at every subsequent build-stage `next` query without blocking execution — unit-file `dependsOn` remains authoritative for build ordering; the task board is a human-visibility projection of that DAG.
 
 **Two nested loops + review gate:**
-- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), optional per-unit semantic review, retry up to `max_build_attempts`. Code review can send units back for rework. Per-unit retry loop is fully mechanical via `build-loop-runner.ts --unit N`. Unit-to-unit progression is driven by the CC orchestrator via state machine queries and task management.
+- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), optional per-unit semantic review, retry up to `max_build_attempts`. Code review can send units back for rework. Per-unit state is persisted in `.vcp/plan/.state/ralph-{slug}/units/unit-N.json`; unit-N.md is immutable after decompose. Unit-to-unit progression is driven by the CC orchestrator via state machine queries and task management.
 - **Outer (UAT):** integration Ralph loop — real Playwright UAT against running app. Failures identify affected units and loop back through BUILD and CODE REVIEW (up to `max_outer_iterations`).
 - **User checkpoints** after Discovery, Requirements, and Decompose — approve, reject, or provide additional context. Each stage runs internal adversarial validation before presenting to the user.
 
 ---
 
-## The 6 Stages
+## The 7 Stages
 
 | Stage | What Happens | Multi-AI |
 |-------|-------------|----------|
 | **Discovery** | Explore codebase + running app. Map code paths, patterns, impact points. Screenshot current state. | Yes |
 | **Requirements + UAT** | Define ACs (Given/When/Then + misinterpretation). Design Playwright UAT scenarios. Risk registry. | Yes |
 | **Decomposition** | Break into ~50 LOC units. Each unit gets its own plan file with precise instructions. | Yes |
+| **Plan-lint** | Run each unit's backpressure commands against HEAD. Reject if tests pass (feature exists) or won't compile. No build attempts consumed. | No |
 | **Build** | Per-unit implementation with fresh context. Runner runs backpressure + optional semantic review. | Configurable |
 | **Code Review** | Flow tracing (point + path + intent). Stub/orphan detection. Cross-unit integration. | Yes |
 | **UAT** | Execute Playwright tests + all mechanical backpressure against running app. | Single |

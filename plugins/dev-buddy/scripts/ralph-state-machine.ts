@@ -1,7 +1,7 @@
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
+import { vcpLog, isDebugEnabled, capLogPayload } from './vcp-logger.ts';
 import { loadDevBuddyConfig } from './pipeline-config.ts';
 
 // Re-export submodules so existing callers (tests, skills, CLI) keep working
@@ -14,10 +14,97 @@ import type {
   PlanStatus, PlanFileData, UnitPlanData, StateMachineState, StateMachineOutput,
   Action, SkillAction, CheckpointAction, WritePlanAction, TaskAction,
   DoneAction, ErrorAction, BlockedAction, BackpressureResult, UnitListEntry,
+  MechanicalContext, AttemptRecord, LatestAttemptState,
+  ComposeBuildDispatchOutput, RecordAttemptInput, RecordAttemptOutput,
+  RecordReviewInput, RecordReviewOutput,
 } from './ralph/types.ts';
 import { STATUS_TO_SKILL, STATUS_TO_STAGE_TYPE } from './ralph/types.ts';
-import { parsePlanFile, parseUnitPlan, getNextBuildUnit, listUnits, detectUnitStateContradiction } from './ralph/parsers.ts';
+import { parsePlanFile, parseUnitPlan, getNextBuildUnit, listUnits, detectUnitStateContradiction, overlayRuntimeStatus } from './ralph/parsers.ts';
 import { loadState, saveState, registerTaskId, registerTaskGraph } from './ralph/state.ts';
+import { ensureStateMigrated, scanOrphanStagingDirs } from './ralph/migrate.ts';
+import { composeBuildDispatchPrompt } from './ralph/prompt-assembly.ts';
+import { splitUnitFile } from './ralph/unit-file.ts';
+import {
+  readUnitState, ensurePlanStateSeeded, ensureUnitStateSeeded,
+  reserveAttempt, commitAttemptResult, setReviewFeedback,
+  markUnitDone, markUnitFailed, hashUnitFile, getUnitBuildContext,
+  readPlanState, markPlanComplete, sweepCompletedPlans,
+  isReservationStale, abandonReservation,
+} from './ralph/unit-state.ts';
+
+// ─── RETENTION SWEEP GATE (§9) ────────────────────────────────────────────
+
+const SWEEP_MARKER_BASENAME = '.sweep.marker';
+const DEFAULT_SWEEP_INTERVAL_HOURS = 24;
+
+/**
+ * Returns true when a sweep is due. The gate is a per-repo marker at
+ * .vcp/plan/.state/.sweep.marker; no marker or an old one → due.
+ */
+function isSweepDue(projectDir: string, intervalHours: number): boolean {
+  try {
+    const markerPath = path.join(projectDir, '.vcp', 'plan', '.state', SWEEP_MARKER_BASENAME);
+    const raw = fs.readFileSync(markerPath, 'utf-8');
+    const parsed = JSON.parse(raw) as { lastSweptAt?: string };
+    if (!parsed.lastSweptAt) return true;
+    const last = Date.parse(parsed.lastSweptAt);
+    if (!Number.isFinite(last)) return true;
+    return Date.now() - last > intervalHours * 3_600_000;
+  } catch {
+    return true;
+  }
+}
+
+function touchSweepMarker(projectDir: string): void {
+  try {
+    const stateRoot = path.join(projectDir, '.vcp', 'plan', '.state');
+    fs.mkdirSync(stateRoot, { recursive: true });
+    const markerPath = path.join(stateRoot, SWEEP_MARKER_BASENAME);
+    fs.writeFileSync(markerPath, JSON.stringify({ lastSweptAt: new Date().toISOString() }));
+  } catch {
+    // best-effort — next invocation will retry the sweep
+  }
+}
+
+/**
+ * Run a retention sweep when due, reading retention_days and
+ * sweep_interval_hours from dev-buddy config. Silent no-op on errors.
+ */
+function maybeRunRetentionSweep(projectDir: string): void {
+  let retentionDays = 7;
+  let intervalHours = DEFAULT_SWEEP_INTERVAL_HOURS;
+  try {
+    const cfg = loadDevBuddyConfig() as unknown as { retention_days?: number; sweep_interval_hours?: number };
+    if (typeof cfg.retention_days === 'number') retentionDays = cfg.retention_days;
+    if (typeof cfg.sweep_interval_hours === 'number') intervalHours = cfg.sweep_interval_hours;
+  } catch {
+    // default values above
+  }
+  if (retentionDays === 0) return;
+  if (!isSweepDue(projectDir, intervalHours)) return;
+  try {
+    sweepCompletedPlans(projectDir, { retentionDays });
+    touchSweepMarker(projectDir);
+  } catch {
+    // sweep failures are non-fatal — a later run will retry
+  }
+}
+
+/**
+ * True when the unit-review stage has at least one executor configured.
+ * When false, recordAttemptResultAction short-circuits mechanical_pass to
+ * unit_done without dispatching a review stage. Defaults to false on config
+ * read failure so we never dispatch a stage that would crash on zero executors.
+ */
+function isUnitReviewEnabled(): boolean {
+  try {
+    const config = loadDevBuddyConfig();
+    const stage = config.stages['unit-review'];
+    return !!stage && Array.isArray(stage.executors) && stage.executors.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 // ─── EXECUTOR CONFIG RESOLUTION ───────────────────────────────────────────
 
@@ -116,25 +203,30 @@ export function checkPreconditions(
     }
 
     case 'review': {
+      // §10: unit-N.md is immutable post-decompose — runtime status lives in
+      // .state/ralph-{slug}/units/unit-N.json. Read unit-state JSON, not markdown.
       const unitsDir = path.join(projectDir, '.vcp', 'plan', 'ralph', slug);
+      let unitFiles: string[];
       try {
-        const unitFiles = fs.readdirSync(unitsDir).filter((f: string) => /^unit-\d+\.md$/.test(f));
-        const notDone: string[] = [];
-        for (const f of unitFiles) {
-          const unitContent = fs.readFileSync(path.join(unitsDir, f), 'utf-8');
-          const unitStatusMatch = unitContent.match(/\*\*Status:\*\*\s*(\S+)/);
-          const unitStatus = unitStatusMatch ? unitStatusMatch[1].toLowerCase() : 'unknown';
-          if (unitStatus !== 'done') {
-            notDone.push(`${f}: ${unitStatus}`);
-          }
-        }
-        if (notDone.length > 0) {
-          return `Cannot start code review — ${notDone.length} unit(s) not done:\n` +
-            notDone.map(u => `  - ${u}`).join('\n') + '\n' +
-            'All units must have **Status:** done.';
-        }
+        unitFiles = fs.readdirSync(unitsDir).filter((f: string) => /^unit-\d+\.md$/.test(f));
       } catch {
-        // fail-open: can't read units directory
+        return null; // fail-open: units directory missing
+      }
+      const notDone: string[] = [];
+      for (const f of unitFiles) {
+        const idMatch = f.match(/^unit-(\d+)\.md$/);
+        if (!idMatch) continue;
+        const unitId = parseInt(idMatch[1], 10);
+        const unitState = readUnitState(projectDir, slug, unitId);
+        const unitStatus = unitState?.status ?? 'unknown';
+        if (unitStatus !== 'done') {
+          notDone.push(`${f}: ${unitStatus}`);
+        }
+      }
+      if (notDone.length > 0) {
+        return `Cannot start code review — ${notDone.length} unit(s) not done:\n` +
+          notDone.map(u => `  - ${u}`).join('\n') + '\n' +
+          'All units must reach status=done in units/unit-N.json.';
       }
       return null;
     }
@@ -182,7 +274,7 @@ export function computeNextAction(
   const REVIEW_STATUS_MAP: Record<string, { next: PlanStatus; heading: string }> = {
     'discover-review': { next: 'requirements', heading: '## Discovery' },
     'requirements-review': { next: 'decompose', heading: '## Requirements' },
-    'decompose-review': { next: 'build', heading: '## Units of Work' },
+    'decompose-review': { next: 'plan_lint', heading: '## Units of Work' },
   };
   const reviewConfig = REVIEW_STATUS_MAP[status];
   if (reviewConfig) {
@@ -329,7 +421,12 @@ export function computeNextAction(
     const parsedUnits = unitFiles.map(f => {
       const id = parseInt(f.match(/unit-(\d+)\.md/)![1], 10);
       const content = fs.readFileSync(path.join(unitsDir, f), 'utf-8');
-      return { content, parsed: parseUnitPlan(content, id) };
+      const staticParsed = parseUnitPlan(content, id);
+      // Overlay runtime status from units/unit-N.json. Unit-N.md is immutable
+      // post-decompose (§10); its Status/Attempts header is stale after the
+      // first BLR invocation. unit-N.json is the live truth.
+      const parsed = overlayRuntimeStatus(staticParsed, projectDir, slug);
+      return { content, parsed };
     }).sort((a, b) => a.parsed.id - b.parsed.id);
 
     const units: UnitPlanData[] = parsedUnits.map(u => u.parsed);
@@ -457,6 +554,45 @@ export function runBackpressure(commands: string[], cwd: string): BackpressureRe
   return results;
 }
 
+// ─── STUCK DETECTION (§4) ───────────────────────────────────────────────────
+
+/**
+ * Normalize stderr for stuck-detection comparison. Strips volatile byte-level
+ * variance (timestamps, PIDs, memory addresses, line numbers, temp paths) so
+ * that two attempts with the same root-cause failure produce the same hash
+ * even when noisy details differ.
+ *
+ * Conservative: false negatives cost one wasted retry; false positives would
+ * kill a unit that could recover. Add new patterns only from observed misses.
+ */
+export function normalizeStderr(s: string): string {
+  return s
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?/g, '<TS>')
+    .replace(/\bpid[=: ]+\d+\b/gi, '<PID>')
+    .replace(/\b0x[0-9a-f]{8,16}\b/gi, '<ADDR>')
+    .replace(/\/tmp\/[^\s]+/g, '<TMP>')
+    .replace(/\bline\s*\d+\b/gi, '<LN>')
+    .replace(/:\d+:\d+/g, ':<L>:<C>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Detect whether the current mechanical failure is identical to the previous
+ * one after normalization. Returns true when the same root failure repeated
+ * (same command, same exit code, same normalized stderr).
+ */
+export function detectStuck(
+  prev: MechanicalContext | undefined,
+  curr: MechanicalContext,
+): boolean {
+  if (!prev) return false;
+  if (prev.command !== curr.command || prev.exitCode !== curr.exitCode) return false;
+  const prevStderr = (prev.stderrHead ?? '') + (prev.stderrTail ?? '');
+  const currStderr = (curr.stderrHead ?? '') + (curr.stderrTail ?? '');
+  return normalizeStderr(prevStderr) === normalizeStderr(currStderr);
+}
+
 // ─── TASK GRAPH VERIFICATION ────────────────────────────────────────────────
 
 /** Structured diff between expected and actual task-graph edges. */
@@ -501,6 +637,261 @@ export function verifyTaskGraph(
 
   const ok = missingRefs.length === 0 && extraRefs.length === 0 && mismatchedEdges.length === 0;
   return { ok, diff: { missingRefs, extraRefs, mismatchedEdges } };
+}
+
+// ─── SM BUILD ACTIONS (§2, §3 — single-attempt orchestration) ───────────────
+// Three actions that move the retry loop out of BLR and into CC-driven SM calls:
+//   compose_build_dispatch  — compose prompt, reserve attempt, return {prompt, lease}
+//   record_attempt_result   — commit outcome, decide retry/stuck/fail/review
+//   record_review_result    — commit review, mark done/retry/fail
+
+/**
+ * Compose the dispatch prompt for a build attempt and reserve the attempt slot.
+ * Reads unit-N.md (static plan) + units/unit-N.json (feedback, mechanical ctx).
+ * Seeds state if missing. Throws if unit is done/failed/exhausted.
+ */
+export function composeBuildDispatch(
+  projectDir: string,
+  slug: string,
+  unitId: number,
+): ComposeBuildDispatchOutput {
+  const unitsDir = path.join(projectDir, '.vcp', 'plan', 'ralph', slug);
+  const unitPath = path.join(unitsDir, `unit-${unitId}.md`);
+
+  const ctx = getUnitBuildContext(projectDir, slug, unitId);
+  if (!ctx) throw new Error(`composeBuildDispatch: unit ${unitId} file not found`);
+
+  if (!ctx.state) {
+    const parsed = parseUnitPlan(ctx.staticPlan, unitId);
+    let maxAttempts = parsed.maxAttempts;
+    try {
+      const cfg = loadDevBuddyConfig();
+      maxAttempts = Math.min(maxAttempts, cfg.max_build_attempts);
+    } catch { /* keep parsed value */ }
+    const plan = ensurePlanStateSeeded(projectDir, slug, 'build', 'sm-compose');
+    ensureUnitStateSeeded(projectDir, slug, unitId, plan.decomposeRunId, maxAttempts, {
+      status: parsed.status as 'pending' | 'done' | 'failed',
+      attempts: parsed.attempts,
+    });
+  }
+
+  let state = readUnitState(projectDir, slug, unitId)!;
+
+  // §1.1 crash recovery: if a previous dispatch reserved an attempt but never
+  // committed (CC crashed mid-dispatch), the reservation is stale. Abandon it
+  // so a fresh attempt can proceed — the budget stays burned (attempts was
+  // already incremented by the prior reserveAttempt).
+  if (state.reservedAttempt && isReservationStale(state)) {
+    abandonReservation(projectDir, slug, unitId, state.reservedAttempt.lease, 'stale_reservation');
+    state = readUnitState(projectDir, slug, unitId)!;
+  }
+
+  if (state.status === 'done' || state.status === 'failed') {
+    throw new Error(`composeBuildDispatch: unit ${unitId} is in terminal status '${state.status}'`);
+  }
+  if (state.attempts >= state.maxAttempts) {
+    throw new Error(
+      `composeBuildDispatch: unit ${unitId} has exhausted budget (${state.attempts}/${state.maxAttempts})`,
+    );
+  }
+
+  let previousAttempt: LatestAttemptState | null = null;
+  if (state.lastMechanicalContext) {
+    previousAttempt = {
+      attempt: state.attempts,
+      dispatchEvent: null,
+      dispatchError: null,
+      backpressure: [],
+      outcome: 'retry',
+      mechanicalContext: state.lastMechanicalContext,
+    };
+  }
+
+  const { staticPlan } = splitUnitFile(ctx.staticPlan);
+  const reviewFeedback = state.reviewFeedback ?? '';
+  const composed = composeBuildDispatchPrompt(staticPlan, reviewFeedback, previousAttempt, unitPath);
+
+  const reservation = reserveAttempt(projectDir, slug, unitId, state.generation);
+
+  return {
+    prompt: composed.prompt,
+    lease: reservation.lease,
+    attempt: reservation.attempt,
+    unitId,
+    unitPath,
+    priority: composed.priority,
+    generation: reservation.newGeneration,
+  };
+}
+
+/**
+ * Record the outcome of a single build attempt. Commits to unit-N.json and
+ * decides the next action for CC:
+ *   mechanical_pass → dispatch_unit_review (reservation stays open)
+ *   mechanical_fail → retry_unit | escalate_stuck | unit_failed
+ *   dispatch_error  → retry_unit | unit_failed
+ */
+export function recordAttemptResultAction(
+  projectDir: string,
+  slug: string,
+  data: RecordAttemptInput,
+): RecordAttemptOutput {
+  const unitState = readUnitState(projectDir, slug, data.unitId);
+  if (!unitState) throw new Error(`recordAttemptResult: no state for unit ${data.unitId}`);
+
+  if (data.outcome === 'mechanical_pass') {
+    // If unit-review is disabled (no executors configured), skip straight to
+    // marking the unit done. Otherwise dispatch the review stage.
+    const unitReviewEnabled = isUnitReviewEnabled();
+    if (!unitReviewEnabled) {
+      const record: AttemptRecord = {
+        attempt: unitState.attempts,
+        timestamp: new Date().toISOString(),
+        outcome: 'done',
+        reviewPassed: true,
+      };
+      commitAttemptResult(projectDir, slug, data.unitId, data.lease, record, {
+        identicalFailure: false,
+        reviewFeedbackAfter: '',
+      });
+      markUnitDone(projectDir, slug, data.unitId, {
+        passed: true,
+        review: { ok: true },
+      });
+      return { nextAction: 'unit_done', unitId: data.unitId };
+    }
+    return {
+      nextAction: 'dispatch_unit_review',
+      unitId: data.unitId,
+      lease: data.lease,
+    };
+  }
+
+  const currMech = data.mechanicalContext ?? undefined;
+  const prevMech = unitState.lastMechanicalContext;
+  const identicalFailure = !!(currMech && prevMech && detectStuck(prevMech, currMech));
+  const newIdenticalCount = identicalFailure ? unitState.identicalFailureCount + 1 : 0;
+  const isStuck = newIdenticalCount >= 2;
+  const isExhausted = unitState.attempts >= unitState.maxAttempts;
+
+  const recordOutcome: AttemptRecord['outcome'] = isExhausted ? 'failed'
+    : isStuck ? 'stuck'
+    : 'retry';
+
+  const record: AttemptRecord = {
+    attempt: unitState.attempts,
+    timestamp: new Date().toISOString(),
+    outcome: recordOutcome,
+    mechanicalContext: currMech,
+  };
+
+  commitAttemptResult(projectDir, slug, data.unitId, data.lease, record, {
+    identicalFailure,
+    mechanicalContextAfter: currMech,
+  });
+
+  if (isExhausted) {
+    markUnitFailed(projectDir, slug, data.unitId, {
+      attempts: unitState.attempts,
+      maxAttempts: unitState.maxAttempts,
+      reason: `attempt ${unitState.attempts}/${unitState.maxAttempts} exhausted`,
+    });
+    return { nextAction: 'unit_failed', unitId: data.unitId };
+  }
+
+  if (isStuck) {
+    return {
+      nextAction: 'escalate_stuck',
+      unitId: data.unitId,
+      identicalFailureCount: newIdenticalCount,
+    };
+  }
+
+  return { nextAction: 'retry_unit', unitId: data.unitId };
+}
+
+/**
+ * Record the outcome of a per-unit semantic review. Handles both pass (mark
+ * done) and fail (persist feedback, check budget) paths. §11 log points for
+ * review.feedback.cleared and review.needs_changes live here — the SM is the
+ * single writer, so the log captures happen at the write boundary.
+ */
+export async function recordReviewResultAction(
+  projectDir: string,
+  slug: string,
+  data: RecordReviewInput,
+  debugEnabled: boolean,
+): Promise<RecordReviewOutput> {
+  const SRC = 'ralph-state-machine';
+  const unitState = readUnitState(projectDir, slug, data.unitId);
+  if (!unitState) throw new Error(`recordReviewResult: no state for unit ${data.unitId}`);
+
+  if (data.passed) {
+    if (unitState.reviewFeedback) {
+      await vcpLog(projectDir, {
+        source: SRC,
+        event: 'review.feedback.cleared',
+        decision: 'info',
+        fsync: true,
+        details: `slug=${slug} unit=${data.unitId} attempt=${unitState.attempts} ` +
+          `reason=unit_passed_review\ncleared.tail: ${capLogPayload(unitState.reviewFeedback, 4 * 1024)}`,
+      }, debugEnabled);
+    }
+
+    const record: AttemptRecord = {
+      attempt: unitState.attempts,
+      timestamp: new Date().toISOString(),
+      outcome: 'done',
+      reviewPassed: true,
+    };
+    commitAttemptResult(projectDir, slug, data.unitId, data.lease, record, {
+      identicalFailure: false,
+      reviewFeedbackAfter: '',
+    });
+
+    markUnitDone(projectDir, slug, data.unitId, {
+      passed: true,
+      review: { ok: true },
+    });
+
+    return { nextAction: 'unit_done', unitId: data.unitId };
+  }
+
+  // Review failed
+  await vcpLog(projectDir, {
+    source: SRC,
+    event: 'review.needs_changes',
+    decision: 'info',
+    fsync: true,
+    details: `slug=${slug} unit=${data.unitId} attempt=${unitState.attempts} ` +
+      `feedbackBytes=${data.feedback.length}\nfeedback: ${capLogPayload(data.feedback)}`,
+  }, debugEnabled);
+
+  const unitFileHash = hashUnitFile(projectDir, slug, data.unitId) ?? '';
+  setReviewFeedback(projectDir, slug, data.unitId, data.feedback, unitFileHash);
+
+  const isExhausted = unitState.attempts >= unitState.maxAttempts;
+  const record: AttemptRecord = {
+    attempt: unitState.attempts,
+    timestamp: new Date().toISOString(),
+    outcome: isExhausted ? 'failed' : 'retry',
+    reviewPassed: false,
+  };
+  commitAttemptResult(projectDir, slug, data.unitId, data.lease, record, {
+    identicalFailure: false,
+    reviewFeedbackAfter: data.feedback,
+  });
+
+  if (isExhausted) {
+    markUnitFailed(projectDir, slug, data.unitId, {
+      attempts: unitState.attempts,
+      maxAttempts: unitState.maxAttempts,
+      reason: `review failed, attempt ${unitState.attempts}/${unitState.maxAttempts} exhausted`,
+    });
+    return { nextAction: 'unit_failed', unitId: data.unitId };
+  }
+
+  return { nextAction: 'retry_unit', unitId: data.unitId };
 }
 
 // ─── CLI ENTRY POINT ─────────────────────────────────────────────────────────
@@ -598,6 +989,15 @@ export function main(planPath: string, action: string): StateMachineOutput {
   // Derive projectDir: plan file lives at {projectDir}/.vcp/plan/ralph-{slug}.md
   const projectDir = path.resolve(path.dirname(planPath), '..', '..');
 
+  // Crash-safe migration + orphan cleanup (§Migration).
+  // Idempotent: no-op when the v2 layout already exists. Throws on corrupt
+  // legacy input, which propagates upward so the caller sees the cause.
+  scanOrphanStagingDirs(projectDir);
+  ensureStateMigrated(projectDir, slug);
+
+  // §9 retention: archive old completed plans when the marker says we're due.
+  maybeRunRetentionSweep(projectDir);
+
   // Parse plan file
   const planData = parsePlanFile(content);
 
@@ -643,6 +1043,20 @@ export function main(planPath: string, action: string): StateMachineOutput {
     lastTimestamp: new Date().toISOString(),
   };
   saveState(projectDir, slug, updatedState);
+
+  // §9 retention anchor: stamp plan.json.completedAt on terminal transitions so
+  // the next sweep has something to act on. Skip if plan.json is missing (older
+  // plan that never migrated) or if it is already stamped.
+  if (updatedState.status === 'done' || updatedState.status === 'failed_irrecoverable') {
+    try {
+      const plan = readPlanState(projectDir, slug);
+      if (plan && !plan.completedAt) {
+        markPlanComplete(projectDir, slug, updatedState.status);
+      }
+    } catch {
+      // best-effort — retention is not load-bearing for correctness
+    }
+  }
 
   return { actions: output.actions, state: updatedState };
 }
@@ -767,6 +1181,88 @@ if (import.meta.main) {
             ...diff.mismatchedEdges.slice(0, 2),
           ]).slice(0, 500)}`);
         console.log(JSON.stringify({ ok, diff }, null, 2));
+        process.exit(0);
+      }
+
+      // ─── compose_build_dispatch: compose prompt + reserve attempt ────
+      if (action === 'compose_build_dispatch') {
+        if (!parsed.data) {
+          console.error('compose_build_dispatch requires --data <json|@path>');
+          await log('compose_build_dispatch', 'error', 'missing --data');
+          process.exit(1);
+        }
+        const slugMatch = path.basename(planPath).match(/^ralph-(.+)\.md$/);
+        if (!slugMatch) {
+          console.error(`Cannot extract slug from: ${path.basename(planPath)}`);
+          process.exit(1);
+        }
+        const data = resolveDataArg(parsed.data) as { unitId: number };
+        if (typeof data.unitId !== 'number') {
+          console.error('compose_build_dispatch: --data.unitId must be a number');
+          process.exit(1);
+        }
+        try {
+          const result = composeBuildDispatch(projectDir, slugMatch[1], data.unitId);
+          await log('compose_build_dispatch', 'info',
+            `unit=${data.unitId} attempt=${result.attempt} priority=${result.priority}`);
+          console.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          console.error(`compose_build_dispatch failed: ${(err as Error).message}`);
+          await log('compose_build_dispatch', 'error', (err as Error).message);
+          process.exit(1);
+        }
+        process.exit(0);
+      }
+
+      // ─── record_attempt_result: commit outcome, decide next action ──
+      if (action === 'record_attempt_result') {
+        if (!parsed.data) {
+          console.error('record_attempt_result requires --data <json|@path>');
+          await log('record_attempt_result', 'error', 'missing --data');
+          process.exit(1);
+        }
+        const slugMatch = path.basename(planPath).match(/^ralph-(.+)\.md$/);
+        if (!slugMatch) {
+          console.error(`Cannot extract slug from: ${path.basename(planPath)}`);
+          process.exit(1);
+        }
+        const data = resolveDataArg(parsed.data) as RecordAttemptInput;
+        try {
+          const result = recordAttemptResultAction(projectDir, slugMatch[1], data);
+          await log('record_attempt_result', 'info',
+            `unit=${data.unitId} outcome=${data.outcome} nextAction=${result.nextAction}`);
+          console.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          console.error(`record_attempt_result failed: ${(err as Error).message}`);
+          await log('record_attempt_result', 'error', (err as Error).message);
+          process.exit(1);
+        }
+        process.exit(0);
+      }
+
+      // ─── record_review_result: commit review, mark done/retry/fail ──
+      if (action === 'record_review_result') {
+        if (!parsed.data) {
+          console.error('record_review_result requires --data <json|@path>');
+          await log('record_review_result', 'error', 'missing --data');
+          process.exit(1);
+        }
+        const slugMatch = path.basename(planPath).match(/^ralph-(.+)\.md$/);
+        if (!slugMatch) {
+          console.error(`Cannot extract slug from: ${path.basename(planPath)}`);
+          process.exit(1);
+        }
+        const data = resolveDataArg(parsed.data) as RecordReviewInput;
+        try {
+          const result = await recordReviewResultAction(projectDir, slugMatch[1], data, debug);
+          await log('record_review_result', 'info',
+            `unit=${data.unitId} passed=${data.passed} nextAction=${result.nextAction}`);
+          console.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          console.error(`record_review_result failed: ${(err as Error).message}`);
+          await log('record_review_result', 'error', (err as Error).message);
+          process.exit(1);
+        }
         process.exit(0);
       }
 

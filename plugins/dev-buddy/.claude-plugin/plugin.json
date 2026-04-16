@@ -1,6 +1,6 @@
 {
   "name": "dev-buddy",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Ralph loop architecture — multi-AI feature development with discovery, requirements, decomposition, build, code review, and UAT stages",
   "author": {
     "name": "Z-M-Huang"

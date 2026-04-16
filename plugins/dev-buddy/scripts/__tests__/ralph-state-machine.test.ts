@@ -132,16 +132,19 @@ describe('saveState', () => {
   const tmpDirs: string[] = [];
   afterAll(() => { tmpDirs.forEach(d => rmSync(d, { recursive: true, force: true })); });
 
-  test('creates state directory and writes file atomically', () => {
-    const { saveState, loadState } = require('../ralph-state-machine.ts');
+  test('creates state directory and writes plan.json atomically (v2 layout)', () => {
+    const { saveState } = require('../ralph-state-machine.ts');
     const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sm-test-'));
     tmpDirs.push(tmpDir);
     const state = { slug: 'feat', status: 'build' as const, outerIteration: 1, reviewIteration: 0, units: [{ id: 1, status: 'pending' as const, attempts: 0 }], lastAction: 'next', lastTimestamp: '2026-04-10T00:00:00Z' };
     saveState(tmpDir, 'feat', state);
-    const filePath = path.join(tmpDir, '.vcp', 'plan', '.state', 'ralph-feat.json');
-    const content = JSON.parse(readFileSync(filePath, 'utf-8'));
+    const planPath = path.join(tmpDir, '.vcp', 'plan', '.state', 'ralph-feat', 'plan.json');
+    const content = JSON.parse(readFileSync(planPath, 'utf-8'));
     expect(content.slug).toBe('feat');
-    expect(content.units).toHaveLength(1);
+    expect(content.schemaVersion).toBe(2);
+    expect(content.status).toBe('build');
+    // v2 shape: per-unit state lives in units/unit-N.json, not plan.json
+    expect(content.units).toBeUndefined();
   });
 
   test('overwrites existing state file', () => {
@@ -348,12 +351,17 @@ describe('checkPreconditions', () => {
 
   test('allows review when all units are done', () => {
     const { checkPreconditions } = require('../ralph-state-machine.ts');
+    const { ensurePlanStateSeeded, ensureUnitStateSeeded } = require('../ralph/unit-state.ts');
     const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sm-pre-'));
     tmpDirs.push(tmpDir);
     const unitsDir = path.join(tmpDir, '.vcp', 'plan', 'ralph', 'test');
     mkdirSync(unitsDir, { recursive: true });
     writeFileSync(path.join(unitsDir, 'unit-1.md'), '**Status:** done');
     writeFileSync(path.join(unitsDir, 'unit-2.md'), '**Status:** done');
+    // §10 post-refactor: status lives in units/unit-N.json, not markdown.
+    const plan = ensurePlanStateSeeded(tmpDir, 'test', 'review', 'test-seed');
+    ensureUnitStateSeeded(tmpDir, 'test', 1, plan.decomposeRunId, 1, { status: 'done', attempts: 1 });
+    ensureUnitStateSeeded(tmpDir, 'test', 2, plan.decomposeRunId, 1, { status: 'done', attempts: 1 });
     const planData = { status: 'review', hasDiscovery: true, hasRequirements: true, hasACs: true, hasUATs: true, hasVerdict: false, verdictValue: null, unitCount: 2, definedUATIds: [], passedUATIds: [] };
     expect(checkPreconditions('review', planData, tmpDir, 'test')).toBeNull();
   });
@@ -431,10 +439,15 @@ describe('computeNextAction — forward transitions', () => {
 
   test('review status returns invoke_skill for dev-buddy-code-review', () => {
     const { computeNextAction } = require('../ralph-state-machine.ts');
+    const { ensurePlanStateSeeded, ensureUnitStateSeeded } = require('../ralph/unit-state.ts');
     const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sm-fwd-'));
     const unitsDir = path.join(tmpDir, '.vcp', 'plan', 'ralph', 'test');
     mkdirSync(unitsDir, { recursive: true });
     writeFileSync(path.join(unitsDir, 'unit-1.md'), '**Status:** done');
+    // §10 post-refactor: seed units/unit-N.json with status=done so the review
+    // precondition check can see the unit as complete.
+    const plan = ensurePlanStateSeeded(tmpDir, 'test', 'review', 'test-seed');
+    ensureUnitStateSeeded(tmpDir, 'test', 1, plan.decomposeRunId, 1, { status: 'done', attempts: 1 });
     const state = { slug: 'test', status: 'review', outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'init', lastTimestamp: '2026-04-10T00:00:00Z' };
     const planData = { status: 'review', hasDiscovery: true, hasRequirements: true, hasACs: true, hasUATs: true, hasVerdict: false, verdictValue: null, unitCount: 1, definedUATIds: [], passedUATIds: [] };
     const config = { max_iterations: 10, max_build_attempts: 3, max_outer_iterations: 3 };
@@ -739,12 +752,13 @@ describe('resolveExecutorConfig', () => {
     expect(result).toBeNull();
   });
 
-  test('maps all 6 active statuses correctly', () => {
+  test('maps all 7 active statuses correctly', () => {
     const { resolveExecutorConfig } = require('../ralph-state-machine.ts');
     const expected = {
       discover: { stageType: 'discovery', skill: 'dev-buddy-discover' },
       requirements: { stageType: 'ralph-requirements', skill: 'dev-buddy-requirements' },
       decompose: { stageType: 'decomposition', skill: 'dev-buddy-decompose' },
+      plan_lint: { stageType: 'plan-lint', skill: 'dev-buddy-plan-lint' },
       build: { stageType: 'ralph-build', skill: 'dev-buddy-build' },
       review: { stageType: 'ralph-code-review', skill: 'dev-buddy-code-review' },
       uat: { stageType: 'ralph-uat', skill: 'dev-buddy-uat' },
@@ -919,7 +933,7 @@ describe('computeNextAction — review gates', () => {
     expect(cp).toBeDefined();
     expect(cp.stage).toBe('decompose');
     expect(cp.sectionHeading).toBe('## Units of Work');
-    expect(cp.approveStatus).toBe('build');
+    expect(cp.approveStatus).toBe('plan_lint');
   });
 
   test('review statuses do NOT hit unknown-status ErrorAction guard', () => {
@@ -1318,7 +1332,7 @@ describe('registerTaskGraph', () => {
     expect(after.blockedBy).toEqual({ 'unit:1': [] });
   });
 
-  test('is a single read-modify-write (state file mtime advances once per call)', () => {
+  test('is a single read-modify-write (plan.json mtime advances once per call)', () => {
     const { registerTaskGraph } = require('../ralph-state-machine.ts');
     const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'rtg-'));
     tmpDirs.push(tmpDir);
@@ -1326,7 +1340,8 @@ describe('registerTaskGraph', () => {
       taskIds: { 'unit:1': 't1', 'unit:2': 't2', 'unit:3': 't3' },
       blockedBy: { 'unit:1': [], 'unit:2': ['unit:1'], 'unit:3': ['unit:1', 'unit:2'] },
     });
-    const stateFile = path.join(tmpDir, '.vcp', 'plan', '.state', 'ralph-feat.json');
+    // v2 layout: plan.json under .state/ralph-{slug}/
+    const stateFile = path.join(tmpDir, '.vcp', 'plan', '.state', 'ralph-feat', 'plan.json');
     expect(existsSync(stateFile)).toBe(true);
     const json = JSON.parse(readFileSync(stateFile, 'utf-8'));
     expect(Object.keys(json.taskIds)).toHaveLength(3);
@@ -1530,5 +1545,136 @@ describe('registerTaskId', () => {
     registerTaskId(tmpDir, 'test-slug', 'unit:3', 'task-new');
     const state = loadState(tmpDir, 'test-slug');
     expect(state.taskIds['unit:3']).toBe('task-new');
+  });
+});
+
+// ─── STUCK DETECTION (§4) ──────────────────────────────────────────────────
+
+describe('normalizeStderr', () => {
+  test('replaces ISO timestamps', () => {
+    const { normalizeStderr } = require('../ralph-state-machine.ts');
+    expect(normalizeStderr('error at 2026-04-16T13:45:00.123Z')).toBe('error at <TS>');
+  });
+
+  test('replaces PID markers', () => {
+    const { normalizeStderr } = require('../ralph-state-machine.ts');
+    expect(normalizeStderr('pid=12345 crashed')).toBe('<PID> crashed');
+    expect(normalizeStderr('PID: 9999 hung')).toBe('<PID> hung');
+  });
+
+  test('replaces hex addresses', () => {
+    const { normalizeStderr } = require('../ralph-state-machine.ts');
+    expect(normalizeStderr('segfault at 0x00007ffdeadbeef')).toBe('segfault at <ADDR>');
+  });
+
+  test('replaces /tmp paths', () => {
+    const { normalizeStderr } = require('../ralph-state-machine.ts');
+    expect(normalizeStderr('open /tmp/bun-1a2b3c/index.ts failed')).toBe('open <TMP> failed');
+  });
+
+  test('replaces line numbers', () => {
+    const { normalizeStderr } = require('../ralph-state-machine.ts');
+    expect(normalizeStderr('error at line 42')).toBe('error at <LN>');
+  });
+
+  test('replaces file:line:col references', () => {
+    const { normalizeStderr } = require('../ralph-state-machine.ts');
+    expect(normalizeStderr('src/foo.ts:123:45')).toBe('src/foo.ts:<L>:<C>');
+  });
+
+  test('collapses whitespace', () => {
+    const { normalizeStderr } = require('../ralph-state-machine.ts');
+    expect(normalizeStderr('a   b\n\nc')).toBe('a b c');
+  });
+
+  test('identity on clean stderr', () => {
+    const { normalizeStderr } = require('../ralph-state-machine.ts');
+    expect(normalizeStderr('error TS2345: null not assignable')).toBe('error TS2345: null not assignable');
+  });
+});
+
+describe('detectStuck', () => {
+  test('returns false when no previous context', () => {
+    const { detectStuck } = require('../ralph-state-machine.ts');
+    const curr = {
+      source: 'backpressure', command: 'bun test', exitCode: 1,
+      stdoutHead: '', stdoutTail: '', stderrHead: '', stderrTail: 'TS2345',
+    };
+    expect(detectStuck(undefined, curr)).toBe(false);
+  });
+
+  test('returns false when commands differ', () => {
+    const { detectStuck } = require('../ralph-state-machine.ts');
+    const prev = {
+      source: 'backpressure', command: 'bun test', exitCode: 1,
+      stdoutHead: '', stdoutTail: '', stderrHead: '', stderrTail: 'TS2345',
+    };
+    const curr = { ...prev, command: 'bun lint' };
+    expect(detectStuck(prev, curr)).toBe(false);
+  });
+
+  test('returns false when exit codes differ', () => {
+    const { detectStuck } = require('../ralph-state-machine.ts');
+    const prev = {
+      source: 'backpressure', command: 'bun test', exitCode: 1,
+      stdoutHead: '', stdoutTail: '', stderrHead: '', stderrTail: 'TS2345',
+    };
+    const curr = { ...prev, exitCode: 2 };
+    expect(detectStuck(prev, curr)).toBe(false);
+  });
+
+  test('returns true for identical stderr after normalization', () => {
+    const { detectStuck } = require('../ralph-state-machine.ts');
+    const prev = {
+      source: 'backpressure', command: 'bun test', exitCode: 1,
+      stdoutHead: '', stdoutTail: '',
+      stderrHead: 'error at 2026-04-16T13:00:00Z',
+      stderrTail: 'src/foo.ts:10:5 TS2345',
+    };
+    const curr = {
+      source: 'backpressure', command: 'bun test', exitCode: 1,
+      stdoutHead: '', stdoutTail: '',
+      stderrHead: 'error at 2026-04-16T14:30:00Z',
+      stderrTail: 'src/foo.ts:10:5 TS2345',
+    };
+    expect(detectStuck(prev, curr)).toBe(true);
+  });
+
+  test('returns false when normalized stderr diverges', () => {
+    const { detectStuck } = require('../ralph-state-machine.ts');
+    const prev = {
+      source: 'backpressure', command: 'bun test', exitCode: 1,
+      stdoutHead: '', stdoutTail: '',
+      stderrHead: '', stderrTail: 'TS2345: null not assignable',
+    };
+    const curr = {
+      source: 'backpressure', command: 'bun test', exitCode: 1,
+      stdoutHead: '', stdoutTail: '',
+      stderrHead: '', stderrTail: 'TS7006: parameter implicitly has any',
+    };
+    expect(detectStuck(prev, curr)).toBe(false);
+  });
+});
+
+describe('getNextBuildUnit ancestor-failure (§6)', () => {
+  test('skips a candidate whose direct dependency failed', () => {
+    const { getNextBuildUnit } = require('../ralph-state-machine.ts');
+    const units = [
+      { id: 15, status: 'failed', attempts: 5, maxAttempts: 5, dependsOn: [], backpressureCommands: [] },
+      { id: 16, status: 'pending', attempts: 0, maxAttempts: 5, dependsOn: [15], backpressureCommands: [] },
+    ];
+    expect(getNextBuildUnit(units)).toBeNull();
+  });
+
+  test('returns the next eligible unit bypassing the blocked one', () => {
+    const { getNextBuildUnit } = require('../ralph-state-machine.ts');
+    const units = [
+      { id: 13, status: 'failed', attempts: 5, maxAttempts: 5, dependsOn: [], backpressureCommands: [] },
+      { id: 14, status: 'done', attempts: 1, maxAttempts: 5, dependsOn: [], backpressureCommands: [] },
+      { id: 15, status: 'pending', attempts: 0, maxAttempts: 5, dependsOn: [13], backpressureCommands: [] },
+      { id: 16, status: 'pending', attempts: 0, maxAttempts: 5, dependsOn: [14], backpressureCommands: [] },
+    ];
+    const result = getNextBuildUnit(units);
+    expect(result!.id).toBe(16);
   });
 });

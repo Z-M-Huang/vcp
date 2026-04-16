@@ -2,23 +2,46 @@
 // Centralized type definitions and constant maps for the Ralph pipeline
 // state machine. Precondition logic originally ported from hooks/ralph-stage-gate.ts (removed in v0.5.0).
 
-/** Ordered plan statuses representing the Ralph pipeline stages. */
-export type PlanStatus = 'discover' | 'discover-review' | 'requirements' | 'requirements-review' | 'decompose' | 'decompose-review' | 'build' | 'review' | 'uat' | 'done';
+/**
+ * Ordered plan statuses representing the Ralph pipeline stages.
+ * Extended with `plan_lint` and `failed_irrecoverable` for the v2 per-unit-file
+ * layout (see PlanState).
+ */
+export type PlanStatus =
+  | 'discover' | 'discover-review'
+  | 'requirements' | 'requirements-review'
+  | 'decompose' | 'decompose-review'
+  | 'plan_lint'
+  | 'build'
+  | 'review'
+  | 'uat'
+  | 'done'
+  | 'failed_irrecoverable';
 
-/** Tracks the state of a single unit within the plan. */
-export interface UnitState {
+/**
+ * LEGACY per-unit state that was embedded in the monolithic
+ * `.state/ralph-{slug}.json`'s `units[]` array. Retained for the migrator and
+ * the legacy code paths still wired into ralph-state-machine.ts. New code goes
+ * through UnitState (v2) below, persisted per-unit at
+ * `.state/ralph-{slug}/units/unit-N.json`.
+ */
+export interface LegacyUnitState {
   id: number;
   status: 'pending' | 'done' | 'failed';
   attempts: number;
 }
 
-/** Full state of the Ralph pipeline state machine. */
+/**
+ * LEGACY full state of the Ralph pipeline state machine. One giant JSON at
+ * `.state/ralph-{slug}.json`. Replaced by PlanState + per-unit UnitState files.
+ * Retained until the migrator lands (Commit 2/3).
+ */
 export interface StateMachineState {
   slug: string;
   status: PlanStatus;
   outerIteration: number;
   reviewIteration: number;
-  units: UnitState[];
+  units: LegacyUnitState[];
   lastAction: string;
   lastTimestamp: string;
   taskIds: Record<string, string>;
@@ -28,6 +51,103 @@ export interface StateMachineState {
    * Execution order is already enforced from unit-file `dependsOn`; this is the task-board projection.
    */
   blockedBy: Record<string, string[]>;
+}
+
+// ─── V2 PER-UNIT-FILE STATE LAYOUT ──────────────────────────────────────────
+// `.state/ralph-{slug}/plan.json`  (plan-level)
+// `.state/ralph-{slug}/units/unit-N.json` (one per unit)
+// `.state/ralph-{slug}/progress/stage-progress-{stageType}-{pid}.json`
+
+/** Hard caps enforced on write by ralph/unit-state.ts (closes §1.3). */
+export const REVIEW_FEEDBACK_MAX_BYTES = 16 * 1024;
+export const STDERR_TAIL_MAX_BYTES = 4 * 1024;
+export const STDOUT_TAIL_MAX_BYTES = 4 * 1024;
+export const ATTEMPT_HISTORY_MAX_ENTRIES = 10;
+/** How long a reservation may remain open before the lease is considered stale and can be abandoned. */
+export const MAX_DISPATCH_MS = 30 * 60 * 1000; // 30 min
+
+/**
+ * Plan-level state at `.state/ralph-{slug}/plan.json`. Small — holds DAG, status,
+ * completion anchor. Rewritten only on plan-level transitions (status change,
+ * decompose re-run, terminal completion). Retention-anchor via `completedAt`.
+ */
+export interface PlanState {
+  slug: string;
+  /** Schema bumped from legacy (implicit v1) — migrator asserts. */
+  schemaVersion: 2;
+  /** ULID — new value on every decompose run. Triggers per-unit reconciliation on mismatch. */
+  decomposeRunId: string;
+  status: PlanStatus;
+  /**
+   * Set by markPlanComplete. Retention safeguard: sweep skips plans where this
+   * is not 'state-machine' even if status + completedAt are set.
+   */
+  completionSource?: 'state-machine' | 'manual';
+  outerIteration: number;
+  reviewIteration: number;
+  taskIds: Record<string, string>;
+  /** DAG edges — read for ready-set computation. */
+  blockedBy: Record<string, string[]>;
+  /** Declared unit IDs for the current plan. Source of truth for the ready-set. */
+  unitIds: number[];
+  /** sha1(unit-N.md) as of last decompose — version anchor for §12. */
+  unitFileHashes: Record<number, string>;
+  startedAt: string;
+  /** Set only on terminal transition. The retention trigger. */
+  completedAt?: string;
+  lastAction: string;
+  lastTimestamp: string;
+}
+
+/**
+ * Per-unit state at `.state/ralph-{slug}/units/unit-N.json`. Rewritten on each
+ * attempt. Atomic tmp+rename + generation CAS — see ralph/unit-state.ts.
+ */
+export interface UnitState {
+  id: number;
+  /** Must match PlanState.decomposeRunId; else stale — record is reset on reconcile. */
+  decomposeRunId: string;
+  /** Hash of unit-N.md at the moment setReviewFeedback captured reviewFeedback. */
+  unitFileHashAtReview?: string;
+  /** Monotonic CAS counter. Incremented on every write; mismatch → writer must retry. */
+  generation: number;
+  status: 'pending' | 'building' | 'reviewing' | 'done' | 'failed';
+  /** Attempts committed; incremented PRE-dispatch via reserveAttempt. */
+  attempts: number;
+  maxAttempts: number;
+  /**
+   * Crash-safe reservation token held by a live dispatcher. Cleared on
+   * commitAttemptResult or abandonReservation. If non-null and stale
+   * (reservedAt older than MAX_DISPATCH_MS), the next `--action next`
+   * abandons it so a new attempt can proceed.
+   */
+  reservedAttempt?: {
+    attempt: number;
+    reservedAt: string;
+    lease: string;
+  };
+  /** Bounded at REVIEW_FEEDBACK_MAX_BYTES. Survives crashes (persisted on disk). */
+  reviewFeedback?: string;
+  /** stderr/stdout tails bounded at STDERR_TAIL_MAX_BYTES / STDOUT_TAIL_MAX_BYTES. */
+  lastMechanicalContext?: MechanicalContext;
+  /** Bounded to the last ATTEMPT_HISTORY_MAX_ENTRIES entries. */
+  attemptHistory: AttemptRecord[];
+  /** For stuck detection: consecutive attempts where normalizeStderr(context) matches the prior attempt. */
+  identicalFailureCount: number;
+}
+
+/**
+ * Frozen snapshot of one build attempt. Appended to UnitState.attemptHistory on
+ * commitAttemptResult. Last N entries kept.
+ */
+export interface AttemptRecord {
+  attempt: number;
+  timestamp: string;
+  outcome: 'done' | 'retry' | 'failed' | 'stuck' | 'abandoned';
+  mechanicalContext?: MechanicalContext;
+  reviewPassed?: boolean;
+  /** normalizeStderr(stderrTail) hash — used for identical-failure comparison in detectStuck. */
+  stderrNormalizedHash?: string;
 }
 
 // ─── ACTION OUTPUT TYPES ───────────────────────────────────────────────────
@@ -169,19 +289,6 @@ export interface UnitBuildDispatchResult {
   mechanicalContext?: MechanicalContext | null;
 }
 
-/** Patch applied to a unit plan file's metadata by the build loop runner. */
-export interface UnitStatusPatch {
-  status: 'pending' | 'done' | 'failed';
-  attempts: number;
-  appendResult: string;
-  /**
-   * Three-way semantics for the runner-owned `## Review Feedback` block:
-   *   `undefined` → preserve whatever feedback is currently in the file
-   *   `''`        → explicitly clear the block (write empty body)
-   *   `'<text>'`  → replace the block body with the given text
-   */
-  reviewFeedback?: string;
-}
 
 /** Result of a single-unit build invocation (single-unit-per-invocation model). */
 export interface SingleUnitResult {
@@ -193,6 +300,63 @@ export interface SingleUnitResult {
   outcome: 'done' | 'failed';
   summary: string;
   error?: string;
+}
+
+/**
+ * Outcome from a single build attempt. Returned by BLR's runSingleAttempt (§2).
+ * BLR writes NOTHING — this JSON is all the SM receives. CC forwards it to the
+ * SM via `record_attempt_result` for persistence and next-action computation.
+ */
+export interface AttemptOutcome {
+  event: 'attempt_complete';
+  unitId: number;
+  unitPath: string;
+  outcome: 'mechanical_pass' | 'mechanical_fail' | 'dispatch_error';
+  mechanicalContext: MechanicalContext | null;
+  backpressureResults: BackpressureResult[];
+  synthesis: string | null;
+  lease: string | null;
+}
+
+/** Output from SM action `compose_build_dispatch`. */
+export interface ComposeBuildDispatchOutput {
+  prompt: string;
+  lease: string;
+  attempt: number;
+  unitId: number;
+  unitPath: string;
+  priority: string;
+  generation: number;
+}
+
+/** Input to SM action `record_attempt_result`. */
+export interface RecordAttemptInput {
+  unitId: number;
+  lease: string;
+  outcome: 'mechanical_pass' | 'mechanical_fail' | 'dispatch_error';
+  mechanicalContext?: MechanicalContext | null;
+}
+
+/** Output from SM action `record_attempt_result`. */
+export interface RecordAttemptOutput {
+  nextAction: 'dispatch_unit_review' | 'retry_unit' | 'escalate_stuck' | 'unit_failed';
+  unitId: number;
+  lease?: string;
+  identicalFailureCount?: number;
+}
+
+/** Input to SM action `record_review_result`. */
+export interface RecordReviewInput {
+  unitId: number;
+  lease: string;
+  passed: boolean;
+  feedback: string;
+}
+
+/** Output from SM action `record_review_result`. */
+export interface RecordReviewOutput {
+  nextAction: 'unit_done' | 'retry_unit' | 'unit_failed';
+  unitId: number;
 }
 
 /** Result of per-unit semantic review (optional step after mechanical backpressure). */
@@ -207,10 +371,9 @@ export interface UnitReviewResult {
 
 // ─── MECHANICAL FAILURE CONTEXT ─────────────────────────────────────────────
 // Captured when a build attempt fails (dispatch subprocess non-zero exit, or a
-// backpressure command fails). Flows in-memory between attempts inside a
-// single `runSingleUnit` invocation so the retry's dispatch prompt shows the
-// previous failure's stdout/stderr excerpts instead of "(none — first attempt)".
-// Not persisted — cross-process restarts lose the context, same as v0.5.4.
+// backpressure command fails). Persisted in units/unit-N.json.lastMechanicalContext
+// so the next attempt's dispatch prompt shows the previous failure context even
+// across process restarts.
 
 /**
  * Compile/test failure details captured from a non-zero exit (dispatch or
@@ -256,21 +419,23 @@ export const STATUS_ORDER: readonly PlanStatus[] = [
   'done',
 ] as const;
 
-/** Map plan status → skill name (6 active statuses; 'done' has no skill). */
+/** Map plan status → skill name (7 active statuses; 'done' has no skill). */
 export const STATUS_TO_SKILL: Record<string, string> = {
   discover: 'dev-buddy-discover',
   requirements: 'dev-buddy-requirements',
   decompose: 'dev-buddy-decompose',
+  plan_lint: 'dev-buddy-plan-lint',
   build: 'dev-buddy-build',
   review: 'dev-buddy-code-review',
   uat: 'dev-buddy-uat',
 };
 
-/** Map plan status → stage-type identifier for one-shot-runner (6 active statuses). */
+/** Map plan status → stage-type identifier for one-shot-runner (7 active statuses). */
 export const STATUS_TO_STAGE_TYPE: Record<string, string> = {
   discover: 'discovery',
   requirements: 'ralph-requirements',
   decompose: 'decomposition',
+  plan_lint: 'plan-lint',
   build: 'ralph-build',
   review: 'ralph-code-review',
   uat: 'ralph-uat',

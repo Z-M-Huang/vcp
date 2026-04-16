@@ -108,8 +108,18 @@ class StageProgress {
   private filePath: string;
   private multiExecutor: boolean;
 
-  constructor(stageType: string, executors: Array<{ index: number; executor: StageExecutor }>, cwd: string) {
-    this.filePath = path.join(cwd, '.vcp', 'plan', '.state', `stage-progress-${stageType}-${process.pid}.json`);
+  constructor(
+    stageType: string,
+    executors: Array<{ index: number; executor: StageExecutor }>,
+    cwd: string,
+    slugHint: string | null = null,
+  ) {
+    // Scoping (§7): ralph stages pass the plan slug so progress files land under
+    // .state/ralph-{slug}/progress/ and get archived with the plan. One-shot and
+    // chatroom callers pass null and keep the legacy flat path.
+    this.filePath = slugHint
+      ? path.join(cwd, '.vcp', 'plan', '.state', `ralph-${slugHint}`, 'progress', `stage-progress-${stageType}-${process.pid}.json`)
+      : path.join(cwd, '.vcp', 'plan', '.state', `stage-progress-${stageType}-${process.pid}.json`);
     this.multiExecutor = executors.length > 1;
     this.state = {
       stage: stageType,
@@ -718,11 +728,14 @@ async function main(): Promise<void> {
   const isSynthesizer = (idx: number) =>
     stageConfig.executors.length > 1 && idx === stageConfig.executors.length - 1;
 
-  // 5b. Initialize progress tracking
+  // 5b. Initialize progress tracking — scope under ralph-{slug}/progress/ for ralph callers (§7)
+  const slugMatch = path.basename(planPath).match(/^ralph-(.+)\.md$/);
+  const slugHint = slugMatch ? slugMatch[1] : null;
   const progress = new StageProgress(
     stageType,
     resolvedExecutors.map(r => ({ index: r.index, executor: r.executor })),
     cwd,
+    slugHint,
   );
   _activeProgress = progress;
 
