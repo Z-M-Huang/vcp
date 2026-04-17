@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Vibe Coding Protocol — Standards and enforcement for AI-generated code quality",
-    "version": "0.5.6"
+    "version": "0.5.7"
   },
   "plugins": [
     {
@@ -19,7 +19,7 @@
     {
       "name": "dev-buddy",
       "description": "Ralph loop architecture — multi-AI feature development with discovery, requirements, decomposition, build, code review, and UAT stages",
-      "version": "0.5.6",
+      "version": "0.5.7",
       "author": { "name": "Z-M-Huang" },
       "source": "./plugins/dev-buddy",
       "category": "development"

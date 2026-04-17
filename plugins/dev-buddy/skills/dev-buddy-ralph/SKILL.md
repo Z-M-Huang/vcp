@@ -81,7 +81,9 @@ On first run:
 
 2. **Process the returned `actions` array in order.** Each action has a `type`:
 
-   - **`update_tasks`** — For each operation, resolve `ref` (e.g., `"stage:discover"`, `"unit:3"`) to a task ID using the state file's `taskIds` map, then call TaskUpdate with the specified status.
+   - **`update_tasks`** — For each operation, resolve `ref` (e.g., `"stage:discover"`, `"unit:3"`) to a task ID using the state file's `taskIds` map, then dispatch by `action`:
+     - `{action: "update"}` → call `TaskUpdate(taskId, status)` with the specified status.
+     - `{action: "set_blocked_by"}` → resolve every ref in the `blockedBy` array to a task ID via the same map, then call `TaskUpdate(taskId, addBlockedBy: [taskIds...])`. If any ref in the operation is unresolvable (no entry in `taskIds`), stop and report the unresolved refs to the user — do not silently skip the op.
 
    - **`invoke_skill`** — Route by `stageType`:
 
@@ -216,52 +218,48 @@ Returns JSON with structured fields per unit:
 
 Use `subject`, `ref`, and `blockedByRefs` directly — do not re-derive them.
 
-### Step 2 — Create all tasks, collect IDs
+### Step 2 — Create all tasks, build the graph payload
 
 For each unit, call TaskCreate:
 - Subject: `unit.subject` (e.g., `"Unit 1: Discovery probes"`)
 - Description: `"Build unit {id}.\nPlan: .vcp/plan/ralph/{SLUG}/unit-{id}.md\nCommand (run_in_background: true): bun \"${CLAUDE_PLUGIN_ROOT}/scripts/build-loop-runner.ts\" --plan \"{plan}\" --cwd \"${CLAUDE_PROJECT_DIR}\" --unit {id} 2>&1"`
 - Metadata: `{type: 'unit', unitId: id, slug: '{SLUG}', plan: '{plan path}'}`
 
-Collect every returned `taskId` into a local map keyed by `ref` (i.e., `refToTaskId["unit:1"] = "<id>"`). Do not register anything yet.
+Build the `{taskIds, blockedBy}` payload as you go. `taskIds` MUST include every unit ref. `blockedBy` MUST include an entry for every unit — use `[]` for no-deps units (do not omit). The dependency edges — including blocking the Development milestone on all units — are emitted back as ops in Step 3; do not call `TaskUpdate(addBlockedBy)` here.
 
-Also TaskUpdate the Development milestone (task 4) with `addBlockedBy: [all unit task IDs]` so Development cannot complete until every unit is done.
+### Step 3 — Register the graph, execute returned actions
 
-### Step 3 — Apply addBlockedBy for every unit with dependencies
-
-For each unit where `blockedByRefs.length > 0`, call TaskUpdate on its task ID with `addBlockedBy` mapping each ref in `blockedByRefs` to the corresponding task ID from the local map built in Step 2. Skip units with empty `blockedByRefs`.
-
-This is the step that makes the dependency edges visible on the task board.
-
-### Step 4 — Bulk-register the task graph (one call)
-
-Build the payload:
-```json
-{
-  "taskIds": { "unit:1": "<id1>", "unit:2": "<id2>", ... },
-  "blockedBy": { "unit:2": ["unit:1"], ... }
-}
-```
-
-`taskIds` includes every unit. `blockedBy` includes every unit with non-empty dependencies (omit empty entries — the verify step treats them the same).
-
-Pass via the `@path` form when the JSON is large (≥ a few KB); otherwise the inline form is fine:
 ```bash
-# Inline form
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
-  --plan "{plan}" --action register-task-graph \
-  --data '{"taskIds":{...},"blockedBy":{...}}'
-
-# File form (avoids OS argv size limits)
+# File form (recommended — avoids OS argv size limits)
 echo '{"taskIds":{...},"blockedBy":{...}}' > /tmp/ralph-graph-{SLUG}.json
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
   --plan "{plan}" --action register-task-graph \
   --data "@/tmp/ralph-graph-{SLUG}.json"
+
+# Inline form (small payloads only)
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
+  --plan "{plan}" --action register-task-graph \
+  --data '{"taskIds":{...},"blockedBy":{...}}'
 ```
 
-This is one atomic read-modify-write — never run a per-unit `register-task` loop after Step 4.
+Response shape:
+```jsonc
+{
+  "registered": { "refCount": N, "edgeCount": E },
+  "actions": [
+    { "type": "update_tasks", "operations": [
+        { "action": "set_blocked_by", "ref": "unit:2", "blockedBy": ["unit:1"] },
+        { "action": "set_blocked_by", "ref": "stage:build", "blockedBy": ["unit:1","unit:2", ...] }
+    ] }
+  ]
+}
+```
 
-### Step 5 — Verify and surface drift
+Execute every returned action via the standard **`update_tasks` handler** (same loop that processes SM-returned actions in the main orchestration loop). The `actions` key is omitted when there are no edges to emit — that's a successful no-op, not an error.
+
+This is one atomic read-modify-write — never run a per-unit `register-task` loop after Step 3.
+
+### Step 4 — Verify and surface drift
 
 ```bash
 bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" \
@@ -275,9 +273,7 @@ Always exits 0 (warn-and-continue). Output:
 
 If `ok: false`, **report the diff to the user verbatim** and continue — do not block the pipeline. The build runner enforces execution order from unit files, so drift is a visibility issue, not a correctness issue. Subsequent `--action next` calls will also surface drift via the `warnings: [...]` field in their JSON output; pass those warnings through to the user when they appear.
 
-### Step 6 — Re-enter the main loop
-
-The state machine now returns build actions with specific `unitId`/`unitPath` for each eligible unit.
+After Step 4, re-enter the main orchestration loop — the state machine now returns build actions with specific `unitId`/`unitPath` for each eligible unit.
 
 ---
 
@@ -358,16 +354,14 @@ When `/dev-buddy-ralph` is invoked in a new session and a plan file already exis
 
    **Step 1 (list)**: `--action list-units` returns the structured units (with `ref`, `subject`, `blockedByRefs`).
 
-   **Step 2 (create + backfill status)**: For each unit, TaskCreate with `subject` and metadata `{type: 'unit', unitId: id, slug, plan}`. Then immediately reflect persisted status:
+   **Step 2 (create + backfill status + build payload)**: For each unit, TaskCreate with `subject` and metadata `{type: 'unit', unitId: id, slug, plan}`. Immediately reflect persisted status:
    - `done` → TaskUpdate `completed`
    - `failed` → TaskUpdate `failed`
    - `pending` → leave open
 
-   Collect every returned `taskId` into a local `refToTaskId` map. TaskUpdate the Development milestone (task 4) with `addBlockedBy: [all unit task IDs]`.
+   Build the `{taskIds, blockedBy}` payload as you go. `taskIds` MUST include every unit ref. `blockedBy` MUST include an entry for every unit — use `[]` for no-deps units (do not omit). Do not call `TaskUpdate(addBlockedBy)` here; the dep edges come back as ops in Step 3.
 
-   **Step 3 (addBlockedBy)**: For each unit with non-empty `blockedByRefs`, TaskUpdate with `addBlockedBy` mapping refs to task IDs.
-
-   **Step 4 (bulk register)**: One `--action register-task-graph --data <json|@path>` call with the full `{ taskIds, blockedBy }` payload — never per-unit `register-task`.
+   **Step 3 (register + execute returned actions)**: One `--action register-task-graph --data @<path>` call with the full payload. The response's `actions` array is executed via the standard `update_tasks` handler — same dispatch used for SM-returned actions in the main loop. Never run per-unit `register-task` after this.
 
 7. **Verify and surface drift**: `--action verify-task-graph`. Report any non-empty diff to the user; do not block.
 

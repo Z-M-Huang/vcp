@@ -1273,6 +1273,74 @@ describe('verifyTaskGraph', () => {
     expect(ok).toBe(true);
     expect(diff.extraRefs).toEqual([]);
   });
+
+  test('accepts empty-deps entry for no-deps unit (documents always-include contract)', () => {
+    const { verifyTaskGraph } = require('../ralph-state-machine.ts');
+    const expected = [mkEntry(1), mkEntry(2, [1])];
+    const state = { 'unit:1': [], 'unit:2': ['unit:1'] };
+    const { ok, diff } = verifyTaskGraph(expected, state);
+    expect(ok).toBe(true);
+    expect(diff.missingRefs).toEqual([]);
+  });
+});
+
+// ─── computeBlockedByOperations ──────────────────────────────────────────────
+
+describe('computeBlockedByOperations', () => {
+  test('returns empty array for empty taskIds', () => {
+    const { computeBlockedByOperations } = require('../ralph-state-machine.ts');
+    expect(computeBlockedByOperations({}, {})).toEqual([]);
+  });
+
+  test('emits one op per unit with non-empty deps and skips no-deps units', () => {
+    const { computeBlockedByOperations } = require('../ralph-state-machine.ts');
+    const taskIds = { 'unit:1': 't1', 'unit:2': 't2', 'unit:3': 't3' };
+    const blockedBy = { 'unit:1': [], 'unit:2': ['unit:1'], 'unit:3': ['unit:1', 'unit:2'] };
+    const ops = computeBlockedByOperations(taskIds, blockedBy);
+    expect(ops).toEqual([
+      { action: 'set_blocked_by', ref: 'unit:2', blockedBy: ['unit:1'] },
+      { action: 'set_blocked_by', ref: 'unit:3', blockedBy: ['unit:1', 'unit:2'] },
+    ]);
+  });
+
+  test('appends stage:build op blocking on all units when stage:build task is registered', () => {
+    const { computeBlockedByOperations } = require('../ralph-state-machine.ts');
+    const taskIds = { 'unit:1': 't1', 'unit:2': 't2', 'stage:build': 'sb' };
+    const blockedBy = { 'unit:1': [], 'unit:2': ['unit:1'] };
+    const ops = computeBlockedByOperations(taskIds, blockedBy);
+    expect(ops[ops.length - 1]).toEqual({
+      action: 'set_blocked_by',
+      ref: 'stage:build',
+      blockedBy: ['unit:1', 'unit:2'],
+    });
+  });
+
+  test('omits stage:build op when no stage:build task is registered', () => {
+    const { computeBlockedByOperations } = require('../ralph-state-machine.ts');
+    const taskIds = { 'unit:1': 't1', 'unit:2': 't2' };
+    const blockedBy = { 'unit:1': [], 'unit:2': ['unit:1'] };
+    const ops = computeBlockedByOperations(taskIds, blockedBy);
+    expect(ops.some((o: any) => o.ref === 'stage:build')).toBe(false);
+  });
+
+  test('omits stage:build op when stage:build is registered but there are no units', () => {
+    const { computeBlockedByOperations } = require('../ralph-state-machine.ts');
+    const taskIds = { 'stage:build': 'sb' };
+    const blockedBy = {};
+    expect(computeBlockedByOperations(taskIds, blockedBy)).toEqual([]);
+  });
+
+  test('sorts unit refs numerically so unit:10 comes after unit:9', () => {
+    const { computeBlockedByOperations } = require('../ralph-state-machine.ts');
+    const taskIds = { 'unit:1': 't1', 'unit:9': 't9', 'unit:10': 't10', 'stage:build': 'sb' };
+    const blockedBy = { 'unit:1': [], 'unit:9': ['unit:1'], 'unit:10': ['unit:9'] };
+    const ops = computeBlockedByOperations(taskIds, blockedBy);
+    const stageOp = ops.find((o: any) => o.ref === 'stage:build');
+    expect(stageOp.blockedBy).toEqual(['unit:1', 'unit:9', 'unit:10']);
+    // Unit ops themselves are also numerically ordered
+    const unitOps = ops.filter((o: any) => o.ref.startsWith('unit:'));
+    expect(unitOps.map((o: any) => o.ref)).toEqual(['unit:9', 'unit:10']);
+  });
 });
 
 // ─── registerTaskGraph (state.ts) ───────────────────────────────────────────
@@ -1677,4 +1745,83 @@ describe('getNextBuildUnit ancestor-failure (§6)', () => {
     const result = getNextBuildUnit(units);
     expect(result!.id).toBe(16);
   });
+});
+
+// ─── register-task-graph CLI integration ───────────────────────────────────
+
+describe('register-task-graph CLI output', () => {
+  const tmpDirs: string[] = [];
+  afterAll(() => { tmpDirs.forEach(d => rmSync(d, { recursive: true, force: true })); });
+
+  const scriptPath = path.resolve(__dirname, '../ralph-state-machine.ts');
+
+  async function runRegister(projectDir: string, slug: string, payload: object): Promise<any> {
+    const planDir = path.join(projectDir, '.vcp', 'plan');
+    mkdirSync(planDir, { recursive: true });
+    const planPath = path.join(planDir, `ralph-${slug}.md`);
+    writeFileSync(planPath, '**Status:** build\n');
+    const dataPath = path.join(projectDir, `graph-${slug}.json`);
+    writeFileSync(dataPath, JSON.stringify(payload));
+    const proc = Bun.spawn([
+      'bun', scriptPath,
+      '--plan', planPath,
+      '--action', 'register-task-graph',
+      '--data', `@${dataPath}`,
+    ], { stdout: 'pipe', stderr: 'pipe' });
+    await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    return JSON.parse(stdout.trim());
+  }
+
+  test('emits update_tasks action covering diamond deps and stage:build', async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'rtg-cli-'));
+    tmpDirs.push(tmpDir);
+    // Diamond: A(1) → B(2), C(3) → D(4); plus isolated E(5); plus stage:build.
+    const result = await runRegister(tmpDir, 'diamond', {
+      taskIds: {
+        'unit:1': 'tA', 'unit:2': 'tB', 'unit:3': 'tC', 'unit:4': 'tD', 'unit:5': 'tE',
+        'stage:build': 'sb',
+      },
+      blockedBy: {
+        'unit:1': [], 'unit:2': ['unit:1'], 'unit:3': ['unit:1'],
+        'unit:4': ['unit:2', 'unit:3'], 'unit:5': [],
+      },
+    });
+    expect(result.registered.refCount).toBe(6);
+    expect(result.actions).toHaveLength(1);
+    expect(result.actions[0].type).toBe('update_tasks');
+    const ops = result.actions[0].operations;
+    expect(ops).toEqual([
+      { action: 'set_blocked_by', ref: 'unit:2', blockedBy: ['unit:1'] },
+      { action: 'set_blocked_by', ref: 'unit:3', blockedBy: ['unit:1'] },
+      { action: 'set_blocked_by', ref: 'unit:4', blockedBy: ['unit:2', 'unit:3'] },
+      { action: 'set_blocked_by', ref: 'stage:build', blockedBy: ['unit:1', 'unit:2', 'unit:3', 'unit:4', 'unit:5'] },
+    ]);
+  }, 30000);
+
+  test('omits stage:build op when stage:build is not in taskIds', async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'rtg-cli-'));
+    tmpDirs.push(tmpDir);
+    const result = await runRegister(tmpDir, 'no-stage', {
+      taskIds: { 'unit:1': 't1', 'unit:2': 't2' },
+      blockedBy: { 'unit:1': [], 'unit:2': ['unit:1'] },
+    });
+    expect(result.actions).toHaveLength(1);
+    const ops = result.actions[0].operations;
+    expect(ops.some((o: any) => o.ref === 'stage:build')).toBe(false);
+    expect(ops).toEqual([
+      { action: 'set_blocked_by', ref: 'unit:2', blockedBy: ['unit:1'] },
+    ]);
+  }, 30000);
+
+  test('omits actions entirely when there are no edges and no stage:build', async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'rtg-cli-'));
+    tmpDirs.push(tmpDir);
+    const result = await runRegister(tmpDir, 'no-deps', {
+      taskIds: { 'unit:1': 't1', 'unit:2': 't2' },
+      blockedBy: { 'unit:1': [], 'unit:2': [] },
+    });
+    expect(result.registered.refCount).toBe(2);
+    expect(result.actions).toBeUndefined();
+  }, 30000);
 });

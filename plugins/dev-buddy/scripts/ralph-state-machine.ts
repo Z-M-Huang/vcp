@@ -12,7 +12,7 @@ export { loadState, saveState, registerTaskId, registerTaskGraph } from './ralph
 // Local imports for this file's logic
 import type {
   PlanStatus, PlanFileData, UnitPlanData, StateMachineState, StateMachineOutput,
-  Action, SkillAction, CheckpointAction, WritePlanAction, TaskAction,
+  Action, SkillAction, CheckpointAction, WritePlanAction, TaskAction, TaskOperation,
   DoneAction, ErrorAction, BlockedAction, BackpressureResult, UnitListEntry,
   MechanicalContext, AttemptRecord, LatestAttemptState,
   ComposeBuildDispatchOutput, RecordAttemptInput, RecordAttemptOutput,
@@ -639,6 +639,33 @@ export function verifyTaskGraph(
   return { ok, diff: { missingRefs, extraRefs, mismatchedEdges } };
 }
 
+/**
+ * Derive `set_blocked_by` operations from a persisted task graph so Claude Code
+ * can execute them mechanically via the existing update_tasks handler, instead
+ * of re-deriving the ref→taskId mapping by hand. Emits one op per unit that
+ * has a non-empty dependency list, plus one op for `stage:build` covering all
+ * units when the stage task is registered. Unit refs are sorted numerically so
+ * output is stable for tests and diff-friendly log lines. Callers should omit
+ * the `actions` wrapper entirely when this returns `[]`.
+ */
+export function computeBlockedByOperations(
+  taskIds: Record<string, string>,
+  blockedBy: Record<string, string[]>,
+): TaskOperation[] {
+  const ops: TaskOperation[] = [];
+  const unitRefs = Object.keys(taskIds)
+    .filter(r => r.startsWith('unit:'))
+    .sort((a, b) => parseInt(a.slice(5), 10) - parseInt(b.slice(5), 10));
+  for (const ref of unitRefs) {
+    const deps = blockedBy[ref] ?? [];
+    if (deps.length > 0) ops.push({ action: 'set_blocked_by', ref, blockedBy: deps });
+  }
+  if (taskIds['stage:build'] && unitRefs.length > 0) {
+    ops.push({ action: 'set_blocked_by', ref: 'stage:build', blockedBy: unitRefs });
+  }
+  return ops;
+}
+
 // ─── SM BUILD ACTIONS (§2, §3 — single-attempt orchestration) ───────────────
 // Three actions that move the retry loop out of BLR and into CC-driven SM calls:
 //   compose_build_dispatch  — compose prompt, reserve attempt, return {prompt, lease}
@@ -1157,9 +1184,20 @@ if (import.meta.main) {
         const knownEdges = postState
           ? Object.values(postState.blockedBy).reduce((n, refs) => n + refs.length, 0)
           : edgeCount;
+        // Derive ops from the post-write state so merged entries from prior
+        // calls are covered, not just this call's payload.
+        const ops = postState
+          ? computeBlockedByOperations(postState.taskIds, postState.blockedBy)
+          : computeBlockedByOperations(payload.taskIds, payload.blockedBy);
         await log('register_task_graph.write', 'info',
-          `refCount=${refCount} edgeCount=${edgeCount} knownRefs=${knownRefs} knownEdges=${knownEdges}`);
-        console.log(JSON.stringify({ registered: { refCount, edgeCount } }));
+          `refCount=${refCount} edgeCount=${edgeCount} knownRefs=${knownRefs} knownEdges=${knownEdges} ops=${ops.length}`);
+        const output: { registered: { refCount: number; edgeCount: number }; actions?: TaskAction[] } = {
+          registered: { refCount, edgeCount },
+        };
+        if (ops.length > 0) {
+          output.actions = [{ type: 'update_tasks', operations: ops }];
+        }
+        console.log(JSON.stringify(output));
         process.exit(0);
       }
 
