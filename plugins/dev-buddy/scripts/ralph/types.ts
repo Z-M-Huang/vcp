@@ -63,6 +63,8 @@ export const REVIEW_FEEDBACK_MAX_BYTES = 16 * 1024;
 export const STDERR_TAIL_MAX_BYTES = 4 * 1024;
 export const STDOUT_TAIL_MAX_BYTES = 4 * 1024;
 export const ATTEMPT_HISTORY_MAX_ENTRIES = 10;
+/** Soft cap on the Implementation Files blob injected into the unit-review stage task. */
+export const UNIT_REVIEW_FILES_MAX_BYTES = 128 * 1024;
 /** How long a reservation may remain open before the lease is considered stale and can be abandoned. */
 export const MAX_DISPATCH_MS = 30 * 60 * 1000; // 30 min
 

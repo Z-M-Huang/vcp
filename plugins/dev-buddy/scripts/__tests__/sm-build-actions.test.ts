@@ -24,9 +24,12 @@ const mockConfig = {
   max_outer_iterations: 3,
 };
 
+// Preserve the real module's other exports so later test files can still
+// import atomicWriteFile / validateDevBuddyConfig / DEFAULT_CONFIG / etc.
+const realPipelineConfig = await import('../pipeline-config.ts');
 mock.module('../pipeline-config.ts', () => ({
+  ...realPipelineConfig,
   loadDevBuddyConfig: () => mockConfig,
-  CONFIG_PATH: '/tmp/mock-config-not-used',
 }));
 
 const {

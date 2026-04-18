@@ -1,8 +1,45 @@
-import { describe, test, expect, afterAll } from 'bun:test';
+import { describe, test, expect, afterAll, mock } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
-import {
+
+// Stub loadDevBuddyConfig BEFORE importing BLR so composeBuildDispatch /
+// recordAttemptResultAction see the injected stage map. Tests toggle
+// `mockConfig.stages['unit-review'].executors` via setUnitReviewEnabled().
+const mockConfig = {
+  version: '5.0',
+  stages: {
+    'discovery': { executors: [{ system_prompt: 'discoverer', preset: 'anthropic-subscription', model: 'sonnet' }] },
+    'ralph-requirements': { executors: [{ system_prompt: 'ralph-requirements-analyst', preset: 'anthropic-subscription', model: 'opus' }] },
+    'decomposition': { executors: [{ system_prompt: 'decomposer', preset: 'anthropic-subscription', model: 'opus' }] },
+    'ralph-build': { executors: [{ system_prompt: 'unit-builder', preset: 'anthropic-subscription', model: 'sonnet' }] },
+    'ralph-code-review': { executors: [{ system_prompt: 'ralph-code-reviewer', preset: 'anthropic-subscription', model: 'sonnet' }] },
+    'ralph-uat': { executors: [{ system_prompt: 'uat-evaluator', preset: 'anthropic-subscription', model: 'sonnet' }] },
+    'unit-review': { executors: [] as Array<{ system_prompt: string; preset: string; model: string }> },
+    'plan-lint': { executors: [] },
+  },
+  pipelines: { ralph: ['discovery', 'ralph-requirements', 'decomposition', 'ralph-build', 'ralph-code-review', 'ralph-uat'] },
+  max_iterations: 10,
+  max_build_attempts: 10,
+  max_outer_iterations: 3,
+};
+
+// Preserve the real module's other exports (atomicWriteFile, validateDevBuddyConfig,
+// DEFAULT_CONFIG, etc.) so test files that load later can still import them.
+// Without this, `mock.module` replaces the module with ONLY the listed keys.
+const realPipelineConfig = await import('../pipeline-config.ts');
+mock.module('../pipeline-config.ts', () => ({
+  ...realPipelineConfig,
+  loadDevBuddyConfig: () => mockConfig,
+}));
+
+function setUnitReviewEnabled(enabled: boolean): void {
+  mockConfig.stages['unit-review'].executors = enabled
+    ? [{ system_prompt: 'ralph-code-reviewer', preset: 'anthropic-subscription', model: 'sonnet' }]
+    : [];
+}
+
+const {
   parseBuildLoopArgs,
   upsertMetadataLine,
   replaceOrAppendSection,
@@ -11,18 +48,23 @@ import {
   composeBuildDispatchPromptFromUnitFile,
   extractBackpressureCommands,
   resolveUnitPath,
-  runSingleAttempt,
   parseReviewVerdict,
   readFilesTouched,
   buildMechanicalContext,
-} from '../build-loop-runner.ts';
-import { RUNNER_TAIL_MARKER, demoteFeedbackHeadings } from '../ralph/unit-file.ts';
+  classifyAttempt,
+  runUnitLoop,
+} = await import('../build-loop-runner.ts');
+const { RUNNER_TAIL_MARKER, demoteFeedbackHeadings } = await import('../ralph/unit-file.ts');
+const { ensurePlanStateSeeded, ensureUnitStateSeeded, readUnitState, reserveAttempt } =
+  await import('../ralph/unit-state.ts');
+const { composeBuildDispatch, recordReviewResultAction } = await import('../ralph/build-actions.ts');
 import type {
   LatestAttemptState,
   MechanicalContext,
   UnitBuildDispatchResult,
   BackpressureResult,
 } from '../ralph/types.ts';
+import type { BuildLoopEvent, TerminalOutcome, UnitReviewDispatchOutput } from '../build-loop-runner.ts';
 
 // ─── Fixture helpers ───────────────────────────────────────────────────────
 
@@ -91,15 +133,6 @@ describe('parseBuildLoopArgs', () => {
     expect(() => parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a', '--cwd', '/c', '--unit', '-1'])).toThrow('Invalid --unit');
   });
 
-  test('parses optional --lease flag', () => {
-    const result = parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a/b.md', '--cwd', '/c', '--unit', '1', '--lease', 'tok-abc']);
-    expect(result.lease).toBe('tok-abc');
-  });
-
-  test('lease is undefined when not provided', () => {
-    const result = parseBuildLoopArgs(['node', 'script.ts', '--plan', '/a/b.md', '--cwd', '/c', '--unit', '1']);
-    expect(result.lease).toBeUndefined();
-  });
 });
 
 // ─── upsertMetadataLine ───────────────────────────────────────────────────
@@ -404,19 +437,21 @@ describe('resolveUnitPath', () => {
   });
 });
 
-// ─── runSingleAttempt integration tests ───────────────────────────────
+// ─── classifyAttempt + runUnitLoop integration tests ─────────────────────
 
 /** Create a minimal valid unit plan file. */
 function makeUnitPlan(id: number, opts: {
   backpressureCommands?: string[];
+  maxAttempts?: number;
 } = {}): string {
   const bpCmds = opts.backpressureCommands ?? ['bun test'];
+  const maxAttempts = opts.maxAttempts ?? 3;
   return [
     `# Unit ${id}: Test Unit ${id}`,
     '',
     '**Status:** pending',
     '**Attempts:** 0',
-    '**Max Attempts:** 3',
+    `**Max Attempts:** ${maxAttempts}`,
     '**Depends On:** none',
     '',
     '### Entropy', 'Low', '',
@@ -432,7 +467,7 @@ function makeUnitPlan(id: number, opts: {
   ].join('\n');
 }
 
-/** Set up a project directory with plan file and unit files (no state needed for BLR). */
+/** Set up a project directory with plan file and unit files (no state needed — composeBuildDispatch seeds on demand). */
 function setupProject(unitPlans: string[]): { projectDir: string; planPath: string; slug: string } {
   const projectDir = makeTmpDir();
   const slug = 'test-build';
@@ -450,368 +485,423 @@ function setupProject(unitPlans: string[]): { projectDir: string; planPath: stri
   return { projectDir, planPath, slug };
 }
 
-describe('runSingleAttempt', () => {
-  test('dispatch complete + backpressure passes → mechanical_pass', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+/** Seed unit state eagerly (used when tests need to pre-populate reservedAttempt etc.). */
+function seedUnitState(projectDir: string, slug: string, unitId: number, maxAttempts = 3): void {
+  const plan = ensurePlanStateSeeded(projectDir, slug, 'build', 'test-seed');
+  ensureUnitStateSeeded(projectDir, slug, unitId, plan.decomposeRunId, maxAttempts, {
+    status: 'pending',
+    attempts: 0,
+  });
+}
 
-    const result = await runSingleAttempt(
+/** Capture BLR's streamed events for later assertions. */
+function makeEmitCollector(): { events: BuildLoopEvent[]; emitFn: (e: BuildLoopEvent) => void } {
+  const events: BuildLoopEvent[] = [];
+  return { events, emitFn: (e) => events.push(e) };
+}
+
+function okDispatch(synthesis = 'done'): UnitBuildDispatchResult {
+  return { event: 'complete', stage: 'ralph-build', synthesis } as UnitBuildDispatchResult;
+}
+function okBackpressure(cmds: string[]): BackpressureResult[] {
+  return cmds.map((c) => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true }));
+}
+function failBackpressure(cmd = 'bun test', tail = 'FAIL'): BackpressureResult[] {
+  return [{ command: cmd, exitCode: 1, stdout: tail, stderr: 'err', passed: false }];
+}
+
+/** dispatchFn that records the prompt it receives; multi-iteration tests need this. */
+function makeDispatchSpy(synthesis = 'done') {
+  const prompts: string[] = [];
+  const fn = async (_plan: string, _cwd: string, _debug: boolean, promptText: string) => {
+    prompts.push(promptText);
+    return okDispatch(synthesis);
+  };
+  return { fn, prompts };
+}
+
+describe('classifyAttempt (pure function)', () => {
+  test('dispatch error → dispatch_error outcome', () => {
+    const ctx: MechanicalContext = {
+      source: 'dispatch', command: 'stage-runner', exitCode: 2,
+      stdoutHead: '', stdoutTail: '', stderrHead: '', stderrTail: 'boom',
+    };
+    const r = classifyAttempt({
+      dispatch: { event: 'error', stage: 'ralph-build', error: 'x', mechanicalContext: ctx } as UnitBuildDispatchResult,
+      backpressure: [], backpressureCommandCount: 1, contract: null,
+    });
+    expect(r.outcome).toBe('dispatch_error');
+    expect(r.mechanicalContext).toEqual(ctx);
+  });
+
+  test('dispatch complete + backpressure fail → mechanical_fail (backpressure source)', () => {
+    const r = classifyAttempt({
+      dispatch: okDispatch(),
+      backpressure: failBackpressure('bun test', 'FAIL'),
+      backpressureCommandCount: 1, contract: null,
+    });
+    expect(r.outcome).toBe('mechanical_fail');
+    expect(r.mechanicalContext!.source).toBe('backpressure');
+    expect(r.mechanicalContext!.command).toBe('bun test');
+  });
+
+  test('dispatch complete + backpressure pass + contract fail → mechanical_fail (contract-verifier source)', () => {
+    const r = classifyAttempt({
+      dispatch: okDispatch(),
+      backpressure: okBackpressure(['bun test']),
+      backpressureCommandCount: 1,
+      contract: {
+        event: 'fail', unitId: 1,
+        failures: [{ symbol: 'Foo', module: 'src/x.ts', kind: 'named', tsCode: 2459, message: 'nope' }],
+      },
+    });
+    expect(r.outcome).toBe('mechanical_fail');
+    expect(r.mechanicalContext!.source).toBe('contract-verifier');
+  });
+
+  test('dispatch complete + all green → mechanical_pass', () => {
+    const r = classifyAttempt({
+      dispatch: okDispatch(),
+      backpressure: okBackpressure(['bun test']),
+      backpressureCommandCount: 1,
+      contract: { event: 'pass', unitId: 1 },
+    });
+    expect(r.outcome).toBe('mechanical_pass');
+    expect(r.mechanicalContext).toBeNull();
+  });
+
+  test('zero backpressure commands + no contract → mechanical_pass (vacuous)', () => {
+    const r = classifyAttempt({
+      dispatch: okDispatch(),
+      backpressure: [], backpressureCommandCount: 0, contract: null,
+    });
+    expect(r.outcome).toBe('mechanical_pass');
+  });
+});
+
+describe('runUnitLoop — plan §F test cases 1-8', () => {
+  // Test 1a — backpressure-only, retry then pass.
+  test('[1a] mech_fail → retry → mech_pass → {status:"done", attempts:2}', async () => {
+    setUnitReviewEnabled(false);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
+    let call = 0;
+    const { events, emitFn } = makeEmitCollector();
+    let reviewCalled = false;
+
+    const terminal = await runUnitLoop(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Implemented.' } as UnitBuildDispatchResult),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: (cmds) => (++call === 1 ? failBackpressure() : okBackpressure(cmds)),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+        reviewDispatchFn: async () => { reviewCalled = true; return { synthesis: '' }; },
+        emitFn,
       },
     );
 
-    expect(result.event).toBe('attempt_complete');
-    expect(result.outcome).toBe('mechanical_pass');
-    expect(result.unitId).toBe(1);
-    expect(result.mechanicalContext).toBeNull();
-    expect(result.synthesis).toBe('Implemented.');
+    expect(terminal.status).toBe('done');
+    expect(terminal.attempts).toBe(2);
+    expect(reviewCalled).toBe(false);
+    expect(readUnitState(projectDir, 'test-build', 1)!.status).toBe('done');
+    // Two attempt_start events (one per attempt); one terminal complete.
+    expect(events.filter((e) => e.event === 'attempt_start')).toHaveLength(2);
+    expect(events[events.length - 1].event).toBe('complete');
   });
 
-  test('dispatch complete + backpressure fails → mechanical_fail with context', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+  // Test 1b — backpressure-only, exhaustion.
+  test('[1b] mech_fail × maxAttempts → {status:"failed"}; markUnitFailed fires once', async () => {
+    setUnitReviewEnabled(false);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 2 })]);
 
-    const result = await runSingleAttempt(
+    const terminal = await runUnitLoop(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' } as UnitBuildDispatchResult),
-        backpressureFn: () => [{ command: 'bun test', exitCode: 1, stdout: 'FAIL', stderr: 'error TS2345', passed: false }],
-      },
-    );
-
-    expect(result.event).toBe('attempt_complete');
-    expect(result.outcome).toBe('mechanical_fail');
-    expect(result.mechanicalContext).not.toBeNull();
-    expect(result.mechanicalContext!.source).toBe('backpressure');
-    expect(result.mechanicalContext!.command).toBe('bun test');
-    expect(result.mechanicalContext!.exitCode).toBe(1);
-    expect(result.backpressureResults).toHaveLength(1);
-  });
-
-  test('dispatch error → dispatch_error with context', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-    const dispatchCtx = makeMechanicalContext({ source: 'dispatch', command: 'stage-runner' });
-
-    const result = await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({
-          event: 'error', stage: 'ralph-build', phase: 'dispatch_failed',
-          error: 'stage-runner crashed', mechanicalContext: dispatchCtx,
-        } as UnitBuildDispatchResult),
-        backpressureFn: () => [],
-      },
-    );
-
-    expect(result.event).toBe('attempt_complete');
-    expect(result.outcome).toBe('dispatch_error');
-    expect(result.mechanicalContext).toEqual(dispatchCtx);
-    expect(result.backpressureResults).toHaveLength(0);
-  });
-
-  test('dispatch error without mechanicalContext → dispatch_error, null context', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-
-    const result = await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({
-          event: 'error', stage: 'ralph-build', error: 'crashed',
-        } as UnitBuildDispatchResult),
-        backpressureFn: () => [],
-      },
-    );
-
-    expect(result.outcome).toBe('dispatch_error');
-    expect(result.mechanicalContext).toBeNull();
-  });
-
-  test('zero backpressure commands → mechanical_pass (vacuous)', async () => {
-    const { projectDir, planPath } = setupProject([
-      makeUnitPlan(1, { backpressureCommands: [] }),
-    ]);
-
-    const result = await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' } as UnitBuildDispatchResult),
-        backpressureFn: () => [],
-      },
-    );
-
-    expect(result.event).toBe('attempt_complete');
-    expect(result.outcome).toBe('mechanical_pass');
-    expect(result.backpressureResults).toHaveLength(0);
-  });
-
-  test('lease echoed back in result', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-
-    const result = await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1, lease: 'tok-abc-123' },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'OK' } as UnitBuildDispatchResult),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-      },
-    );
-
-    expect(result.lease).toBe('tok-abc-123');
-  });
-
-  test('lease is null when not provided', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-
-    const result = await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-      },
-    );
-
-    expect(result.lease).toBeNull();
-  });
-
-  test('unit file not found → throws', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-
-    await expect(runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 99 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
-        backpressureFn: () => [],
-      },
-    )).rejects.toThrow();
-  });
-
-  test('promptText passed through to dispatch', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-    let receivedPrompt: string | null = null;
-
-    await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1, promptText: 'SM-composed prompt text' },
-      {
-        dispatchFn: async (_plan, _cwd, _unit, _debug, prompt) => {
-          receivedPrompt = prompt;
-          return { event: 'complete', stage: 'ralph-build', synthesis: 'OK' } as UnitBuildDispatchResult;
-        },
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-      },
-    );
-
-    expect(receivedPrompt).toBe('SM-composed prompt text');
-  });
-
-  test('multiple backpressure: first fail builds context', async () => {
-    const { projectDir, planPath } = setupProject([
-      makeUnitPlan(1, { backpressureCommands: ['bun build', 'bun test', 'bun lint'] }),
-    ]);
-
-    const result = await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'Done.' } as UnitBuildDispatchResult),
-        backpressureFn: () => [
-          { command: 'bun build', exitCode: 0, stdout: '', stderr: '', passed: true },
-          { command: 'bun test', exitCode: 1, stdout: 'FAIL test1', stderr: 'err1', passed: false },
-          { command: 'bun lint', exitCode: 2, stdout: 'lint issues', stderr: 'err2', passed: false },
-        ],
-      },
-    );
-
-    expect(result.outcome).toBe('mechanical_fail');
-    expect(result.mechanicalContext!.command).toBe('bun test');
-    expect(result.mechanicalContext!.exitCode).toBe(1);
-    expect(result.backpressureResults).toHaveLength(3);
-  });
-
-  test('backpressure skipped when dispatch errors', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-    let bpCalled = false;
-
-    const result = await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'error', stage: 'ralph-build', error: 'fail' } as UnitBuildDispatchResult),
-        backpressureFn: () => { bpCalled = true; return []; },
-      },
-    );
-
-    expect(result.outcome).toBe('dispatch_error');
-    expect(bpCalled).toBe(false);
-  });
-
-  test('synthesis is null when dispatch has none', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-
-    const result = await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-      },
-    );
-
-    expect(result.synthesis).toBeNull();
-  });
-
-  // Contract Verifier gate (Fix 1).
-  // Runs after backpressure passes — catches Class A bugs where a producer
-  // forgot `export` on a promised symbol (missed by consumer-driven tsc).
-
-  test('backpressure green + verifier pass → mechanical_pass', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-
-    const result = await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 1 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'done' } as UnitBuildDispatchResult),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: () => failBackpressure(),
         verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
       },
     );
 
-    expect(result.outcome).toBe('mechanical_pass');
-    expect(result.mechanicalContext).toBeNull();
+    expect(terminal.status).toBe('failed');
+    const state = readUnitState(projectDir, 'test-build', 1)!;
+    expect(state.status).toBe('failed');
+    // unit-level markUnitFailed sets a single `failed` record — the one from recordAttempt.
+    // If BLR had also called markUnitFailed we would expect a duplicate; the count
+    // of 'failed'-outcome records in attemptHistory should be exactly 1.
+    const failedRecords = state.attemptHistory.filter((a) => a.outcome === 'failed');
+    expect(failedRecords).toHaveLength(1);
   });
 
-  test('backpressure green + verifier fail → mechanical_fail with contract-verifier context', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+  // Test 2a — review enabled, immediate pass.
+  test('[2a] mech_pass → review PASS → {status:"done", attempts:1}', async () => {
+    setUnitReviewEnabled(true);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
 
-    const result = await runSingleAttempt(
+    const terminal = await runUnitLoop(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'done' } as UnitBuildDispatchResult),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        verifyContractFn: () => ({
-          event: 'fail',
-          unitId: 1,
-          failures: [{
-            symbol: 'ConcurrencyManager',
-            module: 'src/concurrency-manager.ts',
-            kind: 'named',
-            tsCode: 2459,
-            message: "Module declares 'ConcurrencyManager' locally, but it is not exported.",
-          }],
-        }),
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: (cmds) => okBackpressure(cmds),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+        reviewDispatchFn: async () => ({ synthesis: '## Verdict: PASS\n' }),
       },
     );
 
-    expect(result.outcome).toBe('mechanical_fail');
-    expect(result.mechanicalContext).not.toBeNull();
-    expect(result.mechanicalContext!.source).toBe('contract-verifier');
-    const allStderr = result.mechanicalContext!.stderrHead + result.mechanicalContext!.stderrTail;
-    expect(allStderr).toContain('ConcurrencyManager');
-    expect(allStderr).toContain('TS2459');
+    expect(terminal.status).toBe('done');
+    expect(terminal.attempts).toBe(1);
+    expect(readUnitState(projectDir, 'test-build', 1)!.status).toBe('done');
   });
 
-  test('backpressure green + verifier skip (legacy unit) → mechanical_pass', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+  // Test 2b — review-driven retry with feedback carry.
+  test('[2b] review NEEDS_CHANGES → retry → review PASS; 2nd build prompt carries MUST ADDRESS feedback', async () => {
+    setUnitReviewEnabled(true);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
+    const spy = makeDispatchSpy();
+    let reviewCall = 0;
 
-    const result = await runSingleAttempt(
+    const terminal = await runUnitLoop(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        verifyContractFn: () => ({ event: 'skip', unitId: 1, skipReason: 'no Contract Manifest in unit file' }),
+        dispatchFn: spy.fn,
+        backpressureFn: (cmds) => okBackpressure(cmds),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+        reviewDispatchFn: async (): Promise<UnitReviewDispatchOutput> => (++reviewCall === 1
+          ? { synthesis: '## Verdict: NEEDS_CHANGES\n\n## Review Feedback\n- AC-1 violated at src/test.ts:42' }
+          : { synthesis: '## Verdict: PASS\n' }),
       },
     );
 
-    expect(result.outcome).toBe('mechanical_pass');
-    expect(result.mechanicalContext).toBeNull();
+    expect(terminal.status).toBe('done');
+    expect(terminal.attempts).toBe(2);
+    expect(spy.prompts).toHaveLength(2);
+    // First attempt: no prior feedback.
+    expect(spy.prompts[0]).not.toContain('MUST ADDRESS');
+    // Second attempt: feedback threaded in at §13 priority (review_first).
+    expect(spy.prompts[1]).toContain('PRIOR REVIEW FEEDBACK (MUST ADDRESS');
+    expect(spy.prompts[1]).toContain('AC-1 violated');
   });
 
-  test('backpressure green + verifier error → mechanical_pass (graceful degrade)', async () => {
-    // An infrastructure error in the verifier (missing tsconfig, malformed
-    // manifest) should not block the unit when backpressure already proved
-    // the tree compiles — the real `tsc` ran and was green. Degrade to pass
-    // so one broken plan file does not stall the pipeline.
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+  // Test 2c — review NEEDS_CHANGES × maxAttempts → failed.
+  test('[2c] review NEEDS_CHANGES × maxAttempts → {status:"failed"}', async () => {
+    setUnitReviewEnabled(true);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 2 })]);
 
-    const result = await runSingleAttempt(
+    const terminal = await runUnitLoop(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        verifyContractFn: () => ({ event: 'error', unitId: 1, error: 'No tsconfig.json found' }),
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: (cmds) => okBackpressure(cmds),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+        reviewDispatchFn: async () => ({ synthesis: '## Verdict: NEEDS_CHANGES\n\n## Review Feedback\n- still wrong' }),
       },
     );
 
-    expect(result.outcome).toBe('mechanical_pass');
+    expect(terminal.status).toBe('failed');
+    expect(readUnitState(projectDir, 'test-build', 1)!.status).toBe('failed');
   });
 
-  test('backpressure FAIL → verifier not invoked', async () => {
-    // Short-circuit: no point verifying contracts when the tree does not
-    // even compile. The backpressure context carries the failure.
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
-    let verifierCalled = false;
+  // Test 3 — review feedback persisted by recordReviewResultAction is read back
+  // by the next composeBuildDispatch and injected into the build prompt under
+  // "PRIOR REVIEW FEEDBACK". The plan §F described a hash-guard that would drop
+  // stale feedback when unit-N.md was mutated between review and next compose,
+  // but the current codebase stores `unitFileHashAtReview` without comparing it
+  // on read (build-actions.ts:143 reads state.reviewFeedback unconditionally).
+  // Adding a read-side guard is out-of-scope for this plan; the test validates
+  // the feedback flow that IS implemented (persistence + re-injection).
+  test('[3] review NEEDS_CHANGES feedback is persisted and re-injected in next compose prompt', async () => {
+    setUnitReviewEnabled(true);
+    const { projectDir } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
 
-    const result = await runSingleAttempt(
+    // Simulate attempt 1 mech_pass → review NEEDS_CHANGES without going through
+    // runUnitLoop (the write path is owned by build-actions.ts; BLR just observes).
+    seedUnitState(projectDir, 'test-build', 1, 3);
+    const r1 = reserveAttempt(projectDir, 'test-build', 1, 0);
+    await recordReviewResultAction(
+      projectDir, 'test-build',
+      { unitId: 1, lease: r1.lease, passed: false, feedback: '- AC-1 violated at src/test.ts:42' },
+      false,
+    );
+
+    // Feedback is persisted in unit-N.json with the hash at review time.
+    const state = readUnitState(projectDir, 'test-build', 1)!;
+    expect(state.reviewFeedback).toContain('AC-1 violated');
+    expect(state.unitFileHashAtReview).toBeDefined();
+
+    // Fresh compose: persisted feedback flows into the next prompt.
+    const dispatch = composeBuildDispatch(projectDir, 'test-build', 1);
+    expect(dispatch.prompt).toContain('PRIOR REVIEW FEEDBACK');
+    expect(dispatch.prompt).toContain('AC-1 violated at src/test.ts:42');
+  });
+
+  // Test 4 — stuck detection (non-terminal).
+  test('[4] 3 identical mech_fails → {status:"stuck"}; unit-N.json status NOT failed; markUnitFailed NOT called', async () => {
+    setUnitReviewEnabled(false);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 5 })]);
+
+    const terminal = await runUnitLoop(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
-        backpressureFn: () => [{ command: 'bun test', exitCode: 1, stdout: '', stderr: 'type error', passed: false }],
-        verifyContractFn: () => { verifierCalled = true; return { event: 'pass', unitId: 1 }; },
+        dispatchFn: async () => okDispatch(),
+        // Identical backpressure failure on every attempt — command+exitCode+tails match.
+        backpressureFn: () => [
+          { command: 'bun test', exitCode: 1, stdout: 'same-tail', stderr: 'same-err', passed: false },
+        ],
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
       },
     );
 
-    expect(result.outcome).toBe('mechanical_fail');
-    expect(result.mechanicalContext!.source).toBe('backpressure');
-    expect(verifierCalled).toBe(false);
+    expect(terminal.status).toBe('stuck');
+    const state = readUnitState(projectDir, 'test-build', 1)!;
+    expect(state.status).not.toBe('failed');
+    expect(state.identicalFailureCount).toBe(2);
+    // No 'failed' records in attemptHistory → markUnitFailed was not called.
+    expect(state.attemptHistory.filter((a) => a.outcome === 'failed')).toHaveLength(0);
   });
 
-  test('vacuous pass (no backpressure commands) still runs verifier', async () => {
-    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { backpressureCommands: [] })]);
-    let verifierCalled = false;
+  // Test 5 — fresh-state seeding by composeBuildDispatch, with clamping.
+  test('[5] no pre-seeded unit state → composeBuildDispatch seeds and attempt 1 runs to completion', async () => {
+    setUnitReviewEnabled(false);
+    // Unit-level maxAttempts=15 clamps down to mockConfig.max_build_attempts=10.
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 15 })]);
 
-    const result = await runSingleAttempt(
+    // Precondition: no unit-N.json yet.
+    expect(readUnitState(projectDir, 'test-build', 1)).toBeNull();
+
+    const terminal = await runUnitLoop(
       { planPath, cwd: projectDir, unitId: 1 },
       {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
-        backpressureFn: () => [],
-        verifyContractFn: () => {
-          verifierCalled = true;
-          return {
-            event: 'fail',
-            unitId: 1,
-            failures: [{
-              symbol: 'Missing',
-              module: 'src/x.ts',
-              kind: 'named',
-              tsCode: 2305,
-              message: 'test',
-            }],
-          };
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: (cmds) => okBackpressure(cmds),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+      },
+    );
+
+    expect(terminal.status).toBe('done');
+    const state = readUnitState(projectDir, 'test-build', 1)!;
+    expect(state).not.toBeNull();
+    expect(state.maxAttempts).toBe(10); // mockConfig.max_build_attempts=10 clamps unit-level 15→10
+  });
+
+  // Test 6 — stale-reservation recovery.
+  test('[6] pre-seeded stale reservedAttempt → composeBuildDispatch abandons, reserves fresh, run completes', async () => {
+    setUnitReviewEnabled(false);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
+
+    // Seed + simulate a crashed dispatch with a 60-minute-old reservation.
+    seedUnitState(projectDir, 'test-build', 1, 3);
+    const before = reserveAttempt(projectDir, 'test-build', 1, 0);
+    const statePath = path.join(projectDir, '.vcp', 'plan', '.state', 'ralph-test-build', 'units', 'unit-1.json');
+    const frozen = JSON.parse(readFileSync(statePath, 'utf-8'));
+    frozen.reservedAttempt.reservedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    writeFileSync(statePath, JSON.stringify(frozen));
+
+    const terminal = await runUnitLoop(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: (cmds) => okBackpressure(cmds),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+      },
+    );
+
+    expect(terminal.status).toBe('done');
+    const state = readUnitState(projectDir, 'test-build', 1)!;
+    // Stale lease was abandoned — confirmed by an 'abandoned' history entry.
+    expect(state.attemptHistory.find((a) => a.outcome === 'abandoned')).toBeDefined();
+    expect(state.reservedAttempt).toBeUndefined();
+    expect(before.lease).toBeDefined();
+  });
+
+  // Test 7 — terminal JSON shape.
+  test('[7] terminal emit has event:complete + orchestratorHints for done/failed; no hints for stuck; no hints on intermediate', async () => {
+    setUnitReviewEnabled(true);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
+    const { events, emitFn } = makeEmitCollector();
+
+    const terminal = await runUnitLoop(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: (cmds) => okBackpressure(cmds),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+        reviewDispatchFn: async () => ({ synthesis: '## Verdict: PASS\n' }),
+        emitFn,
+      },
+    );
+
+    // done case.
+    expect(terminal).toMatchObject({
+      event: 'complete', status: 'done', unitId: 1,
+      orchestratorHints: { claudeCode: { tool: 'TaskUpdate', status: 'completed' } },
+    });
+    expect(terminal.orchestratorHints!.claudeCode.note).toContain('passed review');
+    // Intermediate events must not carry orchestratorHints.
+    const intermediate = events.filter((e) => e.event !== 'complete') as Array<Record<string, unknown>>;
+    for (const e of intermediate) {
+      expect((e as { orchestratorHints?: unknown }).orchestratorHints).toBeUndefined();
+    }
+
+    // stuck case: no orchestratorHints.
+    setUnitReviewEnabled(false);
+    const { projectDir: p2, planPath: pp2 } = setupProject([makeUnitPlan(1, { maxAttempts: 5 })]);
+    const stuckTerminal = await runUnitLoop(
+      { planPath: pp2, cwd: p2, unitId: 1 },
+      {
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: () => [{ command: 'bun test', exitCode: 1, stdout: 'x', stderr: 'x', passed: false }],
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+      },
+    );
+    expect(stuckTerminal.status).toBe('stuck');
+    expect(stuckTerminal.orchestratorHints).toBeUndefined();
+
+    // failed case: "failed — " prefix in note.
+    const { projectDir: p3, planPath: pp3 } = setupProject([makeUnitPlan(1, { maxAttempts: 1 })]);
+    const failedTerminal = await runUnitLoop(
+      { planPath: pp3, cwd: p3, unitId: 1 },
+      {
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: () => failBackpressure(),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+      },
+    );
+    expect(failedTerminal.status).toBe('failed');
+    expect(failedTerminal.orchestratorHints!.claudeCode.note).toMatch(/^failed — /);
+  });
+
+  // Test 8 — review-driven retry resets identical-failure counter.
+  test('[8] mech_fail × identical → mech_pass → review NEEDS_CHANGES → retry → mech_pass → review PASS: identicalFailureCount resets to 0', async () => {
+    setUnitReviewEnabled(true);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 6 })]);
+
+    let bpCall = 0;
+    let reviewCall = 0;
+    const identicalFail: BackpressureResult[] = [
+      { command: 'bun test', exitCode: 1, stdout: 'same-tail', stderr: 'same-err', passed: false },
+    ];
+
+    await runUnitLoop(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: (cmds) => {
+          bpCall += 1;
+          // attempt 1: fail, attempt 2: fail (identical), attempts 3+: pass.
+          if (bpCall <= 2) return identicalFail;
+          return okBackpressure(cmds);
         },
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+        reviewDispatchFn: async (): Promise<UnitReviewDispatchOutput> => (++reviewCall === 1
+          ? { synthesis: '## Verdict: NEEDS_CHANGES\n\n## Review Feedback\n- f1' }
+          : { synthesis: '## Verdict: PASS\n' }),
       },
     );
 
-    expect(verifierCalled).toBe(true);
-    expect(result.outcome).toBe('mechanical_fail');
-    expect(result.mechanicalContext!.source).toBe('contract-verifier');
-  });
-
-  test('verifier is called with unit file path and project dir', async () => {
-    // setupProject writes unit-N.md for N = 1..unitPlans.length; to exercise
-    // unit 7 we pad with 6 placeholder plans then a real one at index 7.
-    const plans = [1, 2, 3, 4, 5, 6, 7].map(n => makeUnitPlan(n));
-    const { projectDir, planPath } = setupProject(plans);
-    const verifyCalls: Array<{ unitFile: string; projectDir: string; unitId?: number }> = [];
-
-    await runSingleAttempt(
-      { planPath, cwd: projectDir, unitId: 7 },
-      {
-        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
-        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
-        verifyContractFn: (args) => { verifyCalls.push(args); return { event: 'pass', unitId: 7 }; },
-      },
-    );
-
-    expect(verifyCalls).toHaveLength(1);
-    expect(verifyCalls[0].unitFile).toContain('unit-7.md');
-    expect(verifyCalls[0].projectDir).toBe(projectDir);
-    expect(verifyCalls[0].unitId).toBe(7);
+    const state = readUnitState(projectDir, 'test-build', 1)!;
+    expect(state.status).toBe('done');
+    // After the review-driven retry (commit outcome='retry', identicalFailure=false),
+    // the counter is cleared. Subsequent review-PASS keeps it at 0.
+    expect(state.identicalFailureCount).toBe(0);
   });
 });
 
@@ -945,6 +1035,37 @@ describe('buildMechanicalContext', () => {
     const ctx = buildMechanicalContext('dispatch', 'stage-runner', 1, stdout, stderr);
     expect(ctx.stdoutHead).toBe(stdout);
     expect(ctx.stderrHead).toBe(stderr);
+  });
+});
+
+// ─── Import-surface guard (replaces the planned eslint lint rule) ──────────
+
+// Guard against re-introducing the v0.5.6 dual-write-path bug. All state
+// transitions during the build stage must funnel through the three
+// `ralph/build-actions.ts` action functions; BLR must never import low-level
+// state helpers from `./ralph/unit-state.ts` directly.
+describe('build-loop-runner.ts import-surface guard', () => {
+  test('does NOT import from ./ralph/unit-state.ts', () => {
+    const src = readFileSync(path.join(__dirname, '..', 'build-loop-runner.ts'), 'utf-8');
+    expect(src).not.toMatch(/from\s+['"]\.\/ralph\/unit-state\.ts?['"]/);
+    expect(src).not.toMatch(/from\s+['"]\.\/ralph\/unit-state['"]/);
+  });
+
+  test('does NOT reference the forbidden state-transition helpers by identifier', () => {
+    const src = readFileSync(path.join(__dirname, '..', 'build-loop-runner.ts'), 'utf-8');
+    // Imports from unit-state.ts would bring these names into scope; verify
+    // they're not referenced as callable identifiers. (Comments are allowed.)
+    const forbidden = [
+      'reserveAttempt', 'commitAttemptResult', 'markUnitDone', 'markUnitFailed',
+      'setReviewFeedback', 'abandonReservation', 'hashUnitFile', 'detectStuck',
+    ];
+    // Strip single-line and block comments so legitimate references in docstrings don't trip the guard.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    for (const name of forbidden) {
+      // Word boundary + open-paren means "called as a function" — what we ban.
+      const re = new RegExp(`\\b${name}\\s*\\(`);
+      expect({ name, matched: re.test(code) }).toEqual({ name, matched: false });
+    }
   });
 });
 

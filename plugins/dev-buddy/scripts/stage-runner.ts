@@ -31,6 +31,9 @@ import { loadDevBuddyConfig, atomicWriteFile } from './pipeline-config.ts';
 import { readPresets } from './preset-utils.ts';
 import { loadStageDefinition, getSystemPrompt, composePrompt, discoverSystemPrompts } from './system-prompts.ts';
 import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
+import { UNIT_REVIEW_FILES_MAX_BYTES } from './ralph/types.ts';
+import { resolveRalphSlug } from './ralph/paths.ts';
+import { readFilesTouched } from './build-loop-runner.ts';
 import type { StageExecutor, DevBuddyConfig } from '../types/pipeline.ts';
 import type { Preset } from '../types/presets.ts';
 import type { StageType } from '../types/stage-definitions.ts';
@@ -222,8 +225,19 @@ function emitError(phase: string, error: string, exitCode: number = 2, partialOu
  * - discovery: feature description only (+ feedback on re-run)
  * - ralph-requirements: feature + ## Discovery section
  * - decomposition: feature + ## Discovery + ## Requirements sections
+ * - unit-review (when unitId provided): feature + unit-N.md + Implementation Files
+ *
+ * `cwd` is the project working directory — required for unit-review to resolve
+ * `### Files to Touch` paths when composing the Implementation Files block.
  */
-function buildStageTask(stageType: string, featureDescription: string, planPath: string): string {
+function buildStageTask(
+  stageType: string,
+  featureDescription: string,
+  planPath: string,
+  cwd: string,
+  unitId?: number,
+  debugEnabled: boolean = false,
+): string {
   let planContent = '';
   try {
     planContent = fs.readFileSync(planPath, 'utf-8');
@@ -276,6 +290,38 @@ function buildStageTask(stageType: string, featureDescription: string, planPath:
     if (requirements) {
       context += '\n\n---\n\n## Prior Requirements\n\n' + requirements;
     }
+  }
+
+  // unit-review: single source of truth for review-context composition. BLR
+  // dispatches `stage-runner --stage-type unit-review --unit N`; the review
+  // prompt is assembled here from unit-N.md + the files listed in its
+  // `### Files to Touch` section. Size-capped via UNIT_REVIEW_FILES_MAX_BYTES.
+  if (stageType === 'unit-review' && unitId !== undefined) {
+    const slug = resolveRalphSlug(planPath);
+    const unitPath = path.join(path.dirname(planPath), 'ralph', slug, `unit-${unitId}.md`);
+    let unitFile: string;
+    try {
+      unitFile = fs.readFileSync(unitPath, 'utf-8');
+    } catch {
+      throw new Error(`unit ${unitId} file not found at ${unitPath}`);
+    }
+    const implementedRaw = readFilesTouched(unitFile, cwd);
+    const bytesIn = Buffer.byteLength(implementedRaw, 'utf-8');
+    let implemented = implementedRaw;
+    if (bytesIn > UNIT_REVIEW_FILES_MAX_BYTES) {
+      implemented = implementedRaw.slice(0, UNIT_REVIEW_FILES_MAX_BYTES)
+        + '\n\n[\u2026 truncated at UNIT_REVIEW_FILES_MAX_BYTES \u2026]';
+      vcpLog(cwd, {
+        source: 'stage-runner',
+        event: 'unit-review.context.truncated',
+        decision: 'info',
+        details: `slug=${slug} unit=${unitId} bytesIn=${bytesIn} capBytes=${UNIT_REVIEW_FILES_MAX_BYTES}`,
+      }, debugEnabled).catch(() => {});
+    }
+    return context
+      + '\n\n---\n\n## Unit Plan\n\n' + unitFile
+      + '\n\n---\n\n## Implementation Files\n\n'
+      + (implemented || '(no files listed in `### Files to Touch`)');
   }
 
   return context;
@@ -593,6 +639,7 @@ interface StageRunnerArgs {
   planPath: string;
   cwd: string;
   task: string;
+  unitId?: number;
 }
 
 function parseArgs(argv: string[]): StageRunnerArgs {
@@ -602,6 +649,7 @@ function parseArgs(argv: string[]): StageRunnerArgs {
   let cwd = '';
   let task = '';
   let taskFromStdin = false;
+  let unitId: number | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -621,6 +669,13 @@ function parseArgs(argv: string[]): StageRunnerArgs {
         task = next; i++; break;
       case '--task-stdin':
         taskFromStdin = true; break;
+      case '--unit':
+        if (!next) throw new Error('--unit requires a value');
+        unitId = parseInt(next, 10);
+        if (isNaN(unitId) || unitId < 1) {
+          throw new Error(`Invalid --unit value: ${next}. Must be a positive integer.`);
+        }
+        i++; break;
       default:
         break;
     }
@@ -629,7 +684,13 @@ function parseArgs(argv: string[]): StageRunnerArgs {
   if (!stageType) throw new Error('--stage-type is required');
   if (!planPath) throw new Error('--plan is required');
   if (!cwd) throw new Error('--cwd is required');
-  if (!task && !taskFromStdin) throw new Error('--task or --task-stdin is required');
+
+  // unit-review + --unit N synthesizes the task itself from unit-N.md +
+  // Implementation Files; --task / --task-stdin are optional in that mode.
+  const taskSynthesized = stageType === 'unit-review' && unitId !== undefined;
+  if (!task && !taskFromStdin && !taskSynthesized) {
+    throw new Error('--task or --task-stdin is required');
+  }
 
   // Stdin wins when both provided (avoids argv size limits + ps exposure)
   if (taskFromStdin) {
@@ -638,7 +699,7 @@ function parseArgs(argv: string[]): StageRunnerArgs {
     task = stdinBuf.trim();
   }
 
-  return { stageType, planPath, cwd, task };
+  return { stageType, planPath, cwd, task, unitId };
 }
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
@@ -651,7 +712,7 @@ async function main(): Promise<void> {
     emitError('validation', (err as Error).message, 1);
   }
 
-  const { stageType, planPath, cwd, task } = parsedArgs;
+  const { stageType, planPath, cwd, task, unitId } = parsedArgs;
   const debugEnabled = await isDebugEnabled();
 
   await vcpLog(cwd, {
@@ -720,7 +781,7 @@ async function main(): Promise<void> {
   }
 
   // 4. Build task with prior stage context
-  const stageTask = buildStageTask(stageType, task, planPath);
+  const stageTask = buildStageTask(stageType, task, planPath, cwd, unitId, debugEnabled);
 
   // 5. Segment executors
   const segments = segmentExecutors(stageConfig.executors);

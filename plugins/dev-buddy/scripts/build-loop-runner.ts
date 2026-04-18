@@ -1,19 +1,26 @@
 #!/usr/bin/env bun
 /**
- * Build Loop Runner — single-attempt build executor for the Ralph pipeline.
+ * Build Loop Runner — per-unit driver for the Ralph pipeline.
  *
- * Executes ONE build attempt per invocation: dispatches the build executor
- * via stage-runner.ts, runs backpressure, returns structured outcome JSON.
- * BLR writes NOTHING — no state files, no unit-N.md, no review dispatch.
- * Retry, unit-review, and state persistence are driven by the state machine
- * via compose_build_dispatch → BLR → record_attempt_result → record_review_result.
+ * Drives one unit's full build + optional review loop by calling the three
+ * action functions in ralph/build-actions.ts:
+ *   composeBuildDispatch      → seed, reserve attempt, compose prompt
+ *   recordAttemptResultAction → commit outcome, decide next action
+ *   recordReviewResultAction  → commit review, decide next action
+ *
+ * BLR owns dispatch I/O, backpressure execution, contract-verify, review
+ * dispatch, and event streaming. ALL state mutation, hash guards, stuck
+ * detection, and terminal transitions live in build-actions.ts — the same
+ * path the SM CLI uses. BLR never writes to unit-N.json or unit-N.md.
  *
  * Usage:
- *   bun build-loop-runner.ts --plan <path> --cwd <dir> --unit <id> [--lease <token>]
+ *   bun build-loop-runner.ts --plan <path> --cwd <dir> --unit <id>
  *
- * Exit codes:
- *   0 - attempt_complete (structured outcome)
- *   1 - validation error
+ * Emits JSON events (one per line) on stdout:
+ *   {event:"attempt_start", attempt, unitId}
+ *   {event:"review_start", attempt, unitId}
+ *   {event:"review_verdict", passed, attempt, unitId}
+ *   {event:"complete", status:"done"|"failed"|"stuck", unitId, attempts, reason, orchestratorHints?}
  */
 
 import { spawn } from 'child_process';
@@ -24,8 +31,9 @@ import { verifyContract, formatFailureMessage } from './contract-verifier.ts';
 import type { ContractVerifyResult } from './contract-verifier.ts';
 import { vcpLog, isDebugEnabled, capLogPayload } from './vcp-logger.ts';
 import type {
-  BackpressureResult, UnitBuildDispatchResult, AttemptOutcome,
+  BackpressureResult, UnitBuildDispatchResult,
   MechanicalContext,
+  ComposeBuildDispatchOutput,
 } from './ralph/types.ts';
 import {
   splitUnitFile,
@@ -42,13 +50,21 @@ import type {
   DispatchPriority,
   ComposeBuildDispatchPromptResult,
 } from './ralph/prompt-assembly.ts';
+import { resolveUnitPath, resolveRalphSlug } from './ralph/paths.ts';
+import {
+  composeBuildDispatch,
+  recordAttemptResultAction,
+  recordReviewResultAction,
+} from './ralph/build-actions.ts';
 
-// Re-export unit-file helpers still used by callers importing from BLR.
+// Re-export unit-file helpers still used by external callers importing from BLR.
 export { splitUnitFile, extractBackpressureCommands, upsertMetadataLine, replaceOrAppendSection };
-// Re-export prompt-assembly surface for tests and external callers that
-// previously imported these from build-loop-runner.ts.
+// Re-export prompt-assembly surface for external callers that previously
+// imported these from build-loop-runner.ts.
 export { composeBuildDispatchPrompt, composeBuildDispatchPromptFromUnitFile };
 export type { DispatchPriority, ComposeBuildDispatchPromptResult };
+// resolveUnitPath lives in ralph/paths.ts; re-exported here for the BLR surface.
+export { resolveUnitPath };
 
 /** Maximum head/tail excerpt size per channel in a {@link MechanicalContext}. */
 export const MECHANICAL_CONTEXT_EXCERPT_MAX = 1000;
@@ -86,7 +102,7 @@ export function buildMechanicalContext(
 // ─── CLI ARG PARSING ────────────────────────────────────────────────────────
 
 export function parseBuildLoopArgs(argv: string[]): {
-  planPath: string; cwd: string; unitId: number; lease?: string;
+  planPath: string; cwd: string; unitId: number;
 } {
   const planIdx = argv.indexOf('--plan');
   if (planIdx === -1 || planIdx + 1 >= argv.length) {
@@ -104,30 +120,7 @@ export function parseBuildLoopArgs(argv: string[]): {
   if (isNaN(unitId) || unitId < 1) {
     throw new Error(`Invalid --unit value: ${argv[unitIdx + 1]}. Must be a positive integer.`);
   }
-  const leaseIdx = argv.indexOf('--lease');
-  const lease = (leaseIdx !== -1 && leaseIdx + 1 < argv.length)
-    ? argv[leaseIdx + 1]
-    : undefined;
-  return { planPath: argv[planIdx + 1], cwd: argv[cwdIdx + 1], unitId, lease };
-}
-
-// ─── UNIT PATH RESOLUTION ──────────────────────────────────────────────────
-
-/**
- * Resolve the unit plan file path from the plan path and unit ID.
- * Plan path format: <projectDir>/.vcp/plan/ralph-<slug>.md
- * Unit path format: <projectDir>/.vcp/plan/ralph/<slug>/unit-<id>.md
- */
-export function resolveUnitPath(planPath: string, unitId: number): { unitPath: string; slug: string } {
-  const planBasename = path.basename(planPath);
-  const slugMatch = planBasename.match(/^ralph-(.+)\.md$/);
-  if (!slugMatch) {
-    throw new Error(`Cannot extract slug from plan filename: ${planBasename}`);
-  }
-  const slug = slugMatch[1];
-  const planDir = path.dirname(planPath);
-  const unitPath = path.join(planDir, 'ralph', slug, `unit-${unitId}.md`);
-  return { unitPath, slug };
+  return { planPath: argv[planIdx + 1], cwd: argv[cwdIdx + 1], unitId };
 }
 
 // ─── STAGE-RUNNER SUBPROCESS ─────────────────────────────────────────────────
@@ -139,34 +132,51 @@ interface StageRunnerResult {
   code: number | null;
 }
 
+interface SpawnStageRunnerArgs {
+  stageType: string;
+  planPath: string;
+  cwd: string;
+  debugEnabled: boolean;
+  /** Task payload. When defined, piped via stdin + `--task-stdin`. Omit for unit-review (task synthesized by stage-runner from --unit). */
+  task?: string;
+  /** Forwarded as `--unit <N>`. Required for unit-review (triggers task synthesis there). */
+  unitId?: number;
+}
+
 /**
- * Spawn stage-runner.ts as subprocess and return raw output.
+ * Spawn stage-runner.ts as subprocess and return raw output. Task is piped on
+ * stdin when provided; `--unit N` is forwarded when provided. For unit-review,
+ * callers pass `unitId` and omit `task` — stage-runner synthesizes the task
+ * internally from unit-N.md + Implementation Files.
  */
-function spawnStageRunner(
-  stageType: string,
-  task: string,
-  planPath: string,
-  cwd: string,
-  debugEnabled: boolean,
-): Promise<StageRunnerResult> {
+function spawnStageRunner(args: SpawnStageRunnerArgs): Promise<StageRunnerResult> {
+  const { stageType, planPath, cwd, debugEnabled, task, unitId } = args;
   const stageRunnerPath = path.join(path.dirname(import.meta.path), 'stage-runner.ts');
   return new Promise<StageRunnerResult>((resolve) => {
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
-    const proc = spawn('bun', [
+    const runnerArgs = [
       stageRunnerPath,
       '--stage-type', stageType,
       '--plan', planPath,
       '--cwd', cwd,
-      '--task-stdin',
-    ], {
+    ];
+    if (unitId !== undefined) {
+      runnerArgs.push('--unit', String(unitId));
+    }
+    if (task !== undefined) {
+      runnerArgs.push('--task-stdin');
+    }
+    const proc = spawn('bun', runnerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd,
     });
 
     proc.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
     proc.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
-    proc.stdin!.write(task);
+    if (task !== undefined) {
+      proc.stdin!.write(task);
+    }
     proc.stdin!.end();
 
     proc.on('error', (err) => {
@@ -192,26 +202,12 @@ function spawnStageRunner(
 async function dispatchBuildUnitDefault(
   planPath: string,
   cwd: string,
-  unitPath: string,
   debugEnabled: boolean,
-  promptText: string | null,
+  promptText: string,
 ): Promise<UnitBuildDispatchResult> {
-  let task: string;
-  if (promptText) {
-    task = promptText;
-  } else {
-    const unitContent = fs.readFileSync(unitPath, 'utf-8');
-    const composed = composeBuildDispatchPromptFromUnitFile(unitContent, unitPath, null);
-    task = composed.prompt;
-    vcpLog(cwd, {
-      source: 'build-loop-runner', event: 'build_dispatch.composed', decision: 'info',
-      details:
-        `staticPlan=${composed.staticPlanChars} feedback=${composed.feedbackChars} ` +
-        `mechanical=${composed.mechanicalChars} priority=${composed.priority}`,
-    }, debugEnabled).catch(() => {});
-  }
-
-  const { stdout, stderr, code } = await spawnStageRunner('ralph-build', task, planPath, cwd, debugEnabled);
+  const { stdout, stderr, code } = await spawnStageRunner({
+    stageType: 'ralph-build', planPath, cwd, debugEnabled, task: promptText,
+  });
 
   const buildDispatchMechanical = (): MechanicalContext =>
     buildMechanicalContext('dispatch', 'stage-runner ralph-build', code ?? -1, stdout, stderr);
@@ -246,6 +242,53 @@ async function dispatchBuildUnitDefault(
       event: 'error', stage: 'ralph-build', phase: 'dispatch_failed',
       error: `stage-runner exited ${code}, stdout not parseable: ${stdout.slice(0, 500)}${stderrExcerpt}`,
       mechanicalContext: buildDispatchMechanical(),
+    };
+  }
+}
+
+// ─── REVIEW DISPATCH ────────────────────────────────────────────────────────
+
+/** Output from unit-review dispatch — synthesis text + optional dispatch error. */
+export interface UnitReviewDispatchOutput {
+  /** Synthesized review output. Empty string when dispatch failed. */
+  synthesis: string;
+  /** Non-null when stage-runner returned an error event or failed to spawn. */
+  error?: string;
+}
+
+/**
+ * Dispatch the `unit-review` stage. Spawns stage-runner with `--unit N` —
+ * stage-runner's unit-review branch composes the review task from unit-N.md +
+ * Implementation Files. BLR never composes the review prompt.
+ */
+async function dispatchUnitReviewDefault(
+  planPath: string,
+  cwd: string,
+  unitId: number,
+  debugEnabled: boolean,
+): Promise<UnitReviewDispatchOutput> {
+  const { stdout, stderr, code } = await spawnStageRunner({
+    stageType: 'unit-review', planPath, cwd, debugEnabled, unitId,
+  });
+
+  if (!stdout) {
+    return { synthesis: '', error: `unit-review dispatch failed: ${stderr || `exit ${code}`}` };
+  }
+
+  try {
+    const parsed = JSON.parse(stdout);
+    if (parsed.event === 'complete') {
+      return { synthesis: parsed.synthesis ?? '' };
+    }
+    return {
+      synthesis: '',
+      error: parsed.error ?? 'unit-review stage-runner returned non-complete event',
+    };
+  } catch {
+    const stderrExcerpt = stderr.trim() ? ` stderr=${stderr.slice(0, 500)}` : '';
+    return {
+      synthesis: '',
+      error: `unit-review stage-runner exited ${code}, stdout not parseable: ${stdout.slice(0, 500)}${stderrExcerpt}`,
     };
   }
 }
@@ -290,7 +333,8 @@ export function parseReviewVerdict(output: string): { passed: boolean; feedback:
 
 /**
  * Read the contents of files listed in a unit plan's "Files to Touch" section.
- * Returns formatted file contents for the reviewer.
+ * Returns formatted file contents for the reviewer. Used by stage-runner's
+ * unit-review branch to compose the Implementation Files block.
  */
 export function readFilesTouched(unitContent: string, cwd: string): string {
   const section = unitContent.match(/^#{2,3}\s+Files to Touch\s*$([\s\S]*?)(?=^#{2,3}\s|$(?!\n))/im);
@@ -312,148 +356,365 @@ export function readFilesTouched(unitContent: string, cwd: string): string {
   return parts.join('\n\n');
 }
 
-// ─── SINGLE-ATTEMPT EXECUTOR ──────────────────────────────────────────────
+// ─── ATTEMPT CLASSIFICATION (pure) ─────────────────────────────────────────
 
-export interface BuildLoopOverrides {
-  dispatchFn?: (planPath: string, cwd: string, unitPath: string, debug: boolean, promptText: string | null) => Promise<UnitBuildDispatchResult>;
-  backpressureFn?: typeof runBackpressure;
-  /** Injected for tests. Defaults to {@link verifyContract}. */
-  verifyContractFn?: (args: { unitFile: string; projectDir: string; unitId?: number }) => ContractVerifyResult;
+/** Input to {@link classifyAttempt}. */
+export interface ClassifyAttemptInput {
+  dispatch: UnitBuildDispatchResult;
+  backpressure: BackpressureResult[];
+  /** Count of backpressure commands extracted from the unit file — distinct from backpressure.length (skipped when dispatch errored). */
+  backpressureCommandCount: number;
+  /** Contract-verifier result, or null when not run (dispatch/backpressure already failed). */
+  contract: ContractVerifyResult | null;
+}
+
+/** Output from {@link classifyAttempt}. */
+export interface ClassifyAttemptOutput {
+  outcome: 'mechanical_pass' | 'mechanical_fail' | 'dispatch_error';
+  mechanicalContext: MechanicalContext | null;
 }
 
 /**
- * Execute a single build attempt. Stateless — returns structured outcome JSON
- * without writing any state files or unit markdown.
+ * Classify a single build attempt from dispatch + backpressure + contract results.
+ * Pure function — no I/O, no state. Extracted for unit-testable policy coverage.
  *
- * 1. Resolve unit path from plan slug + unit ID
- * 2. Dispatch build executor (via promptText stdin or fallback compose)
- * 3. Run backpressure commands
- * 4. Log failures (§11)
- * 5. Return outcome for SM to persist via record_attempt_result
+ * Priority: dispatch_error > mechanical_fail (backpressure) > mechanical_fail
+ * (contract-verifier) > mechanical_pass. Contract-verifier only runs when
+ * dispatch + backpressure are both green; skip/error both treated as pass.
  */
-export async function runSingleAttempt(
-  args: { planPath: string; cwd: string; unitId: number; lease?: string; promptText?: string },
-  overrides?: BuildLoopOverrides,
-): Promise<AttemptOutcome> {
+export function classifyAttempt(input: ClassifyAttemptInput): ClassifyAttemptOutput {
+  const { dispatch, backpressure, backpressureCommandCount, contract } = input;
+
+  if (dispatch.event !== 'complete') {
+    return {
+      outcome: 'dispatch_error',
+      mechanicalContext: dispatch.mechanicalContext ?? null,
+    };
+  }
+
+  const backpressureGreen =
+    (backpressure.length > 0 && backpressure.every(r => r.passed)) ||
+    (backpressure.length === 0 && backpressureCommandCount === 0);
+
+  if (!backpressureGreen) {
+    const firstFailure = backpressure.find(bp => !bp.passed);
+    return {
+      outcome: 'mechanical_fail',
+      mechanicalContext: firstFailure
+        ? buildMechanicalContext(
+            'backpressure', firstFailure.command, firstFailure.exitCode,
+            firstFailure.stdout, firstFailure.stderr,
+          )
+        : null,
+    };
+  }
+
+  if (contract && contract.event === 'fail') {
+    const formatted = formatFailureMessage(contract);
+    return {
+      outcome: 'mechanical_fail',
+      mechanicalContext: buildMechanicalContext(
+        'contract-verifier',
+        'bun plugins/dev-buddy/scripts/contract-verifier.ts',
+        1, '', formatted,
+      ),
+    };
+  }
+
+  return { outcome: 'mechanical_pass', mechanicalContext: null };
+}
+
+// ─── TERMINAL OUTCOME + UNIT LOOP ──────────────────────────────────────────
+
+/** Top-level status surfaced to the CC orchestrator. */
+export type TerminalStatus = 'done' | 'failed' | 'stuck';
+
+/**
+ * Terminal JSON emitted on the final `complete` line. `orchestratorHints` is
+ * an advisory pre-formatted hint for Claude Code — the top-level `status` and
+ * `reason` are the authoritative, consumer-neutral contract.
+ */
+export interface TerminalOutcome {
+  event: 'complete';
+  status: TerminalStatus;
+  unitId: number;
+  attempts: number;
+  reason: string;
+  orchestratorHints?: {
+    claudeCode: {
+      tool: 'TaskUpdate';
+      status: 'completed';
+      note: string;
+    };
+  };
+}
+
+export interface RunUnitLoopArgs {
+  planPath: string;
+  cwd: string;
+  unitId: number;
+  /** Defaults to `cwd`. Separated so tests can point projectDir at a fixture while cwd points at the build dir. */
+  projectDir?: string;
+}
+
+/** Discriminated union of events BLR emits on stdout during a unit loop. */
+export type BuildLoopEvent =
+  | { event: 'attempt_start'; unitId: number; attempt: number }
+  | { event: 'review_start'; unitId: number; attempt: number }
+  | { event: 'review_verdict'; unitId: number; attempt: number; passed: boolean }
+  | TerminalOutcome;
+
+export interface RunUnitLoopOverrides {
+  dispatchFn?: (planPath: string, cwd: string, debug: boolean, promptText: string) => Promise<UnitBuildDispatchResult>;
+  backpressureFn?: typeof runBackpressure;
+  verifyContractFn?: (args: { unitFile: string; projectDir: string; unitId?: number }) => ContractVerifyResult;
+  reviewDispatchFn?: (planPath: string, cwd: string, unitId: number, debug: boolean) => Promise<UnitReviewDispatchOutput>;
+  /** Injected for tests. Defaults to JSON.stringify → console.log. */
+  emitFn?: (event: BuildLoopEvent) => void;
+}
+
+function defaultEmit(event: BuildLoopEvent): void {
+  console.log(JSON.stringify(event));
+}
+
+function buildTerminal(
+  status: TerminalStatus,
+  unitId: number,
+  attempts: number,
+  reason: string,
+): TerminalOutcome {
+  const outcome: TerminalOutcome = {
+    event: 'complete',
+    status, unitId, attempts, reason,
+  };
+  // Stuck tasks must NOT be marked completed — CC halts for user intervention.
+  // done/failed both become `completed` because TaskOperation's vocabulary is
+  // only `in_progress | completed`; the failed semantic lives in the note text.
+  if (status !== 'stuck') {
+    outcome.orchestratorHints = {
+      claudeCode: {
+        tool: 'TaskUpdate',
+        status: 'completed',
+        note: status === 'done' ? reason : `failed — ${reason}`,
+      },
+    };
+  }
+  return outcome;
+}
+
+/**
+ * Map an error thrown by {@link composeBuildDispatch} to a terminal outcome.
+ * composeBuildDispatch throws for already-terminal units or exhausted budgets;
+ * BLR surfaces these as a terminal outcome instead of looping. For already-done
+ * units the caller (CC) should not have invoked BLR in the first place, but we
+ * report the honest status rather than pretend it failed.
+ */
+function terminalFromComposeError(err: Error, unitId: number): TerminalOutcome {
+  const msg = err.message;
+  if (/terminal status 'done'/.test(msg)) {
+    return buildTerminal('done', unitId, 0, msg);
+  }
+  return buildTerminal('failed', unitId, 0, msg);
+}
+
+/**
+ * Drive one unit's full build + review loop to terminal outcome. Calls the
+ * three build-actions.ts functions in-process; BLR never mutates state.
+ */
+export async function runUnitLoop(
+  args: RunUnitLoopArgs,
+  overrides?: RunUnitLoopOverrides,
+): Promise<TerminalOutcome> {
   const debug = await isDebugEnabled();
+  const projectDir = args.projectDir ?? args.cwd;
+  const slug = resolveRalphSlug(args.planPath);
   const dispatchFn = overrides?.dispatchFn ?? dispatchBuildUnitDefault;
   const backpressureFn = overrides?.backpressureFn ?? runBackpressure;
   const verifyContractFn = overrides?.verifyContractFn ?? verifyContract;
+  const reviewDispatchFn = overrides?.reviewDispatchFn ?? dispatchUnitReviewDefault;
+  const emit = overrides?.emitFn ?? defaultEmit;
 
-  const { unitPath, slug } = resolveUnitPath(args.planPath, args.unitId);
-
-  const unitContent = fs.readFileSync(unitPath, 'utf-8');
-  const commands = extractBackpressureCommands(unitContent);
-
-  const dispatch = await dispatchFn(args.planPath, args.cwd, unitPath, debug, args.promptText ?? null);
-
-  // Re-read unit file post-dispatch (executor may have modified project files)
-  const refreshedContent = fs.readFileSync(unitPath, 'utf-8');
-  const refreshedCommands = extractBackpressureCommands(refreshedContent);
-  const effectiveCommands = refreshedCommands.length > 0 ? refreshedCommands : commands;
-
-  // Run backpressure only when dispatch succeeded and commands exist
-  const backpressure: BackpressureResult[] =
-    (dispatch.event === 'complete' && effectiveCommands.length > 0)
-      ? backpressureFn(effectiveCommands, args.cwd)
-      : [];
-
-  // §11: backpressure.fail — emit per failing command, fsync'd
-  for (const bp of backpressure) {
-    if (bp.passed) continue;
-    const payload =
-      `stdout.tail: ${capLogPayload(bp.stdout ?? '', 4 * 1024)}\n` +
-      `stderr.tail: ${capLogPayload(bp.stderr ?? '', 4 * 1024)}`;
-    vcpLog(args.cwd, {
-      source: 'build-loop-runner',
-      event: 'backpressure.fail',
-      decision: 'info',
-      fsync: true,
-      details: `slug=${slug} unit=${args.unitId} command=${bp.command} ` +
-        `exitCode=${bp.exitCode} stdoutBytes=${(bp.stdout ?? '').length} stderrBytes=${(bp.stderr ?? '').length}\n${capLogPayload(payload)}`,
-    }, debug).catch(() => {});
-  }
-
-  // Determine outcome
-  let outcome: AttemptOutcome['outcome'];
-  let mechanicalContext: MechanicalContext | null = null;
-
-  const backpressureGreen =
-    dispatch.event === 'complete' &&
-    ((backpressure.length > 0 && backpressure.every(r => r.passed)) ||
-      (backpressure.length === 0 && effectiveCommands.length === 0));
-
-  if (dispatch.event !== 'complete') {
-    outcome = 'dispatch_error';
-    mechanicalContext = dispatch.mechanicalContext ?? null;
-  } else if (backpressureGreen) {
-    // Contract verifier gate: backpressure passed, but the producer may have
-    // forgotten `export` on a promised symbol. `tsc` during backpressure is
-    // consumer-driven — it only errors when a file imports the missing symbol,
-    // and the consumer is often in a later unit that doesn't exist yet. The
-    // probe forces resolution for every exports[] entry in the Contract
-    // Manifest, catching the gap before the unit is marked done.
-    //
-    // Failures become mechanical_fail with source='contract-verifier' so the
-    // v0.5.5 mechanical-carry path replays them into the next attempt's prompt.
-    // skip/error both treated as pass (legacy units with no manifest, and
-    // infrastructure problems that would also break backpressure's own tsc).
-    let verify: ContractVerifyResult;
+  while (true) {
+    // ─ Phase 1: compose + reserve ──────────────────────────────────────────
+    let reservation: ComposeBuildDispatchOutput;
     try {
-      verify = verifyContractFn({ unitFile: unitPath, projectDir: args.cwd, unitId: args.unitId });
+      reservation = composeBuildDispatch(projectDir, slug, args.unitId);
     } catch (err) {
-      verify = { event: 'error', unitId: args.unitId, error: (err as Error).message };
+      const terminal = terminalFromComposeError(err as Error, args.unitId);
+      emit(terminal);
+      return terminal;
     }
 
-    if (verify.event === 'fail') {
-      outcome = 'mechanical_fail';
-      const formatted = formatFailureMessage(verify);
-      mechanicalContext = buildMechanicalContext(
-        'contract-verifier',
-        'bun plugins/dev-buddy/scripts/contract-verifier.ts',
-        1,
-        '',
-        formatted,
-      );
+    emit({
+      event: 'attempt_start',
+      unitId: args.unitId,
+      attempt: reservation.attempt,
+    });
+
+    // ─ Phase 2: dispatch + backpressure + contract-verify ─────────────────
+    const dispatch = await dispatchFn(args.planPath, args.cwd, debug, reservation.prompt);
+
+    // Re-read unit file post-dispatch (executor may have mutated it, though
+    // the plan forbids BLR from mutating — the executor sees only the prompt).
+    const refreshedContent = fs.readFileSync(reservation.unitPath, 'utf-8');
+    const refreshedCommands = extractBackpressureCommands(refreshedContent);
+
+    const backpressure: BackpressureResult[] =
+      (dispatch.event === 'complete' && refreshedCommands.length > 0)
+        ? backpressureFn(refreshedCommands, args.cwd)
+        : [];
+
+    // §11: backpressure.fail — emit per failing command, fsync'd
+    for (const bp of backpressure) {
+      if (bp.passed) continue;
+      const payload =
+        `stdout.tail: ${capLogPayload(bp.stdout ?? '', 4 * 1024)}\n` +
+        `stderr.tail: ${capLogPayload(bp.stderr ?? '', 4 * 1024)}`;
       vcpLog(args.cwd, {
         source: 'build-loop-runner',
-        event: 'contract-verifier.fail',
+        event: 'backpressure.fail',
         decision: 'info',
         fsync: true,
-        details: `slug=${slug} unit=${args.unitId} failures=${verify.failures.length}\n${capLogPayload(formatted)}`,
+        details: `slug=${slug} unit=${args.unitId} command=${bp.command} ` +
+          `exitCode=${bp.exitCode} stdoutBytes=${(bp.stdout ?? '').length} stderrBytes=${(bp.stderr ?? '').length}\n${capLogPayload(payload)}`,
       }, debug).catch(() => {});
-    } else {
-      outcome = 'mechanical_pass';
-      if (verify.event === 'error') {
+    }
+
+    // Contract-verifier gate only when backpressure is green (cheap-to-expensive ordering).
+    let contract: ContractVerifyResult | null = null;
+    const backpressureGreen =
+      dispatch.event === 'complete' &&
+      ((backpressure.length > 0 && backpressure.every(r => r.passed)) ||
+        (backpressure.length === 0 && refreshedCommands.length === 0));
+    if (backpressureGreen) {
+      try {
+        contract = verifyContractFn({
+          unitFile: reservation.unitPath,
+          projectDir: args.cwd,
+          unitId: args.unitId,
+        });
+      } catch (err) {
+        contract = { event: 'error', unitId: args.unitId, error: (err as Error).message };
+      }
+      if (contract.event === 'fail') {
+        const formatted = formatFailureMessage(contract);
+        vcpLog(args.cwd, {
+          source: 'build-loop-runner',
+          event: 'contract-verifier.fail',
+          decision: 'info',
+          fsync: true,
+          details: `slug=${slug} unit=${args.unitId} failures=${contract.failures.length}\n${capLogPayload(formatted)}`,
+        }, debug).catch(() => {});
+      } else if (contract.event === 'error') {
         vcpLog(args.cwd, {
           source: 'build-loop-runner',
           event: 'contract-verifier.error',
           decision: 'info',
-          details: `slug=${slug} unit=${args.unitId} error=${verify.error}`,
+          details: `slug=${slug} unit=${args.unitId} error=${contract.error}`,
         }, debug).catch(() => {});
       }
     }
-  } else {
-    outcome = 'mechanical_fail';
-    const firstFailure = backpressure.find(bp => !bp.passed);
-    if (firstFailure) {
-      mechanicalContext = buildMechanicalContext(
-        'backpressure', firstFailure.command, firstFailure.exitCode,
-        firstFailure.stdout, firstFailure.stderr,
-      );
-    }
-  }
 
-  return {
-    event: 'attempt_complete',
-    unitId: args.unitId,
-    unitPath,
-    outcome,
-    mechanicalContext,
-    backpressureResults: backpressure,
-    synthesis: dispatch.synthesis ?? null,
-    lease: args.lease ?? null,
-  };
+    const classified = classifyAttempt({
+      dispatch, backpressure,
+      backpressureCommandCount: refreshedCommands.length,
+      contract,
+    });
+
+    // ─ Phase 3: commit + decide ────────────────────────────────────────────
+    const attemptResult = recordAttemptResultAction(projectDir, slug, {
+      unitId: args.unitId,
+      lease: reservation.lease,
+      outcome: classified.outcome,
+      mechanicalContext: classified.mechanicalContext,
+    });
+
+    if (attemptResult.nextAction === 'unit_done') {
+      const terminal = buildTerminal(
+        'done', args.unitId, reservation.attempt,
+        'passed mechanical gate; review disabled',
+      );
+      emit(terminal);
+      return terminal;
+    }
+    if (attemptResult.nextAction === 'unit_failed') {
+      const terminal = buildTerminal(
+        'failed', args.unitId, reservation.attempt,
+        `attempt budget exhausted after ${reservation.attempt} tries`,
+      );
+      emit(terminal);
+      return terminal;
+    }
+    if (attemptResult.nextAction === 'escalate_stuck') {
+      const count = attemptResult.identicalFailureCount ?? 2;
+      const terminal = buildTerminal(
+        'stuck', args.unitId, reservation.attempt,
+        `identical mechanical failure x${count} — halt for intervention`,
+      );
+      emit(terminal);
+      return terminal;
+    }
+    if (attemptResult.nextAction === 'retry_unit') {
+      // Lease auto-closed inside commitAttemptResult.
+      continue;
+    }
+    if (attemptResult.nextAction === 'dispatch_unit_review') {
+      // Reservation stays OPEN across the review dispatch —
+      // recordReviewResultAction commits it with the verdict.
+      emit({
+        event: 'review_start',
+        unitId: args.unitId,
+        attempt: reservation.attempt,
+      });
+      const reviewOutput = await reviewDispatchFn(
+        args.planPath, args.cwd, args.unitId, debug,
+      );
+      if (reviewOutput.error) {
+        vcpLog(args.cwd, {
+          source: 'build-loop-runner',
+          event: 'unit-review.dispatch_error',
+          decision: 'warn',
+          details: `slug=${slug} unit=${args.unitId} error=${reviewOutput.error}`,
+        }, debug).catch(() => {});
+      }
+      const verdict = parseReviewVerdict(reviewOutput.synthesis ?? '');
+      emit({
+        event: 'review_verdict',
+        unitId: args.unitId,
+        attempt: reservation.attempt,
+        passed: verdict.passed,
+      });
+
+      const reviewResult = await recordReviewResultAction(projectDir, slug, {
+        unitId: args.unitId,
+        lease: reservation.lease,
+        passed: verdict.passed,
+        feedback: verdict.feedback,
+      }, debug);
+
+      if (reviewResult.nextAction === 'unit_done') {
+        const terminal = buildTerminal(
+          'done', args.unitId, reservation.attempt,
+          `passed review on attempt ${reservation.attempt}`,
+        );
+        emit(terminal);
+        return terminal;
+      }
+      if (reviewResult.nextAction === 'unit_failed') {
+        const terminal = buildTerminal(
+          'failed', args.unitId, reservation.attempt,
+          `review NEEDS_CHANGES; budget exhausted after ${reservation.attempt} tries`,
+        );
+        emit(terminal);
+        return terminal;
+      }
+      if (reviewResult.nextAction === 'retry_unit') {
+        continue;
+      }
+      throw new Error(`runUnitLoop: unknown review nextAction ${(reviewResult as { nextAction: string }).nextAction}`);
+    }
+    throw new Error(`runUnitLoop: unknown attempt nextAction ${(attemptResult as { nextAction: string }).nextAction}`);
+  }
 }
 
 // ─── CLI ENTRY POINT ────────────────────────────────────────────────────────
@@ -468,47 +729,33 @@ if (import.meta.main) {
       const args = parseBuildLoopArgs(process.argv);
       cwd = args.cwd;
 
-      // Read prompt from stdin when piped (composed by SM's compose_build_dispatch)
-      let promptText: string | undefined;
-      if (!process.stdin.isTTY) {
-        const chunks: Buffer[] = [];
-        for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-        const stdinContent = Buffer.concat(chunks).toString('utf-8').trim();
-        if (stdinContent) promptText = stdinContent;
-      }
-
       await vcpLog(cwd, {
         source: SRC, event: 'start', decision: 'info',
-        details: `plan=${path.basename(args.planPath)} unit=${args.unitId} lease=${args.lease ?? 'none'} promptStdin=${!!promptText} cwd=${cwd}`,
+        details: `plan=${path.basename(args.planPath)} unit=${args.unitId} cwd=${cwd}`,
       }, debug);
 
-      const result = await runSingleAttempt({
+      const result = await runUnitLoop({
         planPath: args.planPath,
         cwd: args.cwd,
         unitId: args.unitId,
-        lease: args.lease,
-        promptText,
       });
 
       await vcpLog(cwd, {
         source: SRC, event: 'complete', decision: 'info',
-        details: `outcome=${result.outcome} unit=${result.unitId} lease=${result.lease ?? 'none'}`,
+        details: `status=${result.status} unit=${result.unitId} attempts=${result.attempts}`,
       }, debug);
 
-      console.log(JSON.stringify(result, null, 2));
+      // runUnitLoop already emitted the terminal `complete` event — do not re-emit.
     } catch (err) {
       const msg = (err as Error).message;
-      const errorResult: AttemptOutcome = {
-        event: 'attempt_complete',
+      const terminal: TerminalOutcome = {
+        event: 'complete',
+        status: 'failed',
         unitId: 0,
-        unitPath: '',
-        outcome: 'dispatch_error',
-        mechanicalContext: null,
-        backpressureResults: [],
-        synthesis: null,
-        lease: null,
+        attempts: 0,
+        reason: `fatal: ${msg}`,
       };
-      console.log(JSON.stringify({ ...errorResult, error: msg }, null, 2));
+      console.log(JSON.stringify(terminal));
       await vcpLog(cwd, { source: SRC, event: 'fatal', decision: 'error', details: msg }, debug);
       process.exit(1);
     }

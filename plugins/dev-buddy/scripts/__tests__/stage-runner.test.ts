@@ -32,7 +32,7 @@ function makeTmpDir(): string {
 
 describe('buildStageTask', () => {
   test('discovery stage returns feature description only', () => {
-    const result = buildStageTask('discovery', 'Build a login page', '/nonexistent/plan.md');
+    const result = buildStageTask('discovery', 'Build a login page', '/nonexistent/plan.md', '/tmp');
     expect(result).toBe('Build a login page');
   });
 
@@ -52,7 +52,7 @@ describe('buildStageTask', () => {
       'AC1: Login form validates email format.',
     ].join('\n'));
 
-    const result = buildStageTask('ralph-requirements', 'Build a login page', planPath);
+    const result = buildStageTask('ralph-requirements', 'Build a login page', planPath, '/tmp');
     expect(result).toContain('Build a login page');
     expect(result).toContain('Prior Discovery Findings');
     expect(result).toContain('Found auth module at src/auth.ts');
@@ -82,7 +82,7 @@ describe('buildStageTask', () => {
       'Unit 1: Form component.',
     ].join('\n'));
 
-    const result = buildStageTask('decomposition', 'Build a login page', planPath);
+    const result = buildStageTask('decomposition', 'Build a login page', planPath, '/tmp');
     expect(result).toContain('Build a login page');
     expect(result).toContain('Prior Discovery Findings');
     expect(result).toContain('Found auth module');
@@ -116,14 +116,14 @@ describe('buildStageTask', () => {
       '- **Validates:** AC-1',
     ].join('\n'));
 
-    const result = buildStageTask('decomposition', 'Build a login page', planPath);
+    const result = buildStageTask('decomposition', 'Build a login page', planPath, '/tmp');
     expect(result).toContain('AC-1: Login form validates email');
     expect(result).toContain('UAT-1: Login flow');
     expect(result).toContain('Prior Requirements');
   });
 
   test('missing plan file returns feature description only for requirements/decompose', () => {
-    const result = buildStageTask('ralph-requirements', 'Build a login page', '/nonexistent/plan.md');
+    const result = buildStageTask('ralph-requirements', 'Build a login page', '/nonexistent/plan.md', '/tmp');
     expect(result).toBe('Build a login page');
   });
 
@@ -132,7 +132,7 @@ describe('buildStageTask', () => {
     const planPath = path.join(tmp, 'plan.md');
     writeFileSync(planPath, '# Feature: Auth\n\n## Status\n\nSome status text.\n');
 
-    const result = buildStageTask('ralph-requirements', 'Build a login page', planPath);
+    const result = buildStageTask('ralph-requirements', 'Build a login page', planPath, '/tmp');
     expect(result).toBe('Build a login page');
   });
 
@@ -148,7 +148,7 @@ describe('buildStageTask', () => {
       '',
     ].join('\n'));
 
-    const result = buildStageTask('decomposition', 'Build a login page', planPath);
+    const result = buildStageTask('decomposition', 'Build a login page', planPath, '/tmp');
     expect(result).toContain('Prior Discovery Findings');
     expect(result).toContain('Found auth module');
     expect(result).not.toContain('Prior Requirements');
@@ -171,7 +171,7 @@ describe('buildStageTask', () => {
       'Please also check the OAuth integration in src/oauth.ts.',
     ].join('\n'));
 
-    const result = buildStageTask('discovery', 'Build a login page', planPath);
+    const result = buildStageTask('discovery', 'Build a login page', planPath, '/tmp');
     expect(result).toContain('Build a login page');
     expect(result).toContain('User Feedback (Address This)');
     expect(result).toContain('OAuth integration in src/oauth.ts');
@@ -190,7 +190,7 @@ describe('buildStageTask', () => {
       'Found auth module.',
     ].join('\n'));
 
-    const result = buildStageTask('discovery', 'Build a login page', planPath);
+    const result = buildStageTask('discovery', 'Build a login page', planPath, '/tmp');
     expect(result).toBe('Build a login page');
     expect(result).not.toContain('User Feedback');
   });
@@ -210,7 +210,7 @@ describe('buildStageTask', () => {
       'Requirements should cover password reset flow too.',
     ].join('\n'));
 
-    const result = buildStageTask('ralph-requirements', 'Build a login page', planPath);
+    const result = buildStageTask('ralph-requirements', 'Build a login page', planPath, '/tmp');
     expect(result).toContain('Build a login page');
     expect(result).toContain('User Feedback (Address This)');
     expect(result).toContain('password reset flow');
@@ -237,7 +237,7 @@ describe('buildStageTask', () => {
       'Split the auth unit into separate login and signup units.',
     ].join('\n'));
 
-    const result = buildStageTask('decomposition', 'Build a login page', planPath);
+    const result = buildStageTask('decomposition', 'Build a login page', planPath, '/tmp');
     expect(result).toContain('User Feedback (Address This)');
     expect(result).toContain('separate login and signup units');
     expect(result).toContain('Prior Discovery Findings');
@@ -261,7 +261,7 @@ describe('buildStageTask', () => {
       'AC1: Login validates email.',
     ].join('\n'));
 
-    const result = buildStageTask('ralph-requirements', 'Build a login page', planPath);
+    const result = buildStageTask('ralph-requirements', 'Build a login page', planPath, '/tmp');
     expect(result).not.toContain('User Feedback');
     expect(result).toContain('Prior Discovery Findings');
   });
@@ -285,7 +285,7 @@ describe('buildStageTask', () => {
       'Add OAuth support.',
     ].join('\n'));
 
-    const result = buildStageTask('decomposition', 'Build a login page', planPath);
+    const result = buildStageTask('decomposition', 'Build a login page', planPath, '/tmp');
     const feedbackIdx = result.indexOf('User Feedback (Address This)');
     const discoveryIdx = result.indexOf('Prior Discovery Findings');
     const reqIdx = result.indexOf('Prior Requirements');
@@ -295,6 +295,125 @@ describe('buildStageTask', () => {
     // Feedback must come before prior stage sections so executors see it first
     expect(feedbackIdx).toBeLessThan(discoveryIdx);
     expect(feedbackIdx).toBeLessThan(reqIdx);
+  });
+
+  // ─── unit-review branch (Part A — BLR dispatches stage-runner by unit ID) ─
+
+  // Helper: set up a project dir with a minimal plan and a unit-N.md under the
+  // expected ralph layout. The slug is derived from the plan filename
+  // (`ralph-{slug}.md`).
+  function setupUnitReviewProject(unitId: number, opts: { filesToTouch?: string[]; fileSizes?: number[]; slug?: string } = {}): {
+    cwd: string; planPath: string; unitPath: string;
+  } {
+    const cwd = makeTmpDir();
+    const slug = opts.slug ?? 'test-review';
+    const planDir = path.join(cwd, '.vcp', 'plan');
+    const unitDir = path.join(planDir, 'ralph', slug);
+    mkdirSync(unitDir, { recursive: true });
+    const planPath = path.join(planDir, `ralph-${slug}.md`);
+    writeFileSync(planPath, [
+      '# Feature: Test',
+      '',
+      '## Units of Work',
+      '',
+      `- Unit ${unitId}: Test`,
+    ].join('\n'));
+
+    // Optional touched files under cwd.
+    const filesToTouch = opts.filesToTouch ?? [];
+    filesToTouch.forEach((rel, i) => {
+      const abs = path.join(cwd, rel);
+      mkdirSync(path.dirname(abs), { recursive: true });
+      const content = opts.fileSizes ? 'x'.repeat(opts.fileSizes[i] ?? 100) : `// contents of ${rel}\nexport const x = 1;\n`;
+      writeFileSync(abs, content);
+    });
+
+    const filesSection = filesToTouch.length > 0
+      ? filesToTouch.map((f) => `- \`${f}\` -- existing | modify`).join('\n')
+      : '- (none)';
+    const unitPath = path.join(unitDir, `unit-${unitId}.md`);
+    writeFileSync(unitPath, [
+      `# Unit ${unitId}: Test Unit`,
+      '',
+      '**Status:** pending',
+      '**Attempts:** 0',
+      '**Max Attempts:** 3',
+      '',
+      '### Files to Touch',
+      filesSection,
+      '',
+      '### What to Implement',
+      'Implement it.',
+    ].join('\n'));
+
+    return { cwd, planPath, unitPath };
+  }
+
+  // Test 9 — happy path: valid unit-N.md + files touched produces a prompt
+  // containing both the Unit Plan block and the Implementation Files block.
+  test('[9] unit-review + --unit N + valid unit-N.md → output contains ## Unit Plan + ## Implementation Files', () => {
+    const { cwd, planPath } = setupUnitReviewProject(1, {
+      filesToTouch: ['src/auth/login.ts'],
+    });
+    const result = buildStageTask('unit-review', 'Feature description', planPath, cwd, 1);
+    expect(result).toContain('## Unit Plan');
+    expect(result).toContain('Unit 1: Test Unit');
+    expect(result).toContain('## Implementation Files');
+    expect(result).toContain('src/auth/login.ts');
+    expect(result).toContain('export const x = 1;');
+  });
+
+  // Test 10 — missing unit-N.md throws a clear error.
+  test('[10] unit-review + --unit N + missing unit file → throws', () => {
+    const cwd = makeTmpDir();
+    const planDir = path.join(cwd, '.vcp', 'plan');
+    mkdirSync(path.join(planDir, 'ralph', 'missing-unit'), { recursive: true });
+    const planPath = path.join(planDir, 'ralph-missing-unit.md');
+    writeFileSync(planPath, '# Feature\n\n## Units of Work\n\n- Unit 1: Test\n');
+
+    expect(() => buildStageTask('unit-review', 'Feature', planPath, cwd, 99))
+      .toThrow(/unit 99 file not found/);
+  });
+
+  // Test 11 — back-compat: unit-review called WITHOUT unitId behaves like a
+  // pass-through (no Unit Plan / Implementation Files blocks appended).
+  test('[11] unit-review without --unit (stdin path) passes through unchanged', () => {
+    const { cwd, planPath } = setupUnitReviewProject(1);
+    const result = buildStageTask('unit-review', 'Feature description', planPath, cwd);
+    // No unit-review branch injection.
+    expect(result).not.toContain('## Unit Plan');
+    expect(result).not.toContain('## Implementation Files');
+    // Feature description flows through.
+    expect(result).toBe('Feature description');
+  });
+
+  // Test 13 — oversized files-touched triggers truncation sentinel + vcpLog entry.
+  // (Test 12 lives in the parseArgs describe block below.)
+  test('[13] unit-review + files-touched > UNIT_REVIEW_FILES_MAX_BYTES → truncation sentinel + vcpLog entry', async () => {
+    const { UNIT_REVIEW_FILES_MAX_BYTES } = await import('../ralph/types.ts');
+    // One huge file that exceeds the cap by itself.
+    const oversize = UNIT_REVIEW_FILES_MAX_BYTES + 4096;
+    const { cwd, planPath } = setupUnitReviewProject(2, {
+      filesToTouch: ['src/huge.ts'],
+      fileSizes: [oversize],
+    });
+
+    // Pass debugEnabled=true so vcpLog actually writes.
+    const result = buildStageTask('unit-review', 'Feature', planPath, cwd, 2, true);
+    expect(result).toContain('[… truncated at UNIT_REVIEW_FILES_MAX_BYTES …]');
+
+    // Wait briefly for the fire-and-forget vcpLog to flush.
+    await new Promise((r) => setTimeout(r, 50));
+    const logPath = path.join(cwd, '.vcp', 'dev-buddy.log');
+    const logBody = fs.readFileSync(logPath, 'utf-8');
+    expect(logBody).toContain('unit-review.context.truncated');
+    expect(logBody).toContain(`unit=2`);
+    // bytesIn includes framing added by readFilesTouched (file headers etc.),
+    // so match by "> cap" bound rather than exact value.
+    const bytesInMatch = logBody.match(/bytesIn=(\d+)/);
+    expect(bytesInMatch).not.toBeNull();
+    expect(Number(bytesInMatch![1])).toBeGreaterThan(UNIT_REVIEW_FILES_MAX_BYTES);
+    expect(logBody).toContain(`capBytes=${UNIT_REVIEW_FILES_MAX_BYTES}`);
   });
 });
 
@@ -437,6 +556,31 @@ describe('parseArgs', () => {
 
   test('rejects missing --cwd', () => {
     expect(() => parseArgs(['bun', 'stage-runner.ts', '--stage-type', 's', '--plan', '/p', '--task', 't'])).toThrow('--cwd is required');
+  });
+
+  // Test 12 — parseArgs relaxation: when --stage-type unit-review --unit N is
+  // present, --task / --task-stdin become optional (the unit-review branch
+  // synthesizes the task itself).
+  test('[12] --stage-type unit-review --unit N without --task/--task-stdin is accepted', () => {
+    const result = parseArgs([
+      'bun', 'stage-runner.ts',
+      '--stage-type', 'unit-review',
+      '--plan', '/tmp/plan.md',
+      '--cwd', '/tmp',
+      '--unit', '3',
+    ]);
+    expect(result.stageType).toBe('unit-review');
+    expect(result.unitId).toBe(3);
+    expect(result.task).toBe('');
+  });
+
+  test('[12b] --stage-type unit-review WITHOUT --unit still requires --task or --task-stdin', () => {
+    expect(() => parseArgs([
+      'bun', 'stage-runner.ts',
+      '--stage-type', 'unit-review',
+      '--plan', '/tmp/plan.md',
+      '--cwd', '/tmp',
+    ])).toThrow('--task or --task-stdin is required');
   });
 });
 

@@ -72,9 +72,9 @@ flowchart TD
         B_DISPATCH["subprocess: stage-runner.ts<br/>⟶ configured executor"]
         B_BP{"spawnSync: backpressure<br/>test, typecheck, lint"}
         B_REVIEW{"unit-review<br/>configured?"}
-        B_WRITE_PASS["unit-state.ts: mark done"]
-        B_RETRY["unit-state.ts: record retry"]
-        B_FAILED["unit-state.ts: mark failed"]
+        B_WRITE_PASS["recordAttemptResultAction<br/>(build-actions.ts)"]
+        B_RETRY["recordAttemptResultAction<br/>(build-actions.ts)"]
+        B_FAILED["recordAttemptResultAction →<br/>markUnitFailed (build-actions.ts)"]
 
         BUILD_ENTRY --> B_DISPATCH
         B_DISPATCH --> B_BP
@@ -148,33 +148,34 @@ sequenceDiagram
             CC->>CC: TaskUpdate(unit N → in_progress)
             CC->>BLR: Bash: --plan X --cwd Y --unit N
             loop Retry loop (mechanical, inside runner)
-                BLR->>FS: writeRunnerTail({status: pending, attempts++})
+                BLR->>BLR: composeBuildDispatch(projectDir, slug, unitId)<br/>[reserves attempt via build-actions.ts]
                 BLR->>SR: subprocess: --stage-type ralph-build --task-stdin<br/>(prompt = STATIC PLAN + [PRIOR MECHANICAL FAILURE] + PRIOR REVIEW FEEDBACK + INSTRUCTION)
                 SR->>EX: Dispatch configured build executor
                 EX-->>SR: Implementation result
                 SR-->>BLR: JSON: {synthesis}
-                BLR->>BLR: runBackpressure(commands, cwd)
-                alt all backpressure pass
+                BLR->>BLR: runBackpressure(commands, cwd) + verifyContract
+                alt all backpressure + contract pass
                     opt unit-review configured
-                        BLR->>SR: subprocess: --stage-type unit-review --task-stdin
+                        BLR->>SR: subprocess: --stage-type unit-review --plan --cwd --unit N<br/>(stage-runner composes review task itself)
                         SR->>EX: Dispatch reviewer executor(s)
                         EX-->>SR: Review verdict
                         SR-->>BLR: JSON: {synthesis: PASS|NEEDS_CHANGES}
                         Note over BLR: Fail-closed parsing: malformed output → NEEDS_CHANGES
-                        alt NEEDS_CHANGES + attempts remain
-                            BLR->>FS: writeRunnerTail({reviewFeedback, status: pending})
-                        end
+                        BLR->>BLR: recordReviewResultAction(unitId, lease, passed, feedback)<br/>[PASS → unit_done; NEEDS_CHANGES+budget → retry_unit; exhausted → unit_failed]
                     end
-                    BLR->>FS: writeRunnerTail({status: done, reviewFeedback: ''})
+                    alt no unit-review configured
+                        BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_pass)<br/>[→ unit_done]
+                    end
                 else fail + attempts remain
-                    Note over BLR: Carry mechanicalContext in-memory for next attempt's dispatch prompt
-                    BLR->>FS: writeRunnerTail({status: pending, latestAttempt})
+                    Note over BLR: mechanicalContext classified and passed to build-actions
+                    BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_fail)<br/>[→ retry_unit; lease auto-closed]
                 else fail + exhausted
-                    BLR->>FS: writeRunnerTail({status: failed, latestAttempt})
+                    BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_fail)<br/>[→ unit_failed (budget exhausted)]
                 end
             end
-            BLR-->>CC: JSON: {event: unit_done|unit_failed}
-            CC->>CC: TaskUpdate(unit N → completed|failed)
+            Note over BLR,FS: All state writes to unit-N.json go through build-actions.ts;<br/>BLR never writes state directly.
+            BLR-->>CC: JSON: {event: complete, status: done|failed|stuck, reason, orchestratorHints?}
+            CC->>CC: TaskUpdate(unit N → completed; note carries outcome text)
         end
     end
 
@@ -219,12 +220,12 @@ sequenceDiagram
     end
 ```
 
-**Mechanical failure context:** on a non-zero exit from dispatch or backpressure, the runner captures stdout+stderr head+tail excerpts (≤1000 chars each, verbatim) and carries them in-memory into the next attempt within the same `runSingleUnit` invocation. The retry's dispatch prompt includes a `--- PRIOR MECHANICAL FAILURE ---` block so the executor can restore the green state before pursuing semantic changes. Mechanical context and review feedback are persisted in `.vcp/plan/.state/ralph-{slug}/units/unit-N.json` and survive process restarts.
+**Mechanical failure context:** on a non-zero exit from dispatch or backpressure, the runner captures stdout+stderr head+tail excerpts (≤1000 chars each, verbatim) and passes them to `recordAttemptResultAction`, which persists them into `unit-N.json` for the next attempt's `composeBuildDispatch` call to fold into the retry prompt as a `--- PRIOR MECHANICAL FAILURE ---` block. Mechanical context and review feedback survive process restarts; cross-attempt carry is always disk-backed, never in-memory.
 
 **Script enforcement boundaries:**
 - **ralph-state-machine.ts** (passive) — Computes next action when queried. CC calls it via Bash before every stage transition. Reads plan + unit files, returns JSON with the next action. Never drives execution.
 - **stage-runner.ts** (dispatch) — Multi-executor dispatcher. CC calls it via Bash for all stages. Loads config, resolves system prompts, spawns executors (subscription/API/CLI), synthesizes outputs.
-- **build-loop-runner.ts** (single-unit executor) — Executes one unit's build attempts via stage-runner, runs backpressure, dispatches optional per-unit semantic review. Retry loop is internal; state is persisted to per-unit JSON files via `unit-state.ts` (not to unit-N.md). Returns JSON when the unit is done or failed.
+- **build-loop-runner.ts** (per-unit driver) — Runs one unit's full loop by calling `build-actions.ts`'s three action functions in-process: `composeBuildDispatch` → subprocess dispatch → backpressure + contract-verify → `recordAttemptResultAction` → (optional) unit-review dispatch → `recordReviewResultAction`. Owns subprocess dispatch, I/O, and event streaming only. Zero state-transition policy; zero direct writes to `unit-N.json` or `unit-N.md`. Streams one JSON event per transition (`attempt_start`, `review_start`, `review_verdict`, `complete`); final `complete` line carries terminal `status` (`done|failed|stuck`).
 - **CC Main Process** (LLM) — Drives the pipeline: queries SM, invokes scripts, validates synthesis, presents user checkpoints, updates tasks. Drives unit-to-unit build progression via state machine queries and task management.
 
 **Per-unit state layout:** runtime state lives in `.vcp/plan/.state/ralph-{slug}/` — one small JSON per unit, not a single monolith. Layout:
@@ -237,14 +238,14 @@ sequenceDiagram
 └── progress/
     └── stage-progress-*.json
 ```
-Unit plan files (`unit-N.md`) are immutable after decompose — all dynamic state (review feedback, attempt history, mechanical context) lives in `units/unit-N.json`. Writes go through `ralph/unit-state.ts` with invariant guards.
+Unit plan files (`unit-N.md`) are immutable after decompose — all dynamic state (review feedback, attempt history, mechanical context) lives in `units/unit-N.json`. Writes go through `ralph/build-actions.ts` action functions (which internally call `ralph/unit-state.ts` with invariant guards); BLR and SM CLI both drive those same three functions so policy lives in one place.
 
 **Retention:** completed plans (those with `plan.json.completedAt` set by the state machine) are auto-archived to `.vcp/plan/.archive/` after 7 days. Configurable via `retention_days` in `~/.vcp/dev-buddy.json` (0 disables). Sweep runs once per 24h (configurable via `sweep_interval_hours`), gated by a `.sweep.marker` file. Archives are recoverable — `mv` the directory back to restore.
 
 **Task-board projection:** the CC orchestrator creates one task per stage with `blockedBy` chaining, then (post-decompose) registers a unit task per decomposition unit with `blockedBy` mirroring the unit DAG. Bulk registration happens via `ralph-state-machine.ts --action register-task-graph` (single atomic state write). `--action verify-task-graph` warns on drift at every subsequent build-stage `next` query without blocking execution — unit-file `dependsOn` remains authoritative for build ordering; the task board is a human-visibility projection of that DAG.
 
 **Two nested loops + review gate:**
-- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), optional per-unit semantic review, retry up to `max_build_attempts`. Code review can send units back for rework. Per-unit state is persisted in `.vcp/plan/.state/ralph-{slug}/units/unit-N.json`; unit-N.md is immutable after decompose. Unit-to-unit progression is driven by the CC orchestrator via state machine queries and task management.
+- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), optional per-unit semantic review, retry up to `max_build_attempts`. Code review can send units back for rework. Per-unit state is persisted in `.vcp/plan/.state/ralph-{slug}/units/unit-N.json`; unit-N.md is immutable after decompose. Unit-to-unit progression is driven by the CC orchestrator via `ralph-state-machine.ts --action next`; BLR drives the intra-unit loop via in-process calls to `ralph/build-actions.ts` action functions (never touches `unit-state.ts` directly).
 - **Outer (UAT):** integration Ralph loop — real Playwright UAT against running app. Failures identify affected units and loop back through BUILD and CODE REVIEW (up to `max_outer_iterations`).
 - **User checkpoints** after Discovery, Requirements, and Decompose — approve, reject, or provide additional context. Each stage runs internal adversarial validation before presenting to the user.
 

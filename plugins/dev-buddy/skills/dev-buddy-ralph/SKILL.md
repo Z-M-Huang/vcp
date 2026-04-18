@@ -87,31 +87,32 @@ On first run:
 
    - **`invoke_skill`** — Route by `stageType`:
 
-     **Build stage** (`stageType: "ralph-build"`): CC drives per-unit builds through the state machine. Each attempt is a discrete CC → SM → BLR → SM cycle.
+     **Build stage** (`stageType: "ralph-build"`): CC spawns BLR once per unit and lets it drive the full dispatch → backpressure → contract-verify → (optional) unit-review → commit loop in-process. CC never sees per-attempt state.
 
-     **Per-attempt flow:**
-     1. Query SM: `--action compose_build_dispatch --unit {unitId}` — returns JSON with `prompt`, `lease`, `attempt`, `unitPath`.
-     2. Dispatch BLR as single-attempt executor with the composed prompt piped via stdin:
+     **Per-unit flow:**
+     1. TaskUpdate unit task → `in_progress` (action.unitId → ref `unit:{unitId}` → taskId).
+     2. Spawn BLR end-to-end:
         ```bash
-        echo '{prompt}' | bun "${CLAUDE_PLUGIN_ROOT}/scripts/build-loop-runner.ts" \
-          --plan "{plan}" --cwd "${CLAUDE_PROJECT_DIR}" --unit {unitId} --lease {lease} 2>&1
+        bun "${CLAUDE_PLUGIN_ROOT}/scripts/build-loop-runner.ts" \
+          --plan "{plan}" --cwd "${CLAUDE_PROJECT_DIR}" --unit {action.unitId}
         ```
-        **IMPORTANT:** Use `run_in_background: true` — the Bash tool hard-caps at 600,000ms.
-     3. Poll with `TaskOutput(task_id, block: true, timeout: 600000)`. Repeat until complete.
-     4. BLR returns single-attempt outcome JSON:
+        **IMPORTANT:** Use `run_in_background: true` — BLR may run many minutes across retries; the Bash tool hard-caps at 600,000ms.
+     3. Poll with `TaskOutput(task_id, block: true, timeout: 600000)`. BLR streams one JSON event per line — `attempt_start`, `review_start`, `review_verdict`, and one final `complete`. Intermediate events are advisory; the terminal `complete` line is authoritative.
+     4. The terminal line has shape:
         ```json
-        {"event": "attempt_complete", "unitId": 3, "outcome": "mechanical_pass", "mechanicalContext": null, "lease": "..."}
+        {"event":"complete","status":"done|failed|stuck","unitId":N,"attempts":K,"reason":"...","orchestratorHints":{"claudeCode":{"tool":"TaskUpdate","status":"completed","note":"..."}}}
         ```
-     5. Record result: `--action record_attempt_result --unit {unitId} --stdin` (pipe the outcome JSON).
-        SM returns next action: `dispatch_unit_review`, `retry_unit`, `escalate_stuck`, or `unit_failed`.
-     6. Route on `nextAction`:
-        - `dispatch_unit_review` → invoke stage-runner with `unit-review` stage type, parse verdict with `parseReviewVerdict`, then `--action record_review_result --unit {unitId} --stdin` (pipe `{passed, feedback, lease}`).
-        - `retry_unit` → loop back to step 1.
-        - `escalate_stuck` → report to user: identical failures detected, unit needs manual intervention.
-        - `unit_failed` → TaskUpdate unit task to `failed`.
-     7. After all units complete or fail, re-query SM `--action next` for the next stage transition.
+        Route on `status`:
+        - `done`   → TaskUpdate unit task to `completed` with `reason` as the note.
+        - `failed` → TaskUpdate unit task to `completed` with `"failed — " + reason`. TaskUpdate's vocabulary is `in_progress | completed`; the failure semantic lives in the note text.
+        - `stuck`  → **Do NOT mark the task completed.** Report `reason` to the user and stop the outer loop — the unit needs manual intervention. `orchestratorHints` is omitted on `stuck` for this reason.
+     5. Re-query SM `--action next`. The SM reads unit-N.json (which BLR's in-process calls have already committed via build-actions.ts) and emits the next build action or the stage transition.
+
+     The `orchestratorHints.claudeCode` block is a pre-formatted hint. Use it when present, but the top-level `status`/`reason` is the authoritative contract. Authoritative state lives in `unit-N.json`, not the stdout stream.
 
      **All other stages**: Use the Skill tool to call the named skill (e.g., `/dev-buddy-discover`). If `unitId` and `unitPath` are present, pass this context to the skill.
+
+     **External consumer API.** Non-CC orchestrators that need attempt-level granularity (debugging, CI wrappers) can call the three SM CLI actions directly — `compose_build_dispatch`, `record_attempt_result`, `record_review_result`. These wrap the same action functions BLR calls in-process.
 
    - **`user_checkpoint`** — Pass `action.askUserQuestion` to the `AskUserQuestion` tool and dispatch on the user's answer (see **User Checkpoint Handling** below).
 

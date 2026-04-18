@@ -67,9 +67,9 @@ flowchart TD
         B_DISPATCH["subprocess: stage-runner.ts<br/>⟶ 已配置的执行器"]
         B_BP{"spawnSync: 反压<br/>test, typecheck, lint"}
         B_REVIEW{"unit-review<br/>已配置？"}
-        B_WRITE_PASS["写入 Status: done"]
-        B_RETRY["写入 Status: pending<br/>（重试）"]
-        B_FAILED["写入 Status: failed"]
+        B_WRITE_PASS["recordAttemptResultAction<br/>(build-actions.ts)"]
+        B_RETRY["recordAttemptResultAction<br/>(build-actions.ts)"]
+        B_FAILED["recordAttemptResultAction →<br/>markUnitFailed (build-actions.ts)"]
 
         BUILD_ENTRY --> B_DISPATCH
         B_DISPATCH --> B_BP
@@ -143,33 +143,34 @@ sequenceDiagram
             CC->>CC: TaskUpdate(unit N → in_progress)
             CC->>BLR: Bash: --plan X --cwd Y --unit N
             loop 重试循环（机械化，runner 内部）
-                BLR->>FS: writeRunnerTail({status: pending, attempts++})
+                BLR->>BLR: composeBuildDispatch(projectDir, slug, unitId)<br/>[通过 build-actions.ts 预留尝试]
                 BLR->>SR: subprocess: --stage-type ralph-build --task-stdin<br/>（提示词 = STATIC PLAN + [PRIOR MECHANICAL FAILURE] + PRIOR REVIEW FEEDBACK + INSTRUCTION）
                 SR->>EX: 分发已配置的构建执行器
                 EX-->>SR: 实现结果
                 SR-->>BLR: JSON: {synthesis}
-                BLR->>BLR: runBackpressure(commands, cwd)
-                alt 全部反压通过
+                BLR->>BLR: runBackpressure(commands, cwd) + verifyContract
+                alt 全部反压 + 合约通过
                     opt unit-review 已配置
-                        BLR->>SR: subprocess: --stage-type unit-review --task-stdin
+                        BLR->>SR: subprocess: --stage-type unit-review --plan --cwd --unit N<br/>（stage-runner 自身组装审查任务）
                         SR->>EX: 分发审查执行器
                         EX-->>SR: 审查判定
                         SR-->>BLR: JSON: {synthesis: PASS|NEEDS_CHANGES}
                         Note over BLR: 失败封闭解析：格式错误 → NEEDS_CHANGES
-                        alt NEEDS_CHANGES + 剩余尝试
-                            BLR->>FS: writeRunnerTail({reviewFeedback, status: pending})
-                        end
+                        BLR->>BLR: recordReviewResultAction(unitId, lease, passed, feedback)<br/>[PASS → unit_done；NEEDS_CHANGES + 预算 → retry_unit；耗尽 → unit_failed]
                     end
-                    BLR->>FS: writeRunnerTail({status: done, reviewFeedback: ''})
+                    alt 未配置 unit-review
+                        BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_pass)<br/>[→ unit_done]
+                    end
                 else 失败 + 剩余尝试
-                    Note over BLR: 将 mechanicalContext 保留在内存中供下次分发提示使用
-                    BLR->>FS: writeRunnerTail({status: pending, latestAttempt})
+                    Note over BLR: mechanicalContext 分类后传入 build-actions
+                    BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_fail)<br/>[→ retry_unit；lease 自动关闭]
                 else 失败 + 尝试耗尽
-                    BLR->>FS: writeRunnerTail({status: failed, latestAttempt})
+                    BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_fail)<br/>[→ unit_failed（预算耗尽）]
                 end
             end
-            BLR-->>CC: JSON: {event: unit_done|unit_failed}
-            CC->>CC: TaskUpdate(unit N → completed|failed)
+            Note over BLR,FS: 所有对 unit-N.json 的状态写入均通过 build-actions.ts；<br/>BLR 从不直接写入状态。
+            BLR-->>CC: JSON: {event: complete, status: done|failed|stuck, reason, orchestratorHints?}
+            CC->>CC: TaskUpdate(unit N → completed；note 携带结果文本)
         end
     end
 
@@ -214,18 +215,18 @@ sequenceDiagram
     end
 ```
 
-**机械故障上下文**：当分发或反压以非零退出时，runner 会捕获 stdout+stderr 头尾摘录（每段 ≤1000 字符，原文），在同一 `runSingleUnit` 调用中以内存变量形式传递给下次尝试。重试的分发提示会包含 `--- PRIOR MECHANICAL FAILURE ---` 块，让执行器在追求语义修改前先恢复绿色状态。摘录不跨进程持久化——单元中途崩溃会丢失机械上下文（审查反馈通过单元文件尾部仍然存活）。
+**机械故障上下文**：当分发或反压以非零退出时，runner 会捕获 stdout+stderr 头尾摘录（每段 ≤1000 字符，原文）并传给 `recordAttemptResultAction`，后者将其持久化到 `unit-N.json`，供下次尝试的 `composeBuildDispatch` 调用把它折叠进重试提示的 `--- PRIOR MECHANICAL FAILURE ---` 块。机械上下文与审查反馈跨进程重启存活；跨尝试携带始终基于磁盘，从不驻留在内存中。
 
 **脚本执行边界：**
 - **ralph-state-machine.ts**（被动）— 被查询时计算下一步动作。CC 在每次阶段转换前通过 Bash 调用它。读取计划 + 单元文件，返回 JSON 格式的下一步动作。从不主动驱动执行。
 - **stage-runner.ts**（分发）— 多执行器分发器。CC 通过 Bash 为所有阶段调用它。加载配置，解析系统提示词，生成执行器（subscription/API/CLI），合成输出。
-- **build-loop-runner.ts**（单元执行器）— 拥有单个单元的执行及内部重试。CC 通过 Bash 以 `--unit N` 参数逐单元调用；它在内部重试：分发执行器（subprocess 到 stage-runner），运行反压（spawnSync），可选语义审查（subprocess 到 stage-runner 使用 unit-review），写入单元状态（fs）。当单元完成或失败时返回 JSON。
+- **build-loop-runner.ts**（逐单元驱动器）— 通过在进程内调用 `build-actions.ts` 的三个 action 函数运行一个单元的完整循环：`composeBuildDispatch` → subprocess 分发 → 反压 + contract-verify → `recordAttemptResultAction` → （可选）unit-review 分发 → `recordReviewResultAction`。仅拥有 subprocess 分发、I/O 和事件流。零状态转换策略；不直接写入 `unit-N.json` 或 `unit-N.md`。每次状态转换流一条 JSON 事件（`attempt_start`、`review_start`、`review_verdict`、`complete`）；最终 `complete` 行携带终态 `status`（`done|failed|stuck`）。
 - **CC 主进程**（LLM）— 驱动 pipeline：查询 SM，调用脚本，验证合成结果，展示用户检查点，更新任务。通过状态机查询和任务管理驱动逐单元构建推进。
 
 **任务面板投影：** CC 编排器为每个阶段创建一个任务并以 `blockedBy` 串联；分解阶段完成后，再为每个分解单元创建一个单元任务，其 `blockedBy` 镜像单元 DAG。批量注册通过 `ralph-state-machine.ts --action register-task-graph` 一次原子写入完成。`--action verify-task-graph` 在每次构建阶段 `next` 查询时对漂移发出警告但不阻塞执行——单元文件中的 `dependsOn` 仍是构建顺序的权威来源；任务面板只是该 DAG 的人类可见投影。
 
 **双嵌套循环 + 评审门控：**
-- **内循环（BUILD -> CODE REVIEW）：** 逐单元 Ralph 循环——从磁盘读取全新上下文，实现，机械反压（test/typecheck/lint），可选逐单元语义审查，重试上限 `max_build_attempts`。代码评审可将单元打回重做。逐单元重试循环通过 `build-loop-runner.ts --unit N` 完全机械化执行。单元间推进由 CC 编排器通过状态机查询和任务管理驱动。
+- **内循环（BUILD -> CODE REVIEW）：** 逐单元 Ralph 循环——从磁盘读取全新上下文，实现，机械反压（test/typecheck/lint），可选逐单元语义审查，重试上限 `max_build_attempts`。代码评审可将单元打回重做。逐单元状态持久化在 `.vcp/plan/.state/ralph-{slug}/units/unit-N.json`；unit-N.md 在分解后不可变。单元间推进由 CC 编排器通过 `ralph-state-machine.ts --action next` 驱动；BLR 通过在进程内调用 `ralph/build-actions.ts` 的 action 函数驱动单元内循环（从不直接触碰 `unit-state.ts`）。
 - **外循环（UAT）：** 集成 Ralph 循环——对运行中的应用执行 Playwright UAT。失败时定位受影响单元，回到 BUILD 和 CODE REVIEW（上限 `max_outer_iterations`）。
 - **用户检查点** 在 Discovery、Requirements 和 Decompose 之后——批准、拒绝或补充上下文。每个阶段在呈现给用户之前先运行内部对抗性验证。
 
