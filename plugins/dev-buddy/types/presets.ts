@@ -19,7 +19,7 @@ export interface ApiPreset {
   reasoning_effort?: '' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   /** Maximum output tokens for OpenAI-compatible completions. Only used when protocol is 'openai'. Default: 16384. */
   max_output_tokens?: number;
-  /** Maximum context tokens for the model. Used by context compaction middleware. */
+  /** Maximum context tokens for the model. Used by context compaction. Defaults to 200,000 when unset. */
   max_context_tokens?: number;
 }
 

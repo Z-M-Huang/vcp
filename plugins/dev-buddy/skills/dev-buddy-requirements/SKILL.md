@@ -2,7 +2,7 @@
 name: dev-buddy-requirements
 description: Requirements + UAT design stage — acceptance criteria and Playwright test scenario authoring
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, TaskCreate, TaskUpdate, TaskList, TaskGet
 ---
 
 # Requirements + UAT Design Stage
@@ -31,11 +31,7 @@ Define what "done" looks like — acceptance criteria in Given/When/Then format 
 
    Also run a **mechanical traceability check**: extract all `F-\d+` IDs from the `## Discovery` section of the plan file, and all `Discovery refs:` values from the synthesis ACs. If any F-N from discovery has no corresponding AC referencing it, list the orphaned findings in the validation output. Include this list when presenting results to the user at the checkpoint — the user can then decide whether to approve (some findings may genuinely not need ACs) or request changes to cover them.
 
-3. **Present and approve** — after validation passes:
-   1. Print all synthesis results to the user
-   2. **MUST call AskUserQuestion** with options `['approve', 'request changes']`
-   3. **On approval:** write `## Requirements` section to plan file
-      - **Orchestrated** (via `/dev-buddy-ralph`): set `**Status:** requirements-review`
-      - **Standalone** (direct `/dev-buddy-requirements`): set `**Status:** decompose`
-   4. **On rejection:** collect specific feedback via AskUserQuestion. Write feedback to `## Feedback` section (create or replace). Re-run from step 1 — `stage-runner.ts` reads `## Feedback` and injects it as context for all executors.
-   - On rerun: **replace** existing `## Requirements` section and clear `## Feedback` section if present.
+3. **Write and hand off** — after validation passes:
+   1. Print all synthesis results to the user (include the orphaned-findings list from step 2 if any).
+   2. Write the `## Requirements` section to the plan file. On re-run: **replace** any existing `## Requirements` section and clear any `## Feedback` section.
+   3. Set `**Status:** requirements-review` and stop. Do not advance the pipeline from this skill — the orchestrator (`/dev-buddy-ralph`) handles the approval gate on the next tick, and standalone users should decide explicitly. Print a one-line next-step hint: `Next: review ## Requirements in the plan file. Run /dev-buddy-ralph to resume orchestrated execution (with the approval gate), /dev-buddy-decompose to proceed standalone, or edit ## Feedback and re-run /dev-buddy-requirements to iterate.`

@@ -13,8 +13,20 @@ function makeTmpDir(): string {
   return d;
 }
 
+interface FixtureUnit {
+  id: number;
+  backpressure: string[];
+  /** Optional Contract Manifest. When undefined, no manifest section is written (legacy unit). */
+  manifest?: {
+    exports: Array<{ symbol: string; module: string; kind?: 'named' | 'type' | 'default' }>;
+    consumes: Array<{ symbol: string; from: string }>;
+  };
+  /** Optional raw manifest body to inject (used for malformed-JSON tests). */
+  rawManifestBody?: string;
+}
+
 function setupPlanLintFixture(
-  units: Array<{ id: number; backpressure: string[] }>,
+  units: FixtureUnit[],
 ): { planPath: string; projectDir: string } {
   const projectDir = makeTmpDir();
   const planDir = path.join(projectDir, '.vcp', 'plan');
@@ -28,9 +40,15 @@ function setupPlanLintFixture(
     const bpSection = u.backpressure.length > 0
       ? '## Backpressure\n' + u.backpressure.map(c => `- \`${c}\``).join('\n')
       : '';
+    let manifestSection = '';
+    if (u.rawManifestBody !== undefined) {
+      manifestSection = '### Contract Manifest\n\n```json\n' + u.rawManifestBody + '\n```\n\n';
+    } else if (u.manifest) {
+      manifestSection = '### Contract Manifest\n\n```json\n' + JSON.stringify(u.manifest, null, 2) + '\n```\n\n';
+    }
     writeFileSync(
       path.join(unitsDir, `unit-${u.id}.md`),
-      `# Unit ${u.id}: Test Unit\n\n**Status:** pending\n**Attempts:** 0/5\n**Max Attempts:** 5\n\n${bpSection}\n`,
+      `# Unit ${u.id}: Test Unit\n\n**Status:** pending\n**Attempts:** 0/5\n**Max Attempts:** 5\n\n${manifestSection}${bpSection}\n`,
     );
   }
 
@@ -127,5 +145,199 @@ describe('runPlanLint', () => {
 
     expect(result.event).toBe('reject');
     expect(result.units[0].exitCode).toBe(0);
+  });
+});
+
+describe('runPlanLint — Contract Manifest wiring', () => {
+  test('passes when consumes resolves to an earlier unit\'s exports', () => {
+    const { planPath, projectDir } = setupPlanLintFixture([
+      {
+        id: 1,
+        backpressure: ['bun test src/unit1.test.ts'],
+        manifest: {
+          exports: [{ symbol: 'Foo', module: 'src/foo.ts' }],
+          consumes: [],
+        },
+      },
+      {
+        id: 2,
+        backpressure: ['bun test src/unit2.test.ts'],
+        manifest: {
+          exports: [],
+          consumes: [{ symbol: 'Foo', from: 'src/foo.ts' }],
+        },
+      },
+    ]);
+
+    const result = runPlanLint(planPath, projectDir, {
+      execFn: () => ({ exitCode: 1, stderr: 'red' }),
+    });
+
+    expect(result.event).toBe('pass');
+    expect(result.warnings).toHaveLength(0);
+    expect(result.rejections).toHaveLength(0);
+  });
+
+  test('rejects when consumes references a forward (later) unit', () => {
+    const { planPath, projectDir } = setupPlanLintFixture([
+      {
+        id: 1,
+        backpressure: ['bun test'],
+        manifest: {
+          exports: [],
+          consumes: [{ symbol: 'Foo', from: 'src/foo.ts' }],
+        },
+      },
+      {
+        id: 2,
+        backpressure: ['bun test'],
+        manifest: {
+          exports: [{ symbol: 'Foo', module: 'src/foo.ts' }],
+          consumes: [],
+        },
+      },
+    ]);
+
+    const result = runPlanLint(planPath, projectDir, {
+      execFn: () => ({ exitCode: 1, stderr: 'red' }),
+    });
+
+    expect(result.event).toBe('reject');
+    // Forward-reference: producer exists but is later in the unit order.
+    expect(result.rejections.some(r => r.unitId === 1 && r.reason.includes('not earlier'))).toBe(true);
+  });
+
+  test('rejects when no unit exports a consumed symbol (strict mode)', () => {
+    const { planPath, projectDir } = setupPlanLintFixture([
+      {
+        id: 1,
+        backpressure: ['bun test'],
+        manifest: {
+          exports: [],
+          consumes: [{ symbol: 'Missing', from: 'src/missing.ts' }],
+        },
+      },
+    ]);
+
+    const result = runPlanLint(planPath, projectDir, {
+      execFn: () => ({ exitCode: 1, stderr: 'red' }),
+    });
+
+    expect(result.event).toBe('reject');
+    expect(result.rejections[0].reason).toContain('Missing');
+  });
+
+  test('warns (does not reject) on unresolved consumes when any unit lacks a manifest (degraded mode)', () => {
+    const { planPath, projectDir } = setupPlanLintFixture([
+      // Unit 1 is legacy — no manifest at all.
+      { id: 1, backpressure: ['bun test'] },
+      {
+        id: 2,
+        backpressure: ['bun test'],
+        manifest: {
+          exports: [],
+          consumes: [{ symbol: 'MaybeFromLegacy', from: 'src/legacy.ts' }],
+        },
+      },
+    ]);
+
+    const result = runPlanLint(planPath, projectDir, {
+      execFn: () => ({ exitCode: 1, stderr: 'red' }),
+    });
+
+    expect(result.event).toBe('pass');
+    expect(result.warnings.some(w => w.unitId === 1 && w.reason.includes('legacy mode'))).toBe(true);
+    expect(result.warnings.some(w => w.unitId === 2 && w.reason.includes('MaybeFromLegacy'))).toBe(true);
+    expect(result.rejections).toHaveLength(0);
+  });
+
+  test('rejects when two units claim the same (symbol, module) export', () => {
+    const { planPath, projectDir } = setupPlanLintFixture([
+      {
+        id: 1,
+        backpressure: ['bun test'],
+        manifest: {
+          exports: [{ symbol: 'Conflicting', module: 'src/foo.ts' }],
+          consumes: [],
+        },
+      },
+      {
+        id: 2,
+        backpressure: ['bun test'],
+        manifest: {
+          exports: [{ symbol: 'Conflicting', module: 'src/foo.ts' }],
+          consumes: [],
+        },
+      },
+    ]);
+
+    const result = runPlanLint(planPath, projectDir, {
+      execFn: () => ({ exitCode: 1, stderr: 'red' }),
+    });
+
+    expect(result.event).toBe('reject');
+    expect(result.rejections.some(r => r.unitId === 2 && r.reason.includes('already claims'))).toBe(true);
+  });
+
+  test('rejects on malformed manifest JSON', () => {
+    const { planPath, projectDir } = setupPlanLintFixture([
+      {
+        id: 1,
+        backpressure: ['bun test'],
+        rawManifestBody: '{ "exports": [',
+      },
+    ]);
+
+    const result = runPlanLint(planPath, projectDir, {
+      execFn: () => ({ exitCode: 1, stderr: 'red' }),
+    });
+
+    expect(result.event).toBe('reject');
+    expect(result.rejections[0].reason).toContain('JSON parse failed');
+  });
+
+  test('legacy plan (all units missing manifest) warns but does not reject', () => {
+    const { planPath, projectDir } = setupPlanLintFixture([
+      { id: 1, backpressure: ['bun test'] },
+      { id: 2, backpressure: ['bun test'] },
+    ]);
+
+    const result = runPlanLint(planPath, projectDir, {
+      execFn: () => ({ exitCode: 1, stderr: 'red' }),
+    });
+
+    expect(result.event).toBe('pass');
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings.every(w => w.reason.includes('legacy mode'))).toBe(true);
+    expect(result.rejections).toHaveLength(0);
+  });
+
+  test('combined: red-test pass AND wiring failure both rejected', () => {
+    const { planPath, projectDir } = setupPlanLintFixture([
+      {
+        id: 1,
+        backpressure: ['bun test src/unit1.test.ts'],
+        manifest: {
+          exports: [],
+          consumes: [{ symbol: 'Missing', from: 'src/missing.ts' }],
+        },
+      },
+      {
+        id: 2,
+        backpressure: ['bun test src/unit2.test.ts'],
+        manifest: { exports: [], consumes: [] },
+      },
+    ]);
+
+    const result = runPlanLint(planPath, projectDir, {
+      execFn: (cmd) => cmd.includes('unit2')
+        ? { exitCode: 0, stderr: '' }
+        : { exitCode: 1, stderr: 'red' },
+    });
+
+    expect(result.event).toBe('reject');
+    expect(result.rejections.length).toBeGreaterThanOrEqual(2);
+    expect(result.rejections.some(r => r.unitId === 1 && r.reason.includes('Missing'))).toBe(true);
+    expect(result.rejections.some(r => r.unitId === 2 && r.reason.includes('passes against HEAD'))).toBe(true);
   });
 });

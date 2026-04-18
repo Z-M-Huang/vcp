@@ -20,6 +20,8 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { runBackpressure } from './ralph-state-machine.ts';
+import { verifyContract, formatFailureMessage } from './contract-verifier.ts';
+import type { ContractVerifyResult } from './contract-verifier.ts';
 import { vcpLog, isDebugEnabled, capLogPayload } from './vcp-logger.ts';
 import type {
   BackpressureResult, UnitBuildDispatchResult, AttemptOutcome,
@@ -59,7 +61,7 @@ export const MECHANICAL_CONTEXT_EXCERPT_MAX = 1000;
  * they land in the next attempt's dispatch prompt.
  */
 export function buildMechanicalContext(
-  source: 'dispatch' | 'backpressure',
+  source: 'dispatch' | 'backpressure' | 'contract-verifier',
   command: string,
   exitCode: number,
   stdout: string,
@@ -315,6 +317,8 @@ export function readFilesTouched(unitContent: string, cwd: string): string {
 export interface BuildLoopOverrides {
   dispatchFn?: (planPath: string, cwd: string, unitPath: string, debug: boolean, promptText: string | null) => Promise<UnitBuildDispatchResult>;
   backpressureFn?: typeof runBackpressure;
+  /** Injected for tests. Defaults to {@link verifyContract}. */
+  verifyContractFn?: (args: { unitFile: string; projectDir: string; unitId?: number }) => ContractVerifyResult;
 }
 
 /**
@@ -334,6 +338,7 @@ export async function runSingleAttempt(
   const debug = await isDebugEnabled();
   const dispatchFn = overrides?.dispatchFn ?? dispatchBuildUnitDefault;
   const backpressureFn = overrides?.backpressureFn ?? runBackpressure;
+  const verifyContractFn = overrides?.verifyContractFn ?? verifyContract;
 
   const { unitPath, slug } = resolveUnitPath(args.planPath, args.unitId);
 
@@ -373,13 +378,61 @@ export async function runSingleAttempt(
   let outcome: AttemptOutcome['outcome'];
   let mechanicalContext: MechanicalContext | null = null;
 
+  const backpressureGreen =
+    dispatch.event === 'complete' &&
+    ((backpressure.length > 0 && backpressure.every(r => r.passed)) ||
+      (backpressure.length === 0 && effectiveCommands.length === 0));
+
   if (dispatch.event !== 'complete') {
     outcome = 'dispatch_error';
     mechanicalContext = dispatch.mechanicalContext ?? null;
-  } else if (backpressure.length > 0 && backpressure.every(r => r.passed)) {
-    outcome = 'mechanical_pass';
-  } else if (backpressure.length === 0 && effectiveCommands.length === 0) {
-    outcome = 'mechanical_pass';
+  } else if (backpressureGreen) {
+    // Contract verifier gate: backpressure passed, but the producer may have
+    // forgotten `export` on a promised symbol. `tsc` during backpressure is
+    // consumer-driven — it only errors when a file imports the missing symbol,
+    // and the consumer is often in a later unit that doesn't exist yet. The
+    // probe forces resolution for every exports[] entry in the Contract
+    // Manifest, catching the gap before the unit is marked done.
+    //
+    // Failures become mechanical_fail with source='contract-verifier' so the
+    // v0.5.5 mechanical-carry path replays them into the next attempt's prompt.
+    // skip/error both treated as pass (legacy units with no manifest, and
+    // infrastructure problems that would also break backpressure's own tsc).
+    let verify: ContractVerifyResult;
+    try {
+      verify = verifyContractFn({ unitFile: unitPath, projectDir: args.cwd, unitId: args.unitId });
+    } catch (err) {
+      verify = { event: 'error', unitId: args.unitId, error: (err as Error).message };
+    }
+
+    if (verify.event === 'fail') {
+      outcome = 'mechanical_fail';
+      const formatted = formatFailureMessage(verify);
+      mechanicalContext = buildMechanicalContext(
+        'contract-verifier',
+        'bun plugins/dev-buddy/scripts/contract-verifier.ts',
+        1,
+        '',
+        formatted,
+      );
+      vcpLog(args.cwd, {
+        source: 'build-loop-runner',
+        event: 'contract-verifier.fail',
+        decision: 'info',
+        fsync: true,
+        details: `slug=${slug} unit=${args.unitId} failures=${verify.failures.length}\n${capLogPayload(formatted)}`,
+      }, debug).catch(() => {});
+    } else {
+      outcome = 'mechanical_pass';
+      if (verify.event === 'error') {
+        vcpLog(args.cwd, {
+          source: 'build-loop-runner',
+          event: 'contract-verifier.error',
+          decision: 'info',
+          details: `slug=${slug} unit=${args.unitId} error=${verify.error}`,
+        }, debug).catch(() => {});
+      }
+    }
   } else {
     outcome = 'mechanical_fail';
     const firstFailure = backpressure.find(bp => !bp.passed);

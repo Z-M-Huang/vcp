@@ -129,6 +129,102 @@ export function extractBackpressureCommands(content: string): string[] {
   return [...section.matchAll(/`([^`]+)`/g)].map(m => m[1].trim()).filter(Boolean);
 }
 
+// ─── CONTRACT MANIFEST EXTRACTION ───────────────────────────────────────────
+
+import type { ContractManifest, ContractManifestExtractResult } from './types.ts';
+
+/**
+ * Extract the Contract Manifest JSON block from a unit-N.md file.
+ *
+ * Looks for `## Contract Manifest` or `### Contract Manifest`, then the next
+ * ```json fenced block within that section (bounded by the next heading of any
+ * level). Returns:
+ *   - `{ kind: 'missing' }` when the heading is absent (legacy unit)
+ *   - `{ kind: 'malformed', error }` when JSON parse fails or shape is wrong
+ *   - `{ kind: 'ok', manifest }` when the block parses cleanly
+ *
+ * The manifest is the source of truth for the mechanical contract verifier and
+ * cross-unit wiring validation in plan-lint.
+ */
+export function extractContractManifest(content: string): ContractManifestExtractResult {
+  const headingMatch = content.match(/^#{2,3}\s+Contract Manifest\s*$/m);
+  if (!headingMatch || headingMatch.index === undefined) {
+    return { kind: 'missing' };
+  }
+
+  const after = content.slice(headingMatch.index + headingMatch[0].length);
+  const nextHeadingMatch = after.match(/^#{1,3}\s/m);
+  const sectionEnd = nextHeadingMatch && nextHeadingMatch.index !== undefined
+    ? nextHeadingMatch.index
+    : after.length;
+  const section = after.slice(0, sectionEnd);
+
+  const fenceMatch = section.match(/```json\s*\n([\s\S]*?)\n```/);
+  if (!fenceMatch) {
+    return {
+      kind: 'malformed',
+      error: 'Contract Manifest heading present but no ```json fenced block found in the section',
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fenceMatch[1]);
+  } catch (e) {
+    return { kind: 'malformed', error: `Contract Manifest JSON parse failed: ${(e as Error).message}` };
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { kind: 'malformed', error: 'Contract Manifest must be a JSON object with `exports` and `consumes` arrays' };
+  }
+  const obj = parsed as { exports?: unknown; consumes?: unknown };
+  if (!Array.isArray(obj.exports)) {
+    return { kind: 'malformed', error: 'Contract Manifest must have an `exports` array (use [] for empty)' };
+  }
+  if (!Array.isArray(obj.consumes)) {
+    return { kind: 'malformed', error: 'Contract Manifest must have a `consumes` array (use [] for empty)' };
+  }
+
+  const exports: ContractManifest['exports'] = [];
+  for (let i = 0; i < obj.exports.length; i++) {
+    const e = obj.exports[i] as { symbol?: unknown; module?: unknown; kind?: unknown };
+    if (typeof e !== 'object' || e === null) {
+      return { kind: 'malformed', error: `exports[${i}] must be an object` };
+    }
+    if (typeof e.symbol !== 'string' || !e.symbol) {
+      return { kind: 'malformed', error: `exports[${i}].symbol must be a non-empty string` };
+    }
+    if (typeof e.module !== 'string' || !e.module) {
+      return { kind: 'malformed', error: `exports[${i}].module must be a non-empty string` };
+    }
+    if (e.kind !== undefined && e.kind !== 'named' && e.kind !== 'type' && e.kind !== 'default') {
+      return { kind: 'malformed', error: `exports[${i}].kind must be one of 'named' | 'type' | 'default' (omit for 'named')` };
+    }
+    exports.push({
+      symbol: e.symbol,
+      module: e.module,
+      kind: (e.kind as 'named' | 'type' | 'default' | undefined) ?? 'named',
+    });
+  }
+
+  const consumes: ContractManifest['consumes'] = [];
+  for (let i = 0; i < obj.consumes.length; i++) {
+    const c = obj.consumes[i] as { symbol?: unknown; from?: unknown };
+    if (typeof c !== 'object' || c === null) {
+      return { kind: 'malformed', error: `consumes[${i}] must be an object` };
+    }
+    if (typeof c.symbol !== 'string' || !c.symbol) {
+      return { kind: 'malformed', error: `consumes[${i}].symbol must be a non-empty string` };
+    }
+    if (typeof c.from !== 'string' || !c.from) {
+      return { kind: 'malformed', error: `consumes[${i}].from must be a non-empty string` };
+    }
+    consumes.push({ symbol: c.symbol, from: c.from });
+  }
+
+  return { kind: 'ok', manifest: { exports, consumes } };
+}
+
 // ─── STATIC / RUNTIME SPLIT ─────────────────────────────────────────────────
 
 /**

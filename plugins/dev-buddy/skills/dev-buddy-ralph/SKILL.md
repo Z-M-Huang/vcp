@@ -113,7 +113,7 @@ On first run:
 
      **All other stages**: Use the Skill tool to call the named skill (e.g., `/dev-buddy-discover`). If `unitId` and `unitPath` are present, pass this context to the skill.
 
-   - **`user_checkpoint`** — Present stage output and ask user for approval (see **User Checkpoint Handling** below).
+   - **`user_checkpoint`** — Pass `action.askUserQuestion` to the `AskUserQuestion` tool and dispatch on the user's answer (see **User Checkpoint Handling** below).
 
    - **`write_plan`** — Apply the `edits` array to the plan file using the Edit tool. Each edit has `old_string` and `new_string`.
 
@@ -183,15 +183,13 @@ On first run:
 
 ## User Checkpoint Handling
 
-When the state machine returns a `user_checkpoint` action (for `discover-review`, `requirements-review`, or `decompose-review`):
+When the state machine returns a `user_checkpoint` action:
 
-The stage skill already obtained user approval via AskUserQuestion before writing the `-review` status. **Auto-advance without re-asking:**
-
-1. Write `action.approveStatus` to the plan's `**Status:**` line. Mark the current stage task as completed.
-2. If this was **decompose-review**: trigger **Unit Task Creation** (below) before re-querying.
-3. Otherwise: re-query the state machine.
-
-**Do NOT call AskUserQuestion here** — the user already approved in the stage skill. Re-asking creates a redundant gate.
+1. Quote the `action.sectionHeading` section from the plan file so the user can see what they are approving. For `decompose-review`, also list the unit files under `.vcp/plan/ralph/{SLUG}/unit-*.md`.
+2. Call `AskUserQuestion(action.askUserQuestion)` — forward the payload verbatim.
+3. Dispatch on the returned label:
+   - **`approve`** → write `action.approveStatus` to `**Status:**`, mark the stage task completed. For `decompose-review`, trigger **Unit Task Creation** before re-querying; otherwise re-query the state machine.
+   - **`request changes`** → call `AskUserQuestion(action.feedbackQuestion)`. If the user typed free-text (via `Other`) or picked a preset label, write that body to a `## Feedback` section (create or replace) and write `action.rejectStatus` to `**Status:**`, then re-query. `stage-runner.ts` reads `## Feedback` as context on the re-run. If the user picked `abort pipeline`, stop and report.
 
 ---
 

@@ -127,9 +127,17 @@ sequenceDiagram
         CC->>CC: Validate synthesis (adversarial)
         CC->>FS: Write stage section + Status: X-review
         CC->>SM: Bash: --action next
-        SM-->>CC: JSON: {user_checkpoint, approveStatus}
-        Note over CC: Stage skill already got user approval.<br/>Auto-advance (no re-ask).
-        CC->>FS: Write approveStatus to plan
+        SM-->>CC: JSON: {user_checkpoint, askUserQuestion, approveStatus,<br/>rejectStatus, feedbackQuestion}
+        CC->>User: AskUserQuestion(askUserQuestion)
+        User-->>CC: approve | request changes
+        alt approve
+            CC->>FS: Write approveStatus to plan
+        else request changes
+            CC->>User: AskUserQuestion(feedbackQuestion)
+            User-->>CC: free-text (via "Other") or preset label
+            CC->>FS: Write ## Feedback + rejectStatus to plan
+            Note over CC: Loop — stage re-runs with ## Feedback as context
+        end
     end
 
     rect rgb(255, 235, 220)

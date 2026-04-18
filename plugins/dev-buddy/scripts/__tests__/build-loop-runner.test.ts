@@ -655,6 +655,164 @@ describe('runSingleAttempt', () => {
 
     expect(result.synthesis).toBeNull();
   });
+
+  // Contract Verifier gate (Fix 1).
+  // Runs after backpressure passes — catches Class A bugs where a producer
+  // forgot `export` on a promised symbol (missed by consumer-driven tsc).
+
+  test('backpressure green + verifier pass → mechanical_pass', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'done' } as UnitBuildDispatchResult),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+      },
+    );
+
+    expect(result.outcome).toBe('mechanical_pass');
+    expect(result.mechanicalContext).toBeNull();
+  });
+
+  test('backpressure green + verifier fail → mechanical_fail with contract-verifier context', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build', synthesis: 'done' } as UnitBuildDispatchResult),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        verifyContractFn: () => ({
+          event: 'fail',
+          unitId: 1,
+          failures: [{
+            symbol: 'ConcurrencyManager',
+            module: 'src/concurrency-manager.ts',
+            kind: 'named',
+            tsCode: 2459,
+            message: "Module declares 'ConcurrencyManager' locally, but it is not exported.",
+          }],
+        }),
+      },
+    );
+
+    expect(result.outcome).toBe('mechanical_fail');
+    expect(result.mechanicalContext).not.toBeNull();
+    expect(result.mechanicalContext!.source).toBe('contract-verifier');
+    const allStderr = result.mechanicalContext!.stderrHead + result.mechanicalContext!.stderrTail;
+    expect(allStderr).toContain('ConcurrencyManager');
+    expect(allStderr).toContain('TS2459');
+  });
+
+  test('backpressure green + verifier skip (legacy unit) → mechanical_pass', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        verifyContractFn: () => ({ event: 'skip', unitId: 1, skipReason: 'no Contract Manifest in unit file' }),
+      },
+    );
+
+    expect(result.outcome).toBe('mechanical_pass');
+    expect(result.mechanicalContext).toBeNull();
+  });
+
+  test('backpressure green + verifier error → mechanical_pass (graceful degrade)', async () => {
+    // An infrastructure error in the verifier (missing tsconfig, malformed
+    // manifest) should not block the unit when backpressure already proved
+    // the tree compiles — the real `tsc` ran and was green. Degrade to pass
+    // so one broken plan file does not stall the pipeline.
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        verifyContractFn: () => ({ event: 'error', unitId: 1, error: 'No tsconfig.json found' }),
+      },
+    );
+
+    expect(result.outcome).toBe('mechanical_pass');
+  });
+
+  test('backpressure FAIL → verifier not invoked', async () => {
+    // Short-circuit: no point verifying contracts when the tree does not
+    // even compile. The backpressure context carries the failure.
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1)]);
+    let verifierCalled = false;
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
+        backpressureFn: () => [{ command: 'bun test', exitCode: 1, stdout: '', stderr: 'type error', passed: false }],
+        verifyContractFn: () => { verifierCalled = true; return { event: 'pass', unitId: 1 }; },
+      },
+    );
+
+    expect(result.outcome).toBe('mechanical_fail');
+    expect(result.mechanicalContext!.source).toBe('backpressure');
+    expect(verifierCalled).toBe(false);
+  });
+
+  test('vacuous pass (no backpressure commands) still runs verifier', async () => {
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { backpressureCommands: [] })]);
+    let verifierCalled = false;
+
+    const result = await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
+        backpressureFn: () => [],
+        verifyContractFn: () => {
+          verifierCalled = true;
+          return {
+            event: 'fail',
+            unitId: 1,
+            failures: [{
+              symbol: 'Missing',
+              module: 'src/x.ts',
+              kind: 'named',
+              tsCode: 2305,
+              message: 'test',
+            }],
+          };
+        },
+      },
+    );
+
+    expect(verifierCalled).toBe(true);
+    expect(result.outcome).toBe('mechanical_fail');
+    expect(result.mechanicalContext!.source).toBe('contract-verifier');
+  });
+
+  test('verifier is called with unit file path and project dir', async () => {
+    // setupProject writes unit-N.md for N = 1..unitPlans.length; to exercise
+    // unit 7 we pad with 6 placeholder plans then a real one at index 7.
+    const plans = [1, 2, 3, 4, 5, 6, 7].map(n => makeUnitPlan(n));
+    const { projectDir, planPath } = setupProject(plans);
+    const verifyCalls: Array<{ unitFile: string; projectDir: string; unitId?: number }> = [];
+
+    await runSingleAttempt(
+      { planPath, cwd: projectDir, unitId: 7 },
+      {
+        dispatchFn: async () => ({ event: 'complete', stage: 'ralph-build' } as UnitBuildDispatchResult),
+        backpressureFn: (cmds) => cmds.map(c => ({ command: c, exitCode: 0, stdout: '', stderr: '', passed: true })),
+        verifyContractFn: (args) => { verifyCalls.push(args); return { event: 'pass', unitId: 7 }; },
+      },
+    );
+
+    expect(verifyCalls).toHaveLength(1);
+    expect(verifyCalls[0].unitFile).toContain('unit-7.md');
+    expect(verifyCalls[0].projectDir).toBe(projectDir);
+    expect(verifyCalls[0].unitId).toBe(7);
+  });
 });
 
 // ─── parseReviewVerdict ──────────────────────────────────────────────────

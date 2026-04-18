@@ -2,7 +2,7 @@
 name: dev-buddy-decompose
 description: Decomposition stage — break features into small, independently testable units of work
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, TaskCreate, TaskUpdate, TaskList, TaskGet
 ---
 
 # Decomposition Stage
@@ -29,11 +29,7 @@ Break the feature into tiny, independently testable units of work with per-unit 
 
    Also run a **mechanical AC coverage check**: extract all `AC-\d+` IDs from the `## Requirements` section of the plan file, and all AC references from the unit files' `### Acceptance Criteria` sections. If any AC-N from requirements has no unit covering it, list the orphaned ACs. Write the orphaned ACs to `## Feedback` and re-run decomposition. This is a **hard failure** — every AC must appear in at least one unit.
 
-3. **Present and approve** — after validation passes:
-   1. Print all synthesis results to the user
-   2. **MUST call AskUserQuestion** with options `['approve', 'request changes']`
-   3. **On approval:** create per-unit plan files under `.vcp/plan/ralph/{SLUG}/unit-{N}.md`, update master plan `## Units of Work` section
-      - **Orchestrated** (via `/dev-buddy-ralph`): set `**Status:** decompose-review`
-      - **Standalone** (direct `/dev-buddy-decompose`): set `**Status:** build`
-   4. **On rejection:** collect specific feedback via AskUserQuestion. Write feedback to `## Feedback` section (create or replace). Re-run from step 1 — `stage-runner.ts` reads `## Feedback` and injects it as context for all executors.
-   - On rerun: **delete** all existing unit files in `.vcp/plan/ralph/{SLUG}/`, **replace** existing `## Units of Work` section, and clear `## Feedback` section if present.
+3. **Write and hand off** — after validation passes:
+   1. Print all synthesis results to the user.
+   2. Create per-unit plan files under `.vcp/plan/ralph/{SLUG}/unit-{N}.md` and update the master plan's `## Units of Work` section. On re-run: **delete** all existing unit files in `.vcp/plan/ralph/{SLUG}/`, **replace** the existing `## Units of Work` section, and clear any `## Feedback` section.
+   3. Set `**Status:** decompose-review` and stop. Do not advance the pipeline from this skill — the orchestrator (`/dev-buddy-ralph`) handles the approval gate and the unit-task creation on the next tick, and standalone users should decide explicitly. Print a one-line next-step hint: `Next: review unit files under .vcp/plan/ralph/{SLUG}/. Run /dev-buddy-ralph to resume orchestrated execution (with the approval gate + unit task creation), or edit ## Feedback and re-run /dev-buddy-decompose to iterate.`

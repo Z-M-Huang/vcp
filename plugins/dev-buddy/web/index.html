@@ -124,8 +124,8 @@
               <input type="number" x-model="newPreset.max_output_tokens" placeholder="16384" min="1" step="1">
             </label>
             <label>
-              Max Context Tokens <span class="optional-label">(optional, enables context compaction)</span>
-              <input type="number" x-model="newPreset.max_context_tokens" placeholder="200000" min="1" step="1">
+              Max Context Tokens <span class="optional-label">(optional, overrides the 200k default)</span>
+              <input type="number" x-model="newPreset.max_context_tokens" placeholder="200000 (default)" min="1" step="1">
             </label>
             <label>
               Base URL

@@ -122,9 +122,17 @@ sequenceDiagram
         CC->>CC: 验证合成结果（对抗性）
         CC->>FS: 写入阶段章节 + Status: X-review
         CC->>SM: Bash: --action next
-        SM-->>CC: JSON: {user_checkpoint, approveStatus}
-        Note over CC: 阶段 skill 已获用户批准。<br/>自动推进（不重复询问）。
-        CC->>FS: 写入 approveStatus 到计划
+        SM-->>CC: JSON: {user_checkpoint, askUserQuestion, approveStatus,<br/>rejectStatus, feedbackQuestion}
+        CC->>User: AskUserQuestion(askUserQuestion)
+        User-->>CC: approve | request changes
+        alt approve
+            CC->>FS: 写入 approveStatus 到计划
+        else request changes
+            CC->>User: AskUserQuestion(feedbackQuestion)
+            User-->>CC: 自由文本（通过 "Other"）或预设标签
+            CC->>FS: 写入 ## Feedback + rejectStatus 到计划
+            Note over CC: 循环 — 阶段以 ## Feedback 作为上下文重新运行
+        end
     end
 
     rect rgb(255, 235, 220)

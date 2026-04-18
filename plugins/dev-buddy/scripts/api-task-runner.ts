@@ -19,11 +19,12 @@
  */
 
 import path from 'path';
-import { generateText, streamText, stepCountIs, wrapLanguageModel } from 'ai';
+import { generateText, streamText, stepCountIs } from 'ai';
+import type { ModelMessage } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createBash, createRead, createWrite, createEdit, createGlob, createGrep } from 'agentool';
-import { createContextCompaction } from 'agentool/context-compaction';
+import { compactMessages } from 'agentool/context-compaction';
 import { readPresets, maskApiKey } from './preset-utils.ts';
 import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
@@ -36,6 +37,9 @@ export const DEFAULT_TASK_TIMEOUT_MS = 300_000;
 
 /** Max agent loop steps for generateText. */
 export const MAX_AGENT_STEPS = 100;
+
+/** Default context window when the preset does not specify `max_context_tokens`. */
+export const DEFAULT_CONTEXT_TOKENS = 200_000;
 
 // ================== AGENT RUNNER INTERFACE ==================
 
@@ -211,85 +215,135 @@ export class UnifiedRunner implements AgentRunner {
         return escaped.length > max ? escaped.slice(0, max - 3) + '...' : escaped;
       };
 
-      try {
-        const stream = this.streamTextFn({
-          model,
-          tools,
-          stopWhen: stepCountIs(MAX_AGENT_STEPS),
-          system: options.systemPromptContent,
-          prompt: task,
-          maxOutputTokens: this.resolveMaxOutputTokens(),
-          abortSignal: abortController.signal,
-          ...(this.preset.reasoning_effort && {
-            providerOptions: { openai: { reasoningEffort: this.preset.reasoning_effort } },
-          }),
-          ...(options.debugEnabled && {
-            onStepFinish: async (step: any) => {
-              try {
+      const maxOutputTokens = this.resolveMaxOutputTokens();
+      const maxContextTokens = this.resolveMaxContextTokens();
+      const reservedOutputTokens = this.resolveReservedOutputTokens(maxContextTokens);
+      const summaryTargetTokens = Math.floor(maxContextTokens * 0.05);
+
+      const onStepFinish = options.debugEnabled
+        ? async (step: any) => {
+            try {
+              await vcpLog(options.cwd, {
+                source: logSource, event: 'step_finish', decision: 'info',
+                details: `step=${step.stepNumber} finish=${step.finishReason} `
+                  + `text=${step.text.length}ch tokens=${JSON.stringify(step.usage)}`,
+              }, true);
+
+              for (const tc of step.toolCalls) {
                 await vcpLog(options.cwd, {
-                  source: logSource, event: 'step_finish', decision: 'info',
-                  details: `step=${step.stepNumber} finish=${step.finishReason} `
-                    + `text=${step.text.length}ch tokens=${JSON.stringify(step.usage)}`,
+                  source: logSource, event: 'step_tool_call', decision: 'info',
+                  details: `step=${step.stepNumber} tool=${tc.toolName} `
+                    + `input=${sanitize(JSON.stringify(tc.input), 500)}`,
                 }, true);
-
-                for (const tc of step.toolCalls) {
-                  await vcpLog(options.cwd, {
-                    source: logSource, event: 'step_tool_call', decision: 'info',
-                    details: `step=${step.stepNumber} tool=${tc.toolName} `
-                      + `input=${sanitize(JSON.stringify(tc.input), 500)}`,
-                  }, true);
-                }
-
-                for (const tr of step.toolResults) {
-                  const output = typeof tr.output === 'string'
-                    ? tr.output : JSON.stringify(tr.output);
-                  await vcpLog(options.cwd, {
-                    source: logSource, event: 'step_tool_result', decision: 'info',
-                    details: `step=${step.stepNumber} tool=${tr.toolName} `
-                      + `output=${sanitize(output, 500)}`,
-                  }, true);
-                }
-
-                if (step.text) {
-                  await vcpLog(options.cwd, {
-                    source: logSource, event: 'step_text', decision: 'info',
-                    details: `step=${step.stepNumber} text=${sanitize(step.text, 500)}`,
-                  }, true);
-                }
-              } catch {
-                // Never let debug logging break execution
               }
-            },
-          }),
-        });
 
-        const [text, steps, response, finishReason, usage] = await Promise.all([
-          stream.text, stream.steps, stream.response, stream.finishReason, stream.usage,
-        ]);
+              for (const tr of step.toolResults) {
+                const output = typeof tr.output === 'string'
+                  ? tr.output : JSON.stringify(tr.output);
+                await vcpLog(options.cwd, {
+                  source: logSource, event: 'step_tool_result', decision: 'info',
+                  details: `step=${step.stepNumber} tool=${tr.toolName} `
+                    + `output=${sanitize(output, 500)}`,
+                }, true);
+              }
 
-        // Always log response shape — critical for diagnosing empty-response issues
-        const stepDetails = steps.map((s, i) =>
-          `${i}:text=${s.text.length}ch/tools=${s.toolCalls?.length ?? 0}/finish=${s.finishReason}`
-        ).join(' ');
-        await vcpLog(options.cwd, {
-          source: logSource, event: 'response_shape', decision: 'info',
-          details: `text=${text.length}ch steps=${steps.length} finish=${finishReason} `
-            + `tokens=${JSON.stringify(usage)} msgs=${response?.messages?.length ?? 0} [${stepDetails}]`,
-        }, options.debugEnabled);
+              if (step.text) {
+                await vcpLog(options.cwd, {
+                  source: logSource, event: 'step_text', decision: 'info',
+                  details: `step=${step.stepNumber} text=${sanitize(step.text, 500)}`,
+                }, true);
+              }
+            } catch {
+              // Never let debug logging break execution
+            }
+          }
+        : undefined;
 
-        // text only contains the LAST step's text. If the model's final
-        // step is a tool call with no accompanying text, text is empty
-        // even though intermediate steps contain the actual response.
-        const stepsText = steps.map(s => s.text).filter(Boolean).join('\n\n').trim();
+      // Caller-driven step loop: compaction runs before every inner streamText.
+      // Each outer iteration runs one inner step (stopWhen: stepCountIs(1)) so
+      // that we can re-run compaction between model calls. agentool 1.3's
+      // compactMessages returns the same `messages` reference (===) when the
+      // conversation is under the auto-compact threshold — no cost when idle.
+      let messages: ModelMessage[] = [{ role: 'user', content: task }];
+      let lastText = '';
+      let lastFinishReason: string | undefined;
+      let lastUsage: unknown = undefined;
+      const allSteps: any[] = [];
 
-        if (text || stepsText) {
-          return { result: text || stepsText, error: null, timedOut: false };
+      try {
+        for (let outer = 0; outer < MAX_AGENT_STEPS; outer++) {
+          messages = await compactMessages({
+            messages,
+            summaryModel: model,
+            maxContextTokens,
+            autoCompactThresholdPct: 0.80,
+            summaryTargetTokens,
+            reservedOutputTokens,
+            onCompactionFailure: 'passthrough',
+          });
+
+          const stream = this.streamTextFn({
+            model,
+            tools,
+            stopWhen: stepCountIs(1),
+            system: options.systemPromptContent,
+            messages,
+            maxOutputTokens,
+            abortSignal: abortController.signal,
+            ...(this.preset.reasoning_effort && {
+              providerOptions: { openai: { reasoningEffort: this.preset.reasoning_effort } },
+            }),
+            ...(onStepFinish && { onStepFinish }),
+          });
+
+          const [text, steps, response, finishReason, usage] = await Promise.all([
+            stream.text, stream.steps, stream.response, stream.finishReason, stream.usage,
+          ]);
+
+          lastText = text;
+          lastFinishReason = finishReason;
+          lastUsage = usage;
+          if (Array.isArray(steps)) allSteps.push(...steps);
+          const responseMessages = (response?.messages ?? []) as ModelMessage[];
+          if (responseMessages.length > 0) {
+            messages = [...messages, ...responseMessages];
+          }
+
+          // Only 'tool-calls' requires another round — the model wants tool
+          // execution results fed back in. Every other finish reason ('stop',
+          // 'length', 'content-filter', 'error', 'other') is terminal.
+          if (finishReason !== 'tool-calls') break;
+          // Defensive: a tool-calls finish with zero response messages means
+          // nothing to feed back — bail rather than spin.
+          if (responseMessages.length === 0) break;
         }
 
-        // Fallback: extract text content directly from response messages.
-        // The SDK's .text/.steps[].text can miss content when OpenAI-protocol
-        // gateways return it in a shape the accumulator doesn't recognize.
-        const messagesText = (response?.messages ?? [])
+        // Always log response shape — critical for diagnosing empty-response issues.
+        const stepDetails = allSteps.map((s, i) =>
+          `${i}:text=${s.text.length}ch/tools=${s.toolCalls?.length ?? 0}/finish=${s.finishReason}`
+        ).join(' ');
+        const accumulatedResponseMessages = Math.max(0, messages.length - 1);
+        await vcpLog(options.cwd, {
+          source: logSource, event: 'response_shape', decision: 'info',
+          details: `text=${lastText.length}ch steps=${allSteps.length} finish=${lastFinishReason} `
+            + `tokens=${JSON.stringify(lastUsage)} msgs=${accumulatedResponseMessages} [${stepDetails}]`,
+        }, options.debugEnabled);
+
+        // lastText only contains the FINAL inner step's text. If that step was a
+        // tool call with no accompanying text, lastText is empty even though
+        // intermediate steps contain the actual response.
+        const stepsText = allSteps.map(s => s.text).filter(Boolean).join('\n\n').trim();
+
+        if (lastText || stepsText) {
+          return { result: lastText || stepsText, error: null, timedOut: false };
+        }
+
+        // Fallback: extract text content directly from accumulated response
+        // messages. The SDK's .text/.steps[].text can miss content when
+        // OpenAI-protocol gateways return it in a shape the accumulator
+        // doesn't recognize. Skip the leading user message (messages[0]).
+        const messagesText = messages
+          .slice(1)
           .filter((m: any) => m.role === 'assistant')
           .flatMap((m: any) => {
             if (typeof m.content === 'string') return [m.content];
@@ -330,8 +384,6 @@ export class UnifiedRunner implements AgentRunner {
   }
 
   private createModel(protocol: string, modelId: string) {
-    let rawModel;
-
     if (protocol === 'openai') {
       // @ai-sdk/openai expects baseURL to include /v1 (default: https://api.openai.com/v1).
       // The web portal strips /v1 on save, so presets store URLs WITHOUT /v1.
@@ -339,43 +391,40 @@ export class UnifiedRunner implements AgentRunner {
       // MUST use .chat() — .responses() is the default since AI SDK v5,
       // but third-party OpenAI-compatible gateways only implement /chat/completions.
       const baseURL = this.preset.base_url.replace(/\/v1\/?$/, '') + '/v1';
-      rawModel = createOpenAI({ apiKey: this.preset.api_key, baseURL }).chat(modelId);
-    } else {
-      // Anthropic: @ai-sdk/anthropic expects baseURL to include /v1
-      // (default: https://api.anthropic.com/v1, SDK appends /messages).
-      // The web portal strips /v1 on save, so presets store URLs WITHOUT /v1.
-      // Normalize: strip any trailing /v1, then re-append to ensure exactly one.
-      // Uses gatewayCompatFetch to handle third-party gateways that return
-      // non-compliant thinking blocks (missing `signature` field).
-      const baseURL = this.preset.base_url.replace(/\/v1\/?$/, '') + '/v1';
-      rawModel = createAnthropic({
-        apiKey: this.preset.api_key,
-        baseURL,
-        fetch: gatewayCompatFetch,
-      })(modelId);
+      return createOpenAI({ apiKey: this.preset.api_key, baseURL }).chat(modelId);
     }
+    // Anthropic: @ai-sdk/anthropic expects baseURL to include /v1
+    // (default: https://api.anthropic.com/v1, SDK appends /messages).
+    // The web portal strips /v1 on save, so presets store URLs WITHOUT /v1.
+    // Normalize: strip any trailing /v1, then re-append to ensure exactly one.
+    // Uses gatewayCompatFetch to handle third-party gateways that return
+    // non-compliant thinking blocks (missing `signature` field).
+    const baseURL = this.preset.base_url.replace(/\/v1\/?$/, '') + '/v1';
+    return createAnthropic({
+      apiKey: this.preset.api_key,
+      baseURL,
+      fetch: gatewayCompatFetch,
+    })(modelId);
+  }
 
-    // Wrap with context compaction if max_context_tokens is configured
-    if (typeof this.preset.max_context_tokens === 'number' && this.preset.max_context_tokens > 0) {
-      const maxOutput = this.resolveMaxOutputTokens();
-      // Clamp reservedOutputTokens to ensure it's less than max_context_tokens
-      const reservedOutputTokens = maxOutput && maxOutput < this.preset.max_context_tokens
-        ? maxOutput
-        : Math.min(16384, Math.floor(this.preset.max_context_tokens * 0.1)); // 10% of context, max 16k
+  /**
+   * Resolve the max context window for compaction. Falls back to DEFAULT_CONTEXT_TOKENS
+   * when the preset's value is missing, non-numeric, or non-positive.
+   */
+  private resolveMaxContextTokens(): number {
+    const v = this.preset.max_context_tokens;
+    return typeof v === 'number' && v > 0 ? v : DEFAULT_CONTEXT_TOKENS;
+  }
 
-      return wrapLanguageModel({
-        model: rawModel,
-        middleware: createContextCompaction({
-          maxContextTokens: this.preset.max_context_tokens,
-          autoCompactThresholdPct: 0.80,    // compact at 80% full
-          summaryTargetPct: 0.05,           // summarize to 5% of context
-          reservedOutputTokens,
-          onCompactionFailure: 'passthrough', // don't fail on compaction errors
-        }),
-      });
-    }
-
-    return rawModel;
+  /**
+   * Clamp reservedOutputTokens for compactMessages so it stays below the context
+   * window. Matches prior middleware wiring: use max_output_tokens if it fits,
+   * otherwise fall back to min(16384, 10% of context).
+   */
+  private resolveReservedOutputTokens(maxContextTokens: number): number {
+    const maxOutput = this.resolveMaxOutputTokens();
+    if (maxOutput && maxOutput < maxContextTokens) return maxOutput;
+    return Math.min(16384, Math.floor(maxContextTokens * 0.1));
   }
 
   private resolveMaxOutputTokens(): number | undefined {

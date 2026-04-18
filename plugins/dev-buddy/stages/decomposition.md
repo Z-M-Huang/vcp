@@ -58,6 +58,30 @@ Define the PUBLIC interface this unit exposes or modifies. This is what dependen
 
 If the unit modifies an existing interface, show BEFORE and AFTER signatures.
 
+### Contract Manifest
+Machine-readable list of every symbol the unit promises to expose AND every cross-module symbol the unit's code will import. The mechanical contract verifier reads this block to prove (via the TypeScript compiler) that promised exports actually carry the `export` keyword and that imported symbols resolve. **Required for every unit.** Use `[]` for a side that introduces no new symbols.
+
+```json
+{
+  "exports": [
+    { "symbol": "WindowTriggerConfig", "module": "src/domain/types.ts", "kind": "type" },
+    { "symbol": "ConcurrencyManager", "module": "src/domain/concurrency-manager.ts", "kind": "named" }
+  ],
+  "consumes": [
+    { "symbol": "IConcurrencyManager", "from": "src/domain/interfaces.ts" }
+  ]
+}
+```
+
+Field rules:
+- `exports[].symbol` — exact identifier as it must appear in source.
+- `exports[].module` — project-relative path of the file that must export it.
+- `exports[].kind` — one of `named` (default if omitted), `type`, `default`.
+- `consumes[].symbol` — exact identifier the unit's source will `import`.
+- `consumes[].from` — project-relative module path of the import source.
+
+Only list symbols whose existence is the unit's responsibility. Pre-existing project APIs the unit only uses in passing do not need to appear here. List every symbol named in the Interface Contract above.
+
 ### Data Flow Trace
 For any AC that involves data moving through multiple components, document the
 complete path from trigger to final effect:
@@ -152,6 +176,9 @@ Before completing, verify:
 - [ ] First unit is the UAT test scaffolding
 - [ ] Each unit includes discovered context from the discovery stage
 - [ ] Every unit has an Interface Contract with typed signatures and error conditions
+- [ ] Every unit has a Contract Manifest JSON block with `exports[]` and `consumes[]` arrays (use `[]` for empty sides — never omit)
+- [ ] Every symbol named in the Interface Contract appears in the Contract Manifest's `exports[]`
+- [ ] Every `consumes[]` entry's symbol is exported by an earlier unit (or pre-existing project code)
 - [ ] Every unit has executable Test Stubs covering happy path + error cases
 - [ ] Every unit has an Entropy rating (LOW/MED/HIGH)
 - [ ] Interface Contracts between dependent units are compatible (Unit B's inputs match Unit A's outputs)
@@ -170,6 +197,7 @@ Before completing, verify:
 - Do NOT create circular dependencies between units
 - Do NOT skip discovered context — the implementer needs it for fresh-context work
 - Do NOT write vague contracts — "takes input and returns output" is not a contract
+- Do NOT omit the Contract Manifest — the mechanical contract verifier requires it; use `[]` for empty sides if a unit truly produces no exports or consumes nothing new
 - Do NOT write test stubs without concrete assertions — `expect(result).toBeTruthy()` is not a stub
 - Do NOT leave error conditions as "throws Error" — enumerate specific error types
 - Do NOT reduce the number of units to "keep things simple" — if the scope requires 20 units, produce 20 units

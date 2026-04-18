@@ -172,18 +172,39 @@ describe('Action output types', () => {
     expect(action.skill).toBe('dev-buddy-discover');
   });
 
-  test('CheckpointAction has stage/sectionHeading/approveStatus', () => {
+  test('CheckpointAction carries askUserQuestion + routing fields', () => {
     const action: import('../ralph-state-machine.ts').CheckpointAction = {
       type: 'user_checkpoint',
       stage: 'discover',
       sectionHeading: '## Discovery',
-      present: 'Discovery findings ready',
-      question: 'Proceed to requirements?',
-      options: ['approve', 'request changes'],
+      askUserQuestion: {
+        questions: [{
+          question: 'Proceed to requirements?',
+          header: 'Discover',
+          multiSelect: false,
+          options: [
+            { label: 'approve', description: 'advance' },
+            { label: 'request changes', description: 'rerun' },
+          ],
+        }],
+      },
       approveStatus: 'requirements',
+      rejectStatus: 'discover',
+      feedbackQuestion: {
+        questions: [{
+          question: 'What to change?',
+          header: 'Feedback',
+          multiSelect: false,
+          options: [
+            { label: 'retry without feedback', description: '...' },
+            { label: 'abort pipeline', description: '...' },
+          ],
+        }],
+      },
     };
-    expect(action.options).toHaveLength(2);
+    expect(action.askUserQuestion.questions[0].options).toHaveLength(2);
     expect(action.approveStatus).toBe('requirements');
+    expect(action.rejectStatus).toBe('discover');
     expect(action.sectionHeading).toBe('## Discovery');
   });
 
@@ -910,8 +931,9 @@ describe('computeNextAction — review gates', () => {
     expect(cp.stage).toBe('discover');
     expect(cp.sectionHeading).toBe('## Discovery');
     expect(cp.approveStatus).toBe('requirements');
-    expect(cp.options).toContain('approve');
-    expect(cp.options).toContain('request changes');
+    const labels = cp.askUserQuestion.questions[0].options.map((o: any) => o.label);
+    expect(labels).toContain('approve');
+    expect(labels).toContain('request changes');
   });
 
   test('requirements-review emits user_checkpoint with correct fields', () => {
@@ -943,6 +965,51 @@ describe('computeNextAction — review gates', () => {
       const result = computeNextAction(state, { ...basePlanData, status: reviewStatus }, '/tmp', config);
       const hasError = result.actions.some((a: any) => a.type === 'error');
       expect(hasError).toBe(false);
+    }
+  });
+
+  test('checkpoint carries ready-to-pass askUserQuestion + feedbackQuestion payloads', () => {
+    const { computeNextAction } = require('../ralph-state-machine.ts');
+    const cases: Array<{ status: string; stage: string; next: string; reset: string }> = [
+      { status: 'discover-review', stage: 'discover', next: 'requirements', reset: 'discover' },
+      { status: 'requirements-review', stage: 'requirements', next: 'decompose', reset: 'requirements' },
+      { status: 'decompose-review', stage: 'decompose', next: 'plan_lint', reset: 'decompose' },
+    ];
+    for (const c of cases) {
+      const state = { slug: 'test', status: c.status, outerIteration: 0, reviewIteration: 0, units: [], lastAction: 'next', lastTimestamp: '2026-04-10T00:00:00Z' };
+      const result = computeNextAction(state, { ...basePlanData, status: c.status, hasRequirements: true, hasACs: true, hasUATs: true }, '/tmp', config);
+      const cp: any = result.actions.find((a: any) => a.type === 'user_checkpoint');
+      expect(cp).toBeDefined();
+      // Status routing
+      expect(cp.approveStatus).toBe(c.next);
+      expect(cp.rejectStatus).toBe(c.reset);
+      // Primary AskUserQuestion payload — MUST match the tool's schema so it can
+      // be passed through verbatim (approve / request changes).
+      expect(cp.askUserQuestion).toBeDefined();
+      expect(Array.isArray(cp.askUserQuestion.questions)).toBe(true);
+      expect(cp.askUserQuestion.questions).toHaveLength(1);
+      const q = cp.askUserQuestion.questions[0];
+      expect(typeof q.question).toBe('string');
+      expect(q.question.length).toBeGreaterThan(0);
+      expect(typeof q.header).toBe('string');
+      expect(q.header.length).toBeLessThanOrEqual(12);
+      expect(q.multiSelect).toBe(false);
+      const labels = q.options.map((o: any) => o.label);
+      expect(labels).toContain('approve');
+      expect(labels).toContain('request changes');
+      for (const opt of q.options) {
+        expect(typeof opt.description).toBe('string');
+        expect(opt.description.length).toBeGreaterThan(0);
+      }
+      // Follow-up feedback payload — same shape, distinct question.
+      expect(cp.feedbackQuestion).toBeDefined();
+      expect(cp.feedbackQuestion.questions).toHaveLength(1);
+      const fq = cp.feedbackQuestion.questions[0];
+      expect(typeof fq.question).toBe('string');
+      expect(fq.question).not.toBe(q.question);
+      expect(fq.multiSelect).toBe(false);
+      const feedbackLabels = fq.options.map((o: any) => o.label);
+      expect(feedbackLabels).toContain('abort pipeline');
     }
   });
 });
@@ -1034,6 +1101,65 @@ describe('main() — review gate e2e', () => {
     expect(cp.approveStatus).toBe('requirements');
     const hasSkill = result.actions.some((a: any) => a.type === 'invoke_skill');
     expect(hasSkill).toBe(false);
+  });
+
+  test('reject path: discover-review → ## Feedback + discover → invoke_skill(dev-buddy-discover)', () => {
+    const { main } = require('../ralph-state-machine.ts');
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sm-reject-'));
+    tmpDirs.push(tmpDir);
+    const planDir = path.join(tmpDir, '.vcp', 'plan');
+    mkdirSync(planDir, { recursive: true });
+    const planPath = path.join(planDir, 'ralph-reject-test.md');
+
+    // Step 1: plan at discover-review → state machine emits checkpoint with reject path metadata
+    writeFileSync(planPath, '**Status:** discover-review\n## Discovery\nOld findings');
+    const r1 = main(planPath, 'next');
+    const cp: any = r1.actions.find((a: any) => a.type === 'user_checkpoint');
+    expect(cp).toBeDefined();
+    expect(cp.rejectStatus).toBe('discover');
+    expect(cp.feedbackQuestion).toBeDefined();
+
+    // Step 2: simulate the orchestrator's 'request changes' branch — it writes
+    // ## Feedback (from AskUserQuestion's free-text or a preset label) and
+    // resets the plan status to rejectStatus.
+    writeFileSync(planPath, [
+      '**Status:** discover',
+      '## Discovery',
+      'Old findings',
+      '',
+      '## Feedback',
+      'Missing probe for X; re-examine module Y',
+      '',
+    ].join('\n'));
+
+    // Step 3: re-query → the state machine should route to the discover skill
+    // so stage-runner.ts picks up ## Feedback as executor context.
+    const r2 = main(planPath, 'next');
+    const skill: any = r2.actions.find((a: any) => a.type === 'invoke_skill');
+    expect(skill).toBeDefined();
+    expect(skill.skill).toBe('dev-buddy-discover');
+    expect(skill.stageType).toBe('discovery');
+    // No checkpoint on the re-run — we are back at the pre-review stage.
+    const hasCp = r2.actions.some((a: any) => a.type === 'user_checkpoint');
+    expect(hasCp).toBe(false);
+  });
+
+  test('reject path handles {SLUG} interpolation in decompose-review description', () => {
+    const { main } = require('../ralph-state-machine.ts');
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sm-slug-'));
+    tmpDirs.push(tmpDir);
+    const planDir = path.join(tmpDir, '.vcp', 'plan');
+    mkdirSync(planDir, { recursive: true });
+    const planPath = path.join(planDir, 'ralph-squishy-rabbit.md');
+    writeFileSync(planPath, '**Status:** decompose-review\n## Units of Work\n- Unit 1');
+    const result = main(planPath, 'next');
+    const cp: any = result.actions.find((a: any) => a.type === 'user_checkpoint');
+    expect(cp).toBeDefined();
+    // The decompose description mentions .vcp/plan/ralph/{slug}/unit-*.md —
+    // literal `{SLUG}` is a bug; the actual slug must be interpolated.
+    const question = cp.askUserQuestion.questions[0].question;
+    expect(question).not.toContain('{SLUG}');
+    expect(question).toContain('squishy-rabbit');
   });
 });
 

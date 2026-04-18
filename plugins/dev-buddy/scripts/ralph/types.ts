@@ -171,14 +171,47 @@ export interface BackpressureAction {
   commands: string[];
 }
 
+/**
+ * Ready-to-pass payload for the AskUserQuestion tool. Schema mirrors the tool's
+ * `questions` parameter exactly — the orchestrator forwards this verbatim with
+ * no rewording or interpretation.
+ */
+export interface AskUserQuestionPayload {
+  questions: Array<{
+    question: string;
+    header: string;
+    options: Array<{ label: string; description: string }>;
+    multiSelect: boolean;
+  }>;
+}
+
 export interface CheckpointAction {
   type: 'user_checkpoint';
   stage: string;
   sectionHeading: string;
-  present: string;
-  question: string;
-  options: string[];
+  /**
+   * Exact payload the orchestrator passes to the AskUserQuestion tool.
+   * Schema mirrors the tool's `questions` parameter so it can be forwarded
+   * verbatim. The pre-shaped payload keeps the call site obvious; actual
+   * invocation of AskUserQuestion still depends on the orchestrator
+   * following the action.
+   */
+  askUserQuestion: AskUserQuestionPayload;
+  /** Plan status to write on `approve`. */
   approveStatus: PlanStatus;
+  /** Plan status to write on `request changes` (resets to the pre-review stage). */
+  rejectStatus: PlanStatus;
+  /**
+   * Follow-up AskUserQuestion payload for the `request changes` branch.
+   *
+   * AskUserQuestion always exposes an implicit free-text `Other` option that
+   * does NOT appear in `options[]` — users type specific feedback there. The
+   * orchestrator writes whatever the tool returns (the typed free-text OR a
+   * selected preset label like `abort pipeline`) to the plan's `## Feedback`
+   * section before re-running the stage. `stage-runner.ts` reads `## Feedback`
+   * as executor context on the re-run.
+   */
+  feedbackQuestion: AskUserQuestionPayload;
 }
 
 export interface WritePlanAction {
@@ -230,6 +263,44 @@ export interface PlanFileData {
   definedUATIds: string[];
   passedUATIds: string[];
 }
+
+// ─── CONTRACT MANIFEST ─────────────────────────────────────────────────────
+// Machine-readable contract block embedded in unit-N.md under
+// `### Contract Manifest`. Lists every cross-module symbol the unit promises to
+// expose and every cross-module symbol the unit's source code will import. The
+// plan-lint stage uses these to verify wiring across units; the build-loop
+// runner's contract-verifier uses them to prove (via tsc) that promised
+// exports actually carry the `export` keyword.
+
+/** Single entry in `Contract Manifest.exports[]`. */
+export interface ContractExport {
+  /** Exact identifier as it must appear in source. */
+  symbol: string;
+  /** Project-relative path of the file that must export this symbol. */
+  module: string;
+  /** Defaults to 'named' when omitted in the JSON. */
+  kind: 'named' | 'type' | 'default';
+}
+
+/** Single entry in `Contract Manifest.consumes[]`. */
+export interface ContractConsumes {
+  /** Exact identifier the unit's source will `import`. */
+  symbol: string;
+  /** Project-relative module path of the import source. */
+  from: string;
+}
+
+/** Parsed Contract Manifest block from a unit-N.md file. */
+export interface ContractManifest {
+  exports: ContractExport[];
+  consumes: ContractConsumes[];
+}
+
+/** Discriminated result from extractContractManifest(). */
+export type ContractManifestExtractResult =
+  | { kind: 'ok'; manifest: ContractManifest }
+  | { kind: 'missing' }
+  | { kind: 'malformed'; error: string };
 
 /** Data extracted from an individual unit plan file. */
 export interface UnitPlanData {
@@ -339,7 +410,7 @@ export interface RecordAttemptInput {
 
 /** Output from SM action `record_attempt_result`. */
 export interface RecordAttemptOutput {
-  nextAction: 'dispatch_unit_review' | 'retry_unit' | 'escalate_stuck' | 'unit_failed';
+  nextAction: 'dispatch_unit_review' | 'retry_unit' | 'escalate_stuck' | 'unit_failed' | 'unit_done';
   unitId: number;
   lease?: string;
   identicalFailureCount?: number;
@@ -376,13 +447,22 @@ export interface UnitReviewResult {
 // across process restarts.
 
 /**
- * Compile/test failure details captured from a non-zero exit (dispatch or
- * backpressure). Head + tail excerpts survive truncation on either edge of a
- * long output stream. Bodies are persisted verbatim into the prompt — if a
- * build tool echoes secrets to stdout/stderr those secrets land in the prompt.
+ * Compile/test failure details captured from a non-zero exit. Sources:
+ *   - 'dispatch'           executor dispatch itself errored out
+ *   - 'backpressure'       a unit backpressure command (tsc/lint/test) failed
+ *   - 'contract-verifier'  the Contract Manifest probe-file typecheck failed:
+ *                          a promised export cannot be resolved under the
+ *                          project's tsconfig. Catches the Class-A bug where
+ *                          a producer unit declares a symbol but forgot the
+ *                          `export` keyword, which backpressure misses
+ *                          because nothing in the tree imports it yet.
+ *
+ * Head + tail excerpts survive truncation on either edge of a long output
+ * stream. Bodies are persisted verbatim into the prompt — if a build tool
+ * echoes secrets to stdout/stderr those secrets land in the prompt.
  */
 export interface MechanicalContext {
-  source: 'dispatch' | 'backpressure';
+  source: 'dispatch' | 'backpressure' | 'contract-verifier';
   command: string;
   exitCode: number;
   stdoutHead: string;
