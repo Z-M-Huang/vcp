@@ -391,6 +391,35 @@ describe('validatePreset: API max_output_tokens vs max_context_tokens', () => {
   });
 });
 
+// ================== validatePreset: Subscription timeout_ms ==================
+
+describe('validatePreset: Subscription timeout_ms', () => {
+  test('accepts subscription preset without timeout_ms', () => {
+    const preset = { type: 'subscription', name: 'Test Subscription' };
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+
+  test('accepts valid positive integer (600000)', () => {
+    const preset = { type: 'subscription', name: 'Test Subscription', timeout_ms: 600_000 };
+    expect(() => validatePreset(preset)).not.toThrow();
+  });
+
+  test('rejects zero (0)', () => {
+    const preset = { type: 'subscription', name: 'Test Subscription', timeout_ms: 0 };
+    expect(() => validatePreset(preset)).toThrow('Subscription preset timeout_ms must be a positive integer');
+  });
+
+  test('rejects negative value (-1)', () => {
+    const preset = { type: 'subscription', name: 'Test Subscription', timeout_ms: -1 };
+    expect(() => validatePreset(preset)).toThrow('Subscription preset timeout_ms must be a positive integer');
+  });
+
+  test('rejects non-integer float (1.5)', () => {
+    const preset = { type: 'subscription', name: 'Test Subscription', timeout_ms: 1.5 };
+    expect(() => validatePreset(preset)).toThrow('Subscription preset timeout_ms must be a positive integer');
+  });
+});
+
 // ================== maskApiKey ==================
 
 describe('maskApiKey', () => {

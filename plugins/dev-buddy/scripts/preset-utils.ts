@@ -247,6 +247,12 @@ export function validatePreset(preset: unknown): Preset {
       return p as unknown as ApiPreset;
     }
     case 'subscription': {
+      // timeout_ms is optional but must be positive integer if present
+      if (p.timeout_ms !== undefined) {
+        if (!Number.isInteger(p.timeout_ms) || (p.timeout_ms as number) <= 0) {
+          throw new Error('Subscription preset timeout_ms must be a positive integer');
+        }
+      }
       return p as unknown as SubscriptionPreset;
     }
     case 'cli': {

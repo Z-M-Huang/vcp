@@ -65,6 +65,16 @@ If multiple reviewers are configured:
 - **Test meaningfulness** — tests assert concrete expected values, not just `toBeTruthy()`/`toBeDefined()`
 - **Done When criteria** — each criterion in the Done When section is satisfied
 
+## Verify-Before-Flagging Rule (prevents false positives)
+
+The `## Implementation Files` block only shows files listed in `### Files to Touch`. Many symbols (helpers, types, constants, sentinel errors) live in SIBLING files of the same package. Before flagging a symbol as undefined, missing, or unimported:
+
+1. **Use Grep** to search the whole project for the symbol's definition (e.g. `func sameObjectConfirmPath`, `type PromotionGate`, `var DefaultPromotionGates`).
+2. **Use Read/Glob** to inspect the directory containing the edited files — sibling files in the same Go package / TS module are in-scope without an import.
+3. Only flag as "undefined" if Grep returns no match anywhere in the repo. Mechanical backpressure (`go build`/`tsc`) already ran and passed — a truly missing symbol would have failed compilation. If backpressure is green, the symbol exists; the reviewer's narrow view is hiding it.
+
+A finding that says "X is called but not defined" when X is actually defined in a sibling file is a false positive and burns a rework attempt. Always grep first.
+
 ## Anti-Patterns
 
 - Do NOT approve implementation that merely compiles — trace the ACs
@@ -72,3 +82,4 @@ If multiple reviewers are configured:
 - Do NOT suggest architectural changes beyond the unit scope
 - Do NOT re-run backpressure — the build loop already ran it mechanically
 - Do NOT modify any files — this is a read-only review
+- Do NOT flag a symbol as "undefined" without Grep-ing the repo first (see Verify-Before-Flagging Rule)

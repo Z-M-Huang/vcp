@@ -423,7 +423,9 @@ function dispatchExecutor(
   debugEnabled: boolean,
 ): Promise<DispatchResult> {
   return new Promise<DispatchResult>((resolve) => {
-    const timeoutMs = (('timeout_ms' in preset ? preset.timeout_ms : undefined) || DEFAULT_TIMEOUT_MS) + PROCESS_TIMEOUT_BUFFER_MS;
+    const baseTimeoutMs = ('timeout_ms' in preset ? preset.timeout_ms : undefined) || DEFAULT_TIMEOUT_MS;
+    // Buffer compensates for inner-runner abort grace in api/cli subprocesses; subscription has no inner timer, so no buffer.
+    const timeoutMs = baseTimeoutMs + (preset.type === 'subscription' ? 0 : PROCESS_TIMEOUT_BUFFER_MS);
     let timedOut = false;
     let proc: ReturnType<typeof spawn>;
     const stdoutChunks: Buffer[] = [];

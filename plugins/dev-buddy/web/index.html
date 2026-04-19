@@ -153,6 +153,16 @@
           </div>
         </template>
 
+        <!-- Subscription-specific fields -->
+        <template x-if="newPreset.type === 'subscription'">
+          <div>
+            <label>
+              Task Timeout (minutes, optional)
+              <input type="number" x-model="newPreset.timeout_minutes" placeholder="5" min="1" step="1">
+            </label>
+          </div>
+        </template>
+
         <!-- CLI-specific fields -->
         <template x-if="newPreset.type === 'cli'">
           <div>
@@ -353,6 +363,16 @@
                   <div class="detail-row" x-show="preset.max_context_tokens">
                     <span class="label">Max Context Tokens:</span>
                     <span x-text="preset.max_context_tokens"></span>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Subscription preset details -->
+              <template x-if="preset.type === 'subscription'">
+                <div class="subscription-details">
+                  <div class="detail-row" x-show="preset.timeout_ms">
+                    <span class="label">Timeout:</span>
+                    <span x-text="preset.timeout_ms ? Math.round(preset.timeout_ms / 60000) + ' min' : ''"></span>
                   </div>
                 </div>
               </template>

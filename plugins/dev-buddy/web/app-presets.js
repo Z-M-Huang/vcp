@@ -50,7 +50,11 @@ function presetsMixin() {
           max_context_tokens: this.newPreset.max_context_tokens ? Number(this.newPreset.max_context_tokens) : undefined,
         };
       } else if (this.newPreset.type === 'subscription') {
-        body = { type: 'subscription', name: this.newPreset.name };
+        body = {
+          type: 'subscription',
+          name: this.newPreset.name,
+          timeout_ms: this.newPreset.timeout_minutes ? Number(this.newPreset.timeout_minutes) * 60000 : undefined,
+        };
       } else if (this.newPreset.type === 'cli') {
         const models = this.newPreset.cli_models_str ? this.newPreset.cli_models_str.split(',').map(m => m.trim()).filter(Boolean) : [];
         body = {
@@ -114,7 +118,9 @@ function presetsMixin() {
       const preset = this.presets[name];
       if (!preset) return;
       this.newPreset.key = name; this.newPreset.type = preset.type; this.newPreset.name = preset.name;
-      if (preset.type === 'api') {
+      if (preset.type === 'subscription') {
+        this.newPreset.timeout_minutes = preset.timeout_ms ? String(Math.round(preset.timeout_ms / 60000)) : '';
+      } else if (preset.type === 'api') {
         this.newPreset.base_url = preset.base_url || '';
         try { const resp = await fetch(`/api/presets/${encodeURIComponent(name)}?reveal=true`); if (resp.ok) { const data = await resp.json(); this.newPreset.api_key = data.preset?.api_key || ''; } else { this.newPreset.api_key = ''; } } catch { this.newPreset.api_key = ''; }
         this.newPreset.models_str = Array.isArray(preset.models) ? preset.models.join(', ') : '';

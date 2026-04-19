@@ -26,6 +26,8 @@ export interface ApiPreset {
 export interface SubscriptionPreset {
   type: 'subscription';
   name: string;
+  /** Custom timeout in milliseconds per task. Default: 300000 (5 minutes). */
+  timeout_ms?: number;
 }
 
 /**
