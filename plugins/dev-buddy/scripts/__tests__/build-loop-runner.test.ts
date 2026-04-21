@@ -97,7 +97,25 @@ function makeLatestAttempt(overrides: Partial<LatestAttemptState> = {}): LatestA
 // ─── Temp directory management ─────────────────────────────────────────────
 
 const tmpDirs: string[] = [];
-afterAll(() => { tmpDirs.forEach(d => rmSync(d, { recursive: true, force: true })); });
+const debugConfigPath = path.join(os.homedir(), '.vcp', 'config.json');
+let originalDebugConfig: string | null = null;
+let hadOriginalDebugConfig = false;
+try {
+  originalDebugConfig = readFileSync(debugConfigPath, 'utf-8');
+  hadOriginalDebugConfig = true;
+} catch {
+  // no existing config
+}
+mkdirSync(path.dirname(debugConfigPath), { recursive: true });
+writeFileSync(debugConfigPath, JSON.stringify({ debug: true }));
+afterAll(() => {
+  tmpDirs.forEach(d => rmSync(d, { recursive: true, force: true }));
+  if (hadOriginalDebugConfig && originalDebugConfig !== null) {
+    writeFileSync(debugConfigPath, originalDebugConfig);
+  } else {
+    rmSync(debugConfigPath, { force: true });
+  }
+});
 
 function makeTmpDir(): string {
   const d = mkdtempSync(path.join(os.tmpdir(), 'blr-test-'));
@@ -652,6 +670,36 @@ describe('runUnitLoop — plan §F test cases 1-8', () => {
     expect(readUnitState(projectDir, 'test-build', 1)!.status).toBe('done');
   });
 
+  test('[2a2] mech_pass → malformed affirmative review PASS is salvaged and logged', async () => {
+    setUnitReviewEnabled(true);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 3 })]);
+
+    const terminal = await runUnitLoop(
+      { planPath, cwd: projectDir, unitId: 1 },
+      {
+        dispatchFn: async () => okDispatch(),
+        backpressureFn: (cmds) => okBackpressure(cmds),
+        verifyContractFn: () => ({ event: 'pass', unitId: 1 }),
+        reviewDispatchFn: async () => ({
+          synthesis: [
+            'I\'ve reviewed all three implementation files against the unit specification. The implementation is complete and correct. Here\'s my verification:',
+            '',
+            '## ✅ Implementation Review',
+            '',
+            'Ready for backpressure verification.',
+          ].join('\n'),
+        }),
+      },
+    );
+
+    expect(terminal.status).toBe('done');
+    expect(readUnitState(projectDir, 'test-build', 1)!.status).toBe('done');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const logBody = readFileSync(path.join(projectDir, '.vcp', 'dev-buddy.log'), 'utf-8');
+    expect(logBody).toContain('unit-review.verdict_salvaged_pass');
+    expect(logBody).toContain('reason=affirmative_pass_family_without_verdict');
+  });
+
   // Test 2b — review-driven retry with feedback carry.
   test('[2b] review NEEDS_CHANGES → retry → review PASS; 2nd build prompt carries MUST ADDRESS feedback', async () => {
     setUnitReviewEnabled(true);
@@ -912,6 +960,7 @@ describe('parseReviewVerdict', () => {
     const result = parseReviewVerdict('## Verdict: PASS\n\nAll ACs traced.');
     expect(result.passed).toBe(true);
     expect(result.feedback).toBe('');
+    expect(result.parseMode).toBe('strict');
   });
 
   test('parses NEEDS_CHANGES with review feedback section', () => {
@@ -927,6 +976,7 @@ describe('parseReviewVerdict', () => {
     expect(result.passed).toBe(false);
     expect(result.feedback).toContain('AC-1 violated');
     expect(result.feedback).toContain('Contract mismatch');
+    expect(result.parseMode).toBe('strict');
   });
 
   test('fail-closed on malformed output — no verdict header', () => {
@@ -934,6 +984,7 @@ describe('parseReviewVerdict', () => {
     expect(result.passed).toBe(false);
     expect(result.feedback).toContain('unparseable');
     expect(result.feedback).toContain('This is garbage output');
+    expect(result.parseMode).toBe('unparseable');
   });
 
   test('fail-closed truncates very long unparseable output to cap', () => {
@@ -942,6 +993,7 @@ describe('parseReviewVerdict', () => {
     expect(result.passed).toBe(false);
     expect(result.feedback).toContain('truncated');
     expect(result.feedback.length).toBeLessThan(20_000);
+    expect(result.parseMode).toBe('unparseable');
   });
 
   test('demotes H1/H2 inside captured feedback to H3', () => {
@@ -968,11 +1020,83 @@ describe('parseReviewVerdict', () => {
     const result = parseReviewVerdict(output);
     expect(result.passed).toBe(false);
     expect(result.feedback).toContain('Direct feedback body');
+    expect(result.parseMode).toBe('strict');
   });
 
   test('handles case-insensitive verdict', () => {
     expect(parseReviewVerdict('## verdict: pass').passed).toBe(true);
     expect(parseReviewVerdict('## VERDICT: NEEDS_CHANGES\nSome feedback').passed).toBe(false);
+  });
+
+  test('salvages affirmative implementation-review summary without verdict header', () => {
+    const output = [
+      'I\'ve reviewed all three implementation files against the unit specification. The implementation is complete and correct. Here\'s my verification:',
+      '',
+      '## ✅ Implementation Review',
+      '',
+      'Ready for backpressure verification.',
+    ].join('\n');
+    const result = parseReviewVerdict(output);
+    expect(result).toMatchObject({
+      passed: true,
+      feedback: '',
+      parseMode: 'salvaged_pass',
+      reason: 'affirmative_pass_family_without_verdict',
+    });
+  });
+
+  test('salvages affirmative coverage summary without verdict header', () => {
+    const output = [
+      'All four implementation files are already present and well-structured. Let me verify the code quality against the specification by checking a few key aspects.',
+      '',
+      'The implementation covers:',
+      '',
+      'The implementation is complete and matches AC-54 requirements. Ready to mark `[x]` once backpressure passes.',
+    ].join('\n');
+    const result = parseReviewVerdict(output);
+    expect(result).toMatchObject({
+      passed: true,
+      feedback: '',
+      parseMode: 'salvaged_pass',
+      reason: 'affirmative_pass_family_without_verdict',
+    });
+  });
+
+  test('salvages review feedback no-findings body without verdict header', () => {
+    const output = [
+      '## Review Feedback',
+      '(no findings — all ACs satisfied)',
+    ].join('\n');
+    const result = parseReviewVerdict(output);
+    expect(result).toMatchObject({
+      passed: true,
+      feedback: '',
+      parseMode: 'salvaged_pass',
+      reason: 'review_feedback_no_findings_without_verdict',
+    });
+  });
+
+  test('does not salvage malformed output when review feedback contains findings', () => {
+    const output = [
+      '## Review Feedback',
+      '- AC-1 violated (src/foo.ts:42): missing error handling',
+    ].join('\n');
+    const result = parseReviewVerdict(output);
+    expect(result.passed).toBe(false);
+    expect(result.parseMode).toBe('unparseable');
+  });
+
+  test('does not salvage affirmative prose when actionable findings are present', () => {
+    const output = [
+      'The implementation is complete and correct.',
+      '',
+      '## ✅ Implementation Review',
+      '',
+      '- Contract mismatch (src/bar.ts:10): returns void instead of Promise',
+    ].join('\n');
+    const result = parseReviewVerdict(output);
+    expect(result.passed).toBe(false);
+    expect(result.parseMode).toBe('unparseable');
   });
 });
 
@@ -1068,5 +1192,3 @@ describe('build-loop-runner.ts import-surface guard', () => {
     }
   });
 });
-
-

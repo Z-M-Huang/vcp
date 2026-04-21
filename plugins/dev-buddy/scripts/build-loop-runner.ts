@@ -298,6 +298,92 @@ async function dispatchUnitReviewDefault(
 /** Maximum bytes of raw output retained when feedback is unparseable. */
 export const UNPARSEABLE_RAW_OUTPUT_CAP = 5000;
 
+export interface ReviewVerdictParseResult {
+  passed: boolean;
+  feedback: string;
+  parseMode: 'strict' | 'salvaged_pass' | 'unparseable';
+  reason?: string;
+}
+
+const REVIEW_PASS_HEADING_RE = /^##\s+(?:✅\s*)?Implementation Review\s*$/im;
+const REVIEW_PASS_SCAFFOLD_RE = /\b(?:here(?:'s| is) my verification|the implementation covers:|let me verify the code quality against the specification|verifying the code quality against the specification)\b/i;
+const REVIEW_PASS_CONCLUSION_RE = /\b(?:the implementation is )?(?:complete and correct|complete and matches(?: [^.:\n]+)?|complete and satisfies(?: [^.:\n]+)?|complete and meets(?: [^.:\n]+)?|matches(?: [^.:\n]+)?(?:requirements|acceptance criteria|specification)|all ACs satisfied)\b/i;
+const REVIEW_READY_MARKER_RE = /\b(?:ready for backpressure verification|ready to mark\s+`?\[x\]`?)\b/i;
+const REVIEW_FINDING_LINE_RE = /(?:^|\n)(?:[-*]\s+|###\s+).*?\b(?:violated|mismatch|missing|not implemented|incorrect|tautological|required change|must address)\b/im;
+const REVIEW_FINDING_WITH_LOCATION_RE = /(?:^|\n).*?\b[\w./-]+\.[A-Za-z0-9]+:\d+\b.*\b(?:violated|mismatch|missing|not implemented|incorrect|tautological|required change|must address)\b/im;
+const REVIEW_NEGATIVE_MARKERS = [
+  /\bNEEDS_CHANGES\b/i,
+  /\b(?:contract mismatch|tautological test|missing implementation|undefined symbol)\b/i,
+  REVIEW_FINDING_LINE_RE,
+  REVIEW_FINDING_WITH_LOCATION_RE,
+] as const;
+const REVIEW_NO_FINDINGS_RE = /^\(?no findings\b[\s\S]*\ball ACs satisfied\)?$/i;
+
+function truncateRawReviewOutput(output: string): string {
+  return output.length > UNPARSEABLE_RAW_OUTPUT_CAP
+    ? output.slice(0, UNPARSEABLE_RAW_OUTPUT_CAP) + '\n\n…[truncated]'
+    : output;
+}
+
+function buildUnparseableReviewVerdict(output: string, reason: string): ReviewVerdictParseResult {
+  return {
+    passed: false,
+    feedback: `Review output unparseable — ${reason}. Raw output:\n\n${truncateRawReviewOutput(output)}`,
+    parseMode: 'unparseable',
+    reason,
+  };
+}
+
+function extractReviewFeedbackBody(output: string, startIndex: number = 0): string | null {
+  const searchSpace = output.slice(startIndex);
+  const fbHeadingMatch = searchSpace.match(/^##\s+Review Feedback\s*$/m);
+  if (!fbHeadingMatch || fbHeadingMatch.index === undefined) {
+    return null;
+  }
+  return searchSpace.slice(fbHeadingMatch.index + fbHeadingMatch[0].length).trim();
+}
+
+function isNoFindingsFeedback(body: string): boolean {
+  return REVIEW_NO_FINDINGS_RE.test(body.trim());
+}
+
+function trySalvagePassVerdict(output: string): ReviewVerdictParseResult | null {
+  const feedbackBody = extractReviewFeedbackBody(output);
+  if (feedbackBody !== null) {
+    if (isNoFindingsFeedback(feedbackBody)) {
+      return {
+        passed: true,
+        feedback: '',
+        parseMode: 'salvaged_pass',
+        reason: 'review_feedback_no_findings_without_verdict',
+      };
+    }
+    if (feedbackBody.length > 0) {
+      return null;
+    }
+  }
+
+  if (REVIEW_NEGATIVE_MARKERS.some((pattern) => pattern.test(output))) {
+    return null;
+  }
+
+  const hasPositiveHeading = REVIEW_PASS_HEADING_RE.test(output);
+  const hasVerificationScaffold = REVIEW_PASS_SCAFFOLD_RE.test(output);
+  const hasPositiveConclusion = REVIEW_PASS_CONCLUSION_RE.test(output);
+  const hasReadyMarker = REVIEW_READY_MARKER_RE.test(output);
+
+  if (hasPositiveConclusion && (hasPositiveHeading || hasVerificationScaffold || hasReadyMarker)) {
+    return {
+      passed: true,
+      feedback: '',
+      parseMode: 'salvaged_pass',
+      reason: 'affirmative_pass_family_without_verdict',
+    };
+  }
+
+  return null;
+}
+
 /**
  * Parse a review verdict from synthesized review output. **Fail-closed.**
  *
@@ -305,30 +391,30 @@ export const UNPARSEABLE_RAW_OUTPUT_CAP = 5000;
  * - Verdict `NEEDS_CHANGES` → `{ passed: false, feedback: <captured + demoted> }`
  * - Missing or unrecognized verdict → `{ passed: false, feedback: '<error + truncated raw output>' }`.
  */
-export function parseReviewVerdict(output: string): { passed: boolean; feedback: string } {
+export function parseReviewVerdict(output: string): ReviewVerdictParseResult {
   const verdictMatch = output.match(/^##\s+Verdict:\s*(PASS|NEEDS_CHANGES)\s*$/im);
   if (!verdictMatch) {
-    const truncated = output.length > UNPARSEABLE_RAW_OUTPUT_CAP
-      ? output.slice(0, UNPARSEABLE_RAW_OUTPUT_CAP) + '\n\n…[truncated]'
-      : output;
-    return {
-      passed: false,
-      feedback: `Review output unparseable — no recognized verdict header. Raw output:\n\n${truncated}`,
-    };
+    return trySalvagePassVerdict(output)
+      ?? buildUnparseableReviewVerdict(output, 'no recognized verdict header');
   }
   if (verdictMatch[1].toUpperCase() === 'PASS') {
-    return { passed: true, feedback: '' };
+    return { passed: true, feedback: '', parseMode: 'strict', reason: 'strict_pass_verdict' };
   }
 
   let feedback: string;
-  const fbHeadingMatch = output.match(/^##\s+Review Feedback\s*$/m);
-  if (fbHeadingMatch && fbHeadingMatch.index !== undefined) {
-    feedback = output.slice(fbHeadingMatch.index + fbHeadingMatch[0].length).trim();
+  const feedbackBody = extractReviewFeedbackBody(output, verdictMatch.index! + verdictMatch[0].length);
+  if (feedbackBody !== null) {
+    feedback = feedbackBody;
   } else {
     feedback = output.slice(verdictMatch.index! + verdictMatch[0].length).trim();
   }
   feedback = demoteFeedbackHeadings(feedback);
-  return { passed: false, feedback };
+  return {
+    passed: false,
+    feedback,
+    parseMode: 'strict',
+    reason: 'strict_needs_changes_verdict',
+  };
 }
 
 /**
@@ -678,6 +764,17 @@ export async function runUnitLoop(
         }, debug).catch(() => {});
       }
       const verdict = parseReviewVerdict(reviewOutput.synthesis ?? '');
+      if (verdict.parseMode === 'salvaged_pass') {
+        const excerpt = truncateRawReviewOutput(reviewOutput.synthesis ?? '');
+        vcpLog(args.cwd, {
+          source: 'build-loop-runner',
+          event: 'unit-review.verdict_salvaged_pass',
+          decision: 'warn',
+          details: capLogPayload(
+            `slug=${slug} unit=${args.unitId} attempt=${reservation.attempt} reason=${verdict.reason ?? 'unknown'}\n${excerpt}`,
+          ),
+        }, debug).catch(() => {});
+      }
       emit({
         event: 'review_verdict',
         unitId: args.unitId,

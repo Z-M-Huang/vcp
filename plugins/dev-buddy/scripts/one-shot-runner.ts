@@ -506,17 +506,60 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
   const substitutedArgs = tokenized.map(token => substitutePlaceholders(token, placeholders));
   const timeoutMs = preset.timeout_ms || DEFAULT_CLI_TIMEOUT_MS;
 
+  // Oversized-argv fallback: Linux execve has MAX_ARG_STRLEN = 128KB per argv element
+  // (independent of ARG_MAX total). A prompt that embeds large stage context (e.g. a
+  // decomposition synthesizer seeing a 125KB Requirements section plus N executor
+  // outputs) blows past this and posix_spawn returns E2BIG. If any substituted arg
+  // exceeds a safe threshold, rewrite each standalone {prompt} token to "-" and
+  // deliver the prompt on stdin. "-" is the POSIX stdin sentinel accepted by Codex
+  // (`codex exec` reads PROMPT from stdin when given `-`) and most conforming CLIs.
+  const MAX_SAFE_ARG_BYTES = 100_000;
+  let stdinPrompt: string | null = null;
+  let finalArgs = substitutedArgs;
+  const maxArgBytes = substitutedArgs.reduce(
+    (max, a) => Math.max(max, Buffer.byteLength(a, 'utf-8')),
+    0,
+  );
+
+  if (maxArgBytes > MAX_SAFE_ARG_BYTES) {
+    const promptTokenIndices: number[] = [];
+    for (let i = 0; i < tokenized.length; i++) {
+      if (tokenized[i] === '{prompt}') {
+        promptTokenIndices.push(i);
+      }
+    }
+
+    if (promptTokenIndices.length === 0) {
+      return makeError(
+        'cli_execution',
+        `prompt exceeds argv limit (${maxArgBytes} bytes > ${MAX_SAFE_ARG_BYTES}) and template has no standalone {prompt} token for stdin fallback`,
+        2,
+      );
+    }
+
+    finalArgs = substitutedArgs.map((arg, idx) =>
+      promptTokenIndices.includes(idx) ? '-' : arg,
+    );
+    stdinPrompt = effectiveTask;
+
+    await vcpLog(args.cwd, {
+      source: 'one-shot-runner', event: 'cli_stdin_fallback', decision: 'info',
+      details: `preset=${args.preset} max_arg_bytes=${maxArgBytes} threshold=${MAX_SAFE_ARG_BYTES}`,
+    }, debugEnabled);
+  }
+
   await vcpLog(args.cwd, {
     source: 'one-shot-runner', event: 'cli_start', decision: 'info',
-    details: `command=${preset.command} model=${args.model}`,
+    details: `command=${preset.command} model=${args.model}${stdinPrompt !== null ? ' stdin_prompt=true' : ''}`,
   }, debugEnabled);
 
   // Pipeline mode (outputId set): pipe stdout+stderr for capture, prevent context bloat.
   // Direct mode (no outputId, e.g. /dev-buddy-once): inherit stdout+stderr for terminal visibility.
   const captureOutput = !!outputId;
-  const stdioConfig: [string, string, string] = captureOutput
-    ? ['inherit', 'pipe', 'pipe']
-    : ['inherit', 'inherit', 'inherit'];
+  const stdinMode: 'pipe' | 'inherit' = stdinPrompt !== null ? 'pipe' : 'inherit';
+  const stdioConfig: ['pipe' | 'inherit', 'pipe' | 'inherit', 'pipe' | 'inherit'] = captureOutput
+    ? [stdinMode, 'pipe', 'pipe']
+    : [stdinMode, 'inherit', 'inherit'];
 
   // Platform-aware command execution
   return new Promise<RunResult>((resolve) => {
@@ -528,7 +571,7 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
 
     if (isWindows) {
       // CWE-78 prevention: escape args for cmd.exe
-      const escapedArgs = substitutedArgs.map(escapeWinArg);
+      const escapedArgs = finalArgs.map(escapeWinArg);
       const fullCommand = `${preset.command} ${escapedArgs.join(' ')}`;
       proc = spawn(fullCommand, [], {
         stdio: stdioConfig,
@@ -537,11 +580,25 @@ async function runCliPath(args: ParsedArgs, preset: CliPreset, debugEnabled: boo
       });
     } else {
       // Unix: shell: false — no injection risk, args passed as array
-      proc = spawn(preset.command, substitutedArgs, {
+      proc = spawn(preset.command, finalArgs, {
         stdio: stdioConfig,
         shell: false,
         cwd: args.cwd,
       });
+    }
+
+    // Deliver oversized prompt via stdin when the fallback is active.
+    if (stdinPrompt !== null && proc.stdin) {
+      // EPIPE can race if the child exits early — don't crash the parent on it.
+      proc.stdin.on('error', (err) => {
+        if ((err as NodeJS.ErrnoException).code !== 'EPIPE') {
+          vcpLog(args.cwd, {
+            source: 'one-shot-runner', event: 'cli_stdin_error', decision: 'info',
+            details: `stdin write failed: ${err.message}`,
+          }, debugEnabled).catch(() => {});
+        }
+      });
+      proc.stdin.end(stdinPrompt);
     }
 
     // Collect stdout when piped, and always collect stderr — drain immediately

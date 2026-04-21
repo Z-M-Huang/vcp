@@ -44,6 +44,30 @@ const DEFAULT_TIMEOUT_MS = 300_000;       // 5 min default per executor
 const CLI_DEFAULT_TIMEOUT_MS = 1_200_000; // 20 min for CLI
 const PROCESS_TIMEOUT_BUFFER_MS = 120_000;
 const KILL_GRACE_MS = 3_000;
+export const UNIT_REVIEW_OUTPUT_CONTRACT = [
+  '## Review Output Contract (Mandatory)',
+  '',
+  'For unit-review only, output exactly one of the following shapes. Do not add any narrative preamble before the verdict.',
+  '',
+  '### PASS',
+  '```markdown',
+  '## Verdict: PASS',
+  '',
+  '## Review Feedback',
+  '(no findings — all ACs satisfied)',
+  '```',
+  '',
+  '### NEEDS_CHANGES',
+  '```markdown',
+  '## Verdict: NEEDS_CHANGES',
+  '',
+  '## Review Feedback',
+  '- actionable findings with file:line',
+  '```',
+  '',
+  'Do not emit alternative headings like `## Implementation Review`, `### Verdict`, `**Status:**`, or narrative PASS summaries.',
+  'Malformed output may be treated as failure by the build-loop-runner.',
+].join('\n');
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
 
@@ -321,7 +345,8 @@ function buildStageTask(
     return context
       + '\n\n---\n\n## Unit Plan\n\n' + unitFile
       + '\n\n---\n\n## Implementation Files\n\n'
-      + (implemented || '(no files listed in `### Files to Touch`)');
+      + (implemented || '(no files listed in `### Files to Touch`)')
+      + '\n\n---\n\n' + UNIT_REVIEW_OUTPUT_CONTRACT;
   }
 
   return context;

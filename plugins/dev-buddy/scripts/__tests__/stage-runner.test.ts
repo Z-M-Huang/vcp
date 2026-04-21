@@ -10,6 +10,7 @@ import {
   StageProgress,
   runExecutorWithProgress,
   buildSubscriptionArgs,
+  UNIT_REVIEW_OUTPUT_CONTRACT,
   type Segment,
   type DispatchResult,
   type StageProgressState,
@@ -361,6 +362,7 @@ describe('buildStageTask', () => {
     expect(result).toContain('## Implementation Files');
     expect(result).toContain('src/auth/login.ts');
     expect(result).toContain('export const x = 1;');
+    expect(result).toContain(UNIT_REVIEW_OUTPUT_CONTRACT);
   });
 
   // Test 10 — missing unit-N.md throws a clear error.

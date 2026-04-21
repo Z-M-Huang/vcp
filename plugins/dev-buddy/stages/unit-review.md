@@ -23,6 +23,8 @@ Verify that ONE unit's implementation actually meets its acceptance criteria and
 
 Output exactly two H2 sections — `## Verdict:` and `## Review Feedback`. The body of `## Review Feedback` is read by the build runner and pasted into the next attempt's prompt verbatim. Format is enforced.
 
+Do not emit any narrative preamble before `## Verdict:`. Start the response with the verdict header.
+
 **Hard constraints on the body of `## Review Feedback`:**
 1. **No H1 or H2 headings inside the body.** Use H3 (`###`) or lower. The runner demotes any H1/H2 it finds, but you should write H3+ to begin with — anything else is a smell that you're re-summarizing.
 2. **≤ 150 lines total.** The reviewer's job is to surface the actionable findings that the next build attempt must address. Long narrative summaries crowd out the signal.
@@ -83,3 +85,5 @@ A finding that says "X is called but not defined" when X is actually defined in 
 - Do NOT re-run backpressure — the build loop already ran it mechanically
 - Do NOT modify any files — this is a read-only review
 - Do NOT flag a symbol as "undefined" without Grep-ing the repo first (see Verify-Before-Flagging Rule)
+- Do NOT emit alternative headings like `## Implementation Review`, `### Verdict`, `**Status:**`, or narrative PASS summaries
+- Do NOT omit the `## Verdict:` header — malformed output may be treated as failure by the build-loop-runner
