@@ -122,6 +122,11 @@ export function composeBuildDispatch(
     throw new Error(`composeBuildDispatch: unit ${unitId} is in terminal status '${state.status}'`);
   }
   if (state.attempts >= state.maxAttempts) {
+    markUnitFailed(projectDir, slug, unitId, {
+      attempts: state.attempts,
+      maxAttempts: state.maxAttempts,
+      reason: `permanent: compose exhausted budget (${state.attempts}/${state.maxAttempts})`,
+    });
     throw new Error(
       `composeBuildDispatch: unit ${unitId} has exhausted budget (${state.attempts}/${state.maxAttempts})`,
     );

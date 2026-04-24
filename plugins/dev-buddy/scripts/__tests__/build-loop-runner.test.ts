@@ -854,10 +854,30 @@ describe('runUnitLoop — plan §F test cases 1-8', () => {
 
     expect(terminal.status).toBe('done');
     const state = readUnitState(projectDir, 'test-build', 1)!;
-    // Stale lease was abandoned — confirmed by an 'abandoned' history entry.
     expect(state.attemptHistory.find((a) => a.outcome === 'abandoned')).toBeDefined();
     expect(state.reservedAttempt).toBeUndefined();
     expect(before.lease).toBeDefined();
+  });
+
+  test('[6b] stale reservedAttempt at exhausted budget marks unit failed before BLR exits', async () => {
+    setUnitReviewEnabled(false);
+    const { projectDir, planPath } = setupProject([makeUnitPlan(1, { maxAttempts: 1 })]);
+
+    seedUnitState(projectDir, 'test-build', 1, 1);
+    reserveAttempt(projectDir, 'test-build', 1, 0);
+    const statePath = path.join(projectDir, '.vcp', 'plan', '.state', 'ralph-test-build', 'units', 'unit-1.json');
+    const frozen = JSON.parse(readFileSync(statePath, 'utf-8'));
+    frozen.reservedAttempt.reservedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    writeFileSync(statePath, JSON.stringify(frozen));
+
+    const terminal = await runUnitLoop({ planPath, cwd: projectDir, unitId: 1 });
+
+    expect(terminal.status).toBe('failed');
+    expect(terminal.reason).toContain('exhausted budget');
+    const state = readUnitState(projectDir, 'test-build', 1)!;
+    expect(state.status).toBe('failed');
+    expect(state.reservedAttempt).toBeUndefined();
+    expect(state.attemptHistory.find((a) => a.outcome === 'abandoned')).toBeDefined();
   });
 
   // Test 7 — terminal JSON shape.

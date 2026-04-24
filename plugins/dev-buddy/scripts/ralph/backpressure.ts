@@ -12,7 +12,7 @@ export function runBackpressure(commands: string[], cwd: string): BackpressureRe
     const result = spawnSync('sh', ['-c', command], {
       cwd,
       encoding: 'utf-8',
-      timeout: 120_000,
+      timeout: 600_000,
     });
     results.push({
       command,
