@@ -26,6 +26,7 @@ import {
   initRunDir, writeState, readState, listRuns, readLease,
   STATE_SCHEMA_VERSION, type RunState,
 } from "./engine/state-store.ts";
+import { advance } from "./engine/state-machine.ts";
 
 // ─── stdio discipline ──────────────────────────────────────────────────
 // Re-route any stray console writes to stderr; only MCP framing should
@@ -111,6 +112,28 @@ export async function main(): Promise<void> {
           step: initial.step,
           state_path: join(project_path, ".vcp", "ralph", runId, "state.json"),
         },
+      };
+    },
+  );
+
+  server.registerTool(
+    "ralph_next",
+    {
+      description: "Advance the run by exactly one step. Acquires the step lease, dispatches to the matching engine handler, commits the resulting state, releases the lease.",
+      inputSchema: {
+        project_path: z.string().describe("Absolute path to the user's project."),
+        run_id: z.string().describe("The run id returned by ralph_start."),
+      },
+    },
+    async ({ project_path, run_id }) => {
+      assertAbsolutePath(project_path, "project_path");
+      const result = await advance(project_path, run_id);
+      const text = result.ok
+        ? `step '${result.step_run ?? "(none)"}' done; status=${result.status}; next=${result.next_step ?? "complete"}`
+        : `step '${result.step_run ?? "(none)"}' failed: ${result.reason ?? "unknown"}`;
+      return {
+        content: [{ type: "text", text }],
+        structuredContent: result,
       };
     },
   );
