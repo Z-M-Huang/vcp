@@ -12,7 +12,19 @@ import {
   renderQuickMarkdown,
   partitionByDomain,
   renderFullMarkdown,
+  parseValidatorOutput,
 } from '../scripts/audit-runner.ts';
+
+const baseFinding = {
+  standardId: 'core-architecture',
+  rule: 1,
+  severity: 'high',
+  file: 'a.ts',
+  line: 1,
+  evidence: 'foo',
+  issue: 'X',
+  fix: 'Y',
+};
 
 describe('parseArgs', () => {
   test('--mode quick is sufficient', () => {
@@ -320,5 +332,70 @@ describe('renderFullMarkdown', () => {
     expect(md).toContain('- **Rule 7** (critical) — Bad coupling');
     expect(md).toContain('  - **File:** src/x.py:42');
     expect(md).toContain('  - **Fix:** Use abstraction');
+  });
+
+  test('renders validation stats and LIKELY marker', () => {
+    const md = renderFullMarkdown({
+      mode: 'full',
+      target: '/proj',
+      standardsLoaded: 1,
+      rulesChecked: 5,
+      findings: [
+        { standardId: 'core-architecture', rule: 4, severity: 'high', file: 'a.ts', line: 9, evidence: 'foo', issue: 'Coupling smell', fix: 'Refactor', likely: true, rationale: 'mitigation present at proxy' },
+      ],
+      warnings: [],
+      validation: { scanned: 7, confirmed: 0, likely: 1, falsePositives: 6 },
+    });
+    expect(md).toContain('**Validation:** 7 findings scanned -> 0 confirmed, 1 likely, 6 false positives removed');
+    expect(md).toContain('- **Rule 4** ⚠ LIKELY (high) — Coupling smell');
+    expect(md).toContain('  - **Note:** mitigation present at proxy');
+  });
+});
+
+describe('parseValidatorOutput', () => {
+  test('parses CONFIRMED + unchanged severity', () => {
+    const out = parseValidatorOutput(
+      'VERDICT: CONFIRMED\nSEVERITY: high\nRATIONALE: viable exploit path identified',
+      baseFinding,
+    );
+    expect(out.verdict).toBe('CONFIRMED');
+    expect(out.severity).toBe('high');
+    expect(out.severityAdjusted).toBe(false);
+    expect(out.rationale).toBe('viable exploit path identified');
+  });
+
+  test('parses FALSE-POSITIVE', () => {
+    const out = parseValidatorOutput(
+      'VERDICT: FALSE-POSITIVE\nSEVERITY: high\nRATIONALE: Check 6 — internal code, not reachable from any entry point',
+      baseFinding,
+    );
+    expect(out.verdict).toBe('FALSE-POSITIVE');
+  });
+
+  test('parses LIKELY with severity downgrade', () => {
+    const out = parseValidatorOutput(
+      'VERDICT: LIKELY\nSEVERITY: medium\nRATIONALE: Check 7 path exists but mitigated by WAF',
+      baseFinding,
+    );
+    expect(out.verdict).toBe('LIKELY');
+    expect(out.severity).toBe('medium');
+    expect(out.severityAdjusted).toBe(true);
+  });
+
+  test('defaults to CONFIRMED + original severity when missing fields', () => {
+    const out = parseValidatorOutput('this is not the expected format', baseFinding);
+    expect(out.verdict).toBe('CONFIRMED');
+    expect(out.severity).toBe('high');
+    expect(out.rationale).toBe('');
+  });
+
+  test('case-insensitive on field names', () => {
+    const out = parseValidatorOutput(
+      'verdict: confirmed\nseverity: critical\nrationale: kept as-is',
+      baseFinding,
+    );
+    expect(out.verdict).toBe('CONFIRMED');
+    expect(out.severity).toBe('critical');
+    expect(out.severityAdjusted).toBe(true);
   });
 });

@@ -70,6 +70,10 @@ interface Finding {
   evidence: string;
   issue: string;
   fix: string;
+  /** True when validator marked the finding as LIKELY rather than CONFIRMED. */
+  likely?: boolean;
+  /** Validator rationale, when applicable. */
+  rationale?: string;
 }
 
 interface AuditOutput {
@@ -79,6 +83,22 @@ interface AuditOutput {
   rulesChecked: number;
   findings: Finding[];
   warnings: string[];
+  /** Set when validator ran (full/compliance modes). */
+  validation?: {
+    scanned: number;
+    confirmed: number;
+    likely: number;
+    falsePositives: number;
+  };
+}
+
+type Verdict = "CONFIRMED" | "LIKELY" | "FALSE-POSITIVE";
+
+interface ValidatedFinding extends Finding {
+  verdict: Verdict;
+  rationale: string;
+  /** True if severity was adjusted by the validator. */
+  severityAdjusted: boolean;
 }
 
 // ─── CLI Arg Parsing ────────────────────────────────────────────────────────
@@ -737,13 +757,54 @@ async function runFullMode(opts: {
     allFindings.push(...r.findings);
   }
 
-  // Apply ignore list (rule-level + standard-level)
+  // Apply ignore list BEFORE validating — saves validator calls on suppressed findings.
   const ignoreSet = new Set(ignoredRules);
-  const kept = allFindings.filter(
+  const beforeIgnore = allFindings.length;
+  const afterIgnore = allFindings.filter(
     (f) => !ignoreSet.has(`${f.standardId}/rule-${f.rule}`) && !ignoreSet.has(f.standardId),
   );
-  const suppressed = allFindings.length - kept.length;
+  const suppressed = beforeIgnore - afterIgnore.length;
   if (suppressed > 0) warnings.push(`Suppressed ${suppressed} finding(s) by ignore config.`);
+
+  // Run validator pipeline (full + compliance only — quick mode skips this).
+  let kept: Finding[] = afterIgnore;
+  let validation: AuditOutput["validation"] | undefined;
+  if (afterIgnore.length > 0) {
+    const validated = await runValidator({
+      findings: afterIgnore,
+      projectRoot: opts.projectRoot,
+      preset: opts.preset,
+      model: opts.model,
+      concurrencyCap: opts.concurrencyCap,
+    });
+
+    const confirmed = validated.filter((v) => v.verdict === "CONFIRMED");
+    const likely = validated.filter((v) => v.verdict === "LIKELY");
+    const falsePositives = validated.filter((v) => v.verdict === "FALSE-POSITIVE");
+
+    validation = {
+      scanned: afterIgnore.length,
+      confirmed: confirmed.length,
+      likely: likely.length,
+      falsePositives: falsePositives.length,
+    };
+
+    // Drop FALSE-POSITIVEs; keep CONFIRMED + LIKELY with adjusted severity.
+    kept = [...confirmed, ...likely].map((v) => ({
+      standardId: v.standardId,
+      rule: v.rule,
+      severity: v.severity,
+      file: v.file,
+      line: v.line,
+      evidence: v.evidence,
+      issue: v.issue,
+      fix: v.fix,
+      likely: v.verdict === "LIKELY",
+      rationale: v.rationale || undefined,
+    }));
+  } else {
+    validation = { scanned: 0, confirmed: 0, likely: 0, falsePositives: 0 };
+  }
 
   return {
     mode: modeLabel,
@@ -752,7 +813,145 @@ async function runFullMode(opts: {
     rulesChecked: totalRules,
     findings: kept,
     warnings,
+    validation,
   };
+}
+
+// ─── Validator Pipeline ────────────────────────────────────────────────────
+
+/**
+ * The validator builds a fresh LLM call per finding to run the 7-check
+ * pipeline from the original vcp-audit/SKILL.md (evidence verify, data flow,
+ * rule scope, mitigating factors, tech context, exposure, exploit path).
+ *
+ * Concurrency is capped (default 4) to prevent quota explosion when a domain
+ * scanner emits many findings. Findings that the validator can't process
+ * (LLM error, parse failure) default to CONFIRMED with the original severity
+ * — better to surface a possibly-unvalidated finding than silently drop it.
+ */
+function buildValidatorPrompt(f: Finding, projectRoot: string): string {
+  return `You are a security and code-quality finding validator. A domain scanner flagged the violation below; your job is to determine if it is a real issue worth surfacing to the user, or a false positive.
+
+Finding:
+- Standard: ${f.standardId}
+- Rule: ${f.rule} (severity: ${f.severity})
+- File: ${f.file}${f.line !== null ? `:${f.line}` : ""}
+- Evidence reported by scanner:
+${f.evidence.split("\n").map((l) => "    " + l).join("\n")}
+- Issue: ${f.issue}
+- Suggested fix: ${f.fix}
+
+Project root: ${projectRoot}
+
+Run these checks IN ORDER against the actual codebase using Read / Glob / Grep. Stop at the first check that produces a definitive verdict.
+
+CHECK 1 — Verify Evidence. Read the flagged file at the reported line, plus 30 lines of context above and below. Does the code match what the scanner reported?
+  - File or line missing, or code does not match -> VERDICT: FALSE-POSITIVE.
+
+CHECK 2 — Trace Data Flow (apply only to injection / redirect / XSS / SSRF findings). Where does the flagged input actually come from?
+  - User-controlled (request params, headers, body, URL path/hash, location.*, untrusted external responses) -> continue.
+  - Internally constructed (hardcoded constants, server-only config, derived from fixed function output) -> VERDICT: FALSE-POSITIVE.
+
+CHECK 3 — Verify Rule Scope. Re-read the rule that was reportedly violated. Does the flagged code match what the rule actually targets, or is the scanner over-applying the rule?
+  - Scope mismatch -> VERDICT: FALSE-POSITIVE.
+
+CHECK 4 — Check Mitigating Factors. Look for codebase-level factors that reduce or eliminate the risk:
+  - Lockfile committed, security headers at proxy/CDN, framework auto-escaping, rate limiting, CAPTCHA, single-tenant deployment.
+  - Fully addresses the concern -> VERDICT: FALSE-POSITIVE.
+  - Partially addresses -> downgrade severity one level (record the new severity in the SEVERITY field).
+
+CHECK 5 — Check Technology Context. Does the specific stack already handle this?
+  - PostgreSQL 11+ non-locking column adds, ORM auto-parameterization, framework migration tools that handle rollback, etc.
+  - Stack handles it -> VERDICT: FALSE-POSITIVE.
+
+CHECK 6 — Exposure Context. Trace backwards from the flagged code: how is it reachable? Entry points include HTTP, WebSocket, CLI, MQ, cron, file imports, gRPC/GraphQL.
+  - Public unauthenticated entry -> keep severity.
+  - Authenticated entry -> keep severity.
+  - Admin-only behind role check -> downgrade one level.
+  - Internal, not reachable from any entry point -> VERDICT: FALSE-POSITIVE.
+
+CHECK 7 — Exploit Path Viability. Construct the full exploit path: entry -> preconditions -> vulnerability -> impact. Are there mitigations that block it (WAF, CSP, framework defenses, network segmentation)?
+  - No viable path -> VERDICT: LIKELY (mark for manual review).
+  - Path exists with significant mitigation -> downgrade severity one level.
+  - Otherwise -> VERDICT: CONFIRMED.
+
+Output format — exactly these three lines and nothing else:
+
+VERDICT: <CONFIRMED | LIKELY | FALSE-POSITIVE>
+SEVERITY: <critical | high | medium | low>
+RATIONALE: <one sentence; for FALSE-POSITIVE, name which check ruled it out>
+`;
+}
+
+const VERDICT_RE = /^VERDICT:\s*(CONFIRMED|LIKELY|FALSE-POSITIVE)\s*$/im;
+const SEVERITY_RE = /^SEVERITY:\s*(critical|high|medium|low)\s*$/im;
+const RATIONALE_RE = /^RATIONALE:\s*(.+)$/im;
+
+export function parseValidatorOutput(raw: string, original: Finding): ValidatedFinding {
+  const verdictMatch = VERDICT_RE.exec(raw);
+  const severityMatch = SEVERITY_RE.exec(raw);
+  const rationaleMatch = RATIONALE_RE.exec(raw);
+
+  const verdict: Verdict = (verdictMatch?.[1]?.toUpperCase() as Verdict) ?? "CONFIRMED";
+  const adjusted = severityMatch?.[1]?.toLowerCase() ?? original.severity.toLowerCase();
+  const rationale = rationaleMatch?.[1]?.trim() ?? "";
+
+  return {
+    ...original,
+    severity: adjusted,
+    severityAdjusted: adjusted !== original.severity.toLowerCase(),
+    verdict,
+    rationale,
+  };
+}
+
+async function runValidator(opts: {
+  findings: Finding[];
+  projectRoot: string;
+  preset: ApiPreset;
+  model: string;
+  concurrencyCap?: number;
+}): Promise<ValidatedFinding[]> {
+  const cap = opts.concurrencyCap ?? 4;
+  const timeoutMs = opts.preset.timeout_ms ?? 600_000;
+
+  const tasks = opts.findings.map((f) => async (): Promise<ValidatedFinding> => {
+    const prompt = buildValidatorPrompt(f, opts.projectRoot);
+    const runner = createRunner(opts.preset);
+    try {
+      const result = await runner.run(prompt, {
+        model: opts.model,
+        timeoutMs,
+        cwd: opts.projectRoot,
+        debugEnabled: false,
+        presetName: opts.preset.name,
+        allowedTools: ["Read", "Glob", "Grep"],
+      });
+      if (result.timedOut || result.error || !result.result) {
+        // Validator failure -> default to CONFIRMED with original severity, surface a rationale.
+        return {
+          ...f,
+          severity: f.severity.toLowerCase(),
+          severityAdjusted: false,
+          verdict: "CONFIRMED",
+          rationale: result.timedOut
+            ? "validator timed out — finding kept as-is"
+            : `validator error (${result.error ?? "empty output"}) — finding kept as-is`,
+        };
+      }
+      return parseValidatorOutput(result.result, f);
+    } catch (err) {
+      return {
+        ...f,
+        severity: f.severity.toLowerCase(),
+        severityAdjusted: false,
+        verdict: "CONFIRMED",
+        rationale: `validator threw (${(err as Error).message}) — finding kept as-is`,
+      };
+    }
+  });
+
+  return runWithCap(tasks, cap);
 }
 
 // ─── Compliance Mode ───────────────────────────────────────────────────────
@@ -816,8 +1015,15 @@ export function renderFullMarkdown(out: AuditOutput): string {
     "",
     `**Standards loaded:** ${standardsLoaded} standards, ${rulesChecked} rules checked`,
     `**Target:** ${target}`,
-    "",
   ];
+
+  if (out.validation) {
+    const v = out.validation;
+    lines.push(
+      `**Validation:** ${v.scanned} findings scanned -> ${v.confirmed} confirmed, ${v.likely} likely, ${v.falsePositives} false positives removed`,
+    );
+  }
+  lines.push("");
 
   if (summary.length === 0) {
     lines.push("**Result:** No findings across all scanned standards.");
@@ -850,9 +1056,11 @@ export function renderFullMarkdown(out: AuditOutput): string {
       lines.push(`##### ${s.standardId}`);
       lines.push("");
       for (const f of stdFindings) {
-        lines.push(`- **Rule ${f.rule}** (${f.severity}) — ${f.issue}`);
+        const likelyMark = f.likely ? " ⚠ LIKELY" : "";
+        lines.push(`- **Rule ${f.rule}**${likelyMark} (${f.severity}) — ${f.issue}`);
         lines.push(`  - **File:** ${f.file}${f.line !== null ? `:${f.line}` : ""}`);
         if (f.fix) lines.push(`  - **Fix:** ${f.fix}`);
+        if (f.likely && f.rationale) lines.push(`  - **Note:** ${f.rationale}`);
       }
       lines.push("");
     }
