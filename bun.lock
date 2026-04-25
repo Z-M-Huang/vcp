@@ -77,6 +77,7 @@
       "dependencies": {
         "@vcp-lib/config": "workspace:*",
         "@vcp-lib/context-core": "workspace:*",
+        "@vcp-lib/llm-runner": "workspace:*",
         "@vcp-lib/logging": "workspace:*",
         "@vcp-lib/runtime-adapter": "workspace:*",
       },
