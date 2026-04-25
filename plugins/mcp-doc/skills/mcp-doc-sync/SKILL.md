@@ -6,12 +6,19 @@ description: >
   and search index, and regenerates tool actions.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion
-argument-hint: ""
+argument-hint: "[--apply | --exclude <indices>]"
 ---
 
 # MCP Doc Sync
 
 Sync the `.mcp/manifest.yml` with the current project state. Detect new documentation files, stale entries, and updated content. Apply changes to the manifest and regenerate tool action scripts with fresh index data. Preserve any custom tools created by `/mcp-doc-add-tool`.
+
+## Cross-host UX
+
+This skill runs on both Claude Code and Codex CLI.
+
+- If `AskUserQuestion` is available (Claude Code), use it for the apply/deselect prompt.
+- Otherwise (Codex CLI), print the proposed change list and instruct: "Re-run `/mcp-doc-sync --apply` to apply everything, or `/mcp-doc-sync --exclude 2,5` to skip specific items by their index in the proposal table." Then stop until the flag is supplied.
 
 ## Step 1: Load Manifest
 
@@ -110,7 +117,7 @@ Manifest sync — changes detected:
 Total: 2 new, 1 stale, 2 updated
 ```
 
-Ask the user via AskUserQuestion: "Apply all changes, or deselect specific items? (Enter item numbers to exclude, or 'all' to apply everything)"
+Ask whether to apply all changes or deselect specific items. On Claude, use `AskUserQuestion`. On Codex, follow the cross-host note above — instruct the user to re-run with `--apply` or `--exclude <indices>`.
 
 Allow the user to deselect individual changes by number. Only apply the changes the user confirms.
 

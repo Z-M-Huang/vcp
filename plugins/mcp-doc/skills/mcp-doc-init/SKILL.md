@@ -7,12 +7,19 @@ description: >
   git-doc-mcp MCP server. Run this once when setting up project documentation.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion
-argument-hint: ""
+argument-hint: "[--scope all|core|<path>]"
 ---
 
 # MCP Doc Initialization
 
 Create a `.mcp/manifest.yml` with documentation resources and embedded-index tools, generate action scripts in `.mcp/actions/`, and configure `.mcp.json` with a git-doc-mcp server entry. The manifest indexes existing documentation files wherever they live in the project.
+
+## Cross-host UX
+
+This skill runs on both Claude Code and Codex CLI.
+
+- If `AskUserQuestion` is available (Claude Code), use it for interactive prompts.
+- Otherwise (Codex CLI), print the question with the exact re-invocation flag the user should run, then stop. Each question below names its corresponding CLI flag (e.g. `--scope <choice>`). The user re-invokes; the skill picks up the supplied flag without re-asking.
 
 ## Step 1: Check for Existing Config
 
@@ -83,7 +90,7 @@ If >50 doc files found OR >100 directories scanned:
 
 1. Tell the user: "This is a large project with N documentation files across M directories."
 
-2. Ask via AskUserQuestion how to scope. Present these options:
+2. Ask the user how to scope the manifest. On Claude, use `AskUserQuestion`. On Codex, print the choices and instruct: "Re-run `/mcp-doc-init --scope all` (everything), `--scope core` (READMEs in source roots only), or `--scope <path>` (a specific subtree)." Then stop until the flag is supplied. Present these options:
 
    - **Scan everything** — index all docs found (may produce a large manifest)
    - **Specify include roots** — user provides paths (e.g., `packages/my-team`, `src/api`) and only docs under those roots are indexed

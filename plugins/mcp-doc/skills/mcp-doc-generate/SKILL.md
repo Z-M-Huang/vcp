@@ -6,12 +6,19 @@ description: >
   both human and AI consumption, and updates the manifest.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion
-argument-hint: "<path> | all"
+argument-hint: "<path> | all [--apply | --select <indices> | --skip]"
 ---
 
 # MCP Doc Generate
 
 Generate structured README documentation for a target directory (or all undocumented directories in bulk mode). Each generated README is optimized for both human developers and AI assistants. After writing, the manifest and tool action scripts are updated automatically.
+
+## Cross-host UX
+
+This skill runs on both Claude Code and Codex CLI.
+
+- If `AskUserQuestion` is available (Claude Code), use it for the bulk-mode selection prompt and per-directory accept/edit/skip choices.
+- Otherwise (Codex CLI), print the relevant prompt with the exact re-invocation flag (`--apply`, `--select <indices>`, `--skip`), then stop. The user re-invokes with the supplied flag; the skill picks up without re-asking.
 
 ## Step 1: Validate Target
 
@@ -55,7 +62,7 @@ If `$ARGUMENTS` is `all`, or if `$ARGUMENTS` is empty/not provided:
      - tests/helpers/
    ```
 
-3. Ask the user via AskUserQuestion: "Generate READMEs for all of these, or select specific ones?"
+3. Ask whether to generate READMEs for all candidates or select specific ones. On Claude, use `AskUserQuestion`. On Codex, instruct the user: "Re-run `/mcp-doc-generate all --apply` to generate everything, or `/mcp-doc-generate all --select 1,3,5` to pick specific entries by their listed index." Then stop.
    - If all, proceed with the full list.
    - If specific, let the user provide the subset.
 4. Process directories **sequentially** using Step 4 (sequential bulk mode).
@@ -108,7 +115,7 @@ When processing multiple directories (bulk mode from Step 1), handle each direct
 1. Analyze the directory (Step 3).
 2. Generate the README (Step 5).
 3. Show the generated README content to the user.
-4. Ask via AskUserQuestion: "Accept this README, edit it, or skip this directory?"
+4. Ask the user to accept, edit, or skip the proposed README. On Claude, use `AskUserQuestion`. On Codex, write the proposed README to `.mcp/draft-readme-<sanitized-path>.md`, print the path, and instruct: "Re-run `/mcp-doc-generate <path> --apply` to accept the draft (edit the draft file first if you want changes), or re-run with `--skip` to discard." Then stop.
    - **Accept** — write the file and update the manifest. Continue to next directory.
    - **Edit** — let the user describe changes, regenerate or edit the README, then ask again.
    - **Skip** — do not write the file. Continue to next directory.

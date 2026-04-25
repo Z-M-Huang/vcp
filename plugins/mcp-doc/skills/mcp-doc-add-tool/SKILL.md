@@ -6,12 +6,19 @@ description: >
   embedded data, computing the hash, and adding it to the manifest.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion
-argument-hint: ""
+argument-hint: "[--name <id>] [--purpose <text>] [--apply]"
 ---
 
 # MCP Doc Add Tool
 
 Guide the user through creating a custom MCP tool for their documentation manifest. Custom tools filter, query, or present documentation in ways specific to the user's project. The generated action script embeds index data and is added to `.mcp/manifest.yml` with a computed SHA-256 hash.
+
+## Cross-host UX
+
+This skill is interactive by design — it walks the user through several questions.
+
+- On Claude Code: use `AskUserQuestion` for each step (name, purpose, behavior, etc.) and operate as one continuous conversation.
+- On Codex CLI: each invocation is cold per Phase 0 probe 8, so the multi-step flow can't run in a single shot. Accept answers as CLI flags (`--name`, `--purpose`, ...) and stop after each missing answer with a clear re-invocation hint. When all required flags are supplied, generate the action script and add the manifest entry on `--apply`.
 
 Custom tools are preserved during `/mcp-doc-sync` — they are never overwritten or removed by sync operations.
 
@@ -44,7 +51,7 @@ Existing tools in manifest:
 
 ## Step 2: Gather Requirements
 
-Ask the user a series of questions via AskUserQuestion to define the custom tool.
+Collect the tool definition. On Claude, ask the questions interactively via `AskUserQuestion`. On Codex (or when the tool is unavailable), check for the corresponding CLI flag (`--name`, `--purpose`, ...) and stop with a re-invocation hint when one is missing. The questions to collect:
 
 ### 2a: Tool name
 
