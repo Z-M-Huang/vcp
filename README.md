@@ -62,7 +62,9 @@ One AI writing and reviewing its own code is like grading your own homework. VCP
 
 ## Quick Start
 
-**Prerequisites:** [Claude Code](https://code.claude.com/) and [Bun](https://bun.sh/). See the [Getting Started guide](https://github.com/Z-M-Huang/vcp/wiki/Getting-Started) for full setup.
+**Prerequisites:** [Bun](https://bun.sh/), plus either [Claude Code](https://code.claude.com/) or [OpenAI Codex CLI v0.124.0+](https://github.com/openai/codex). VCP v0.6.0 supports both hosts. See the [Getting Started guide](https://github.com/Z-M-Huang/vcp/wiki/Getting-Started) for full setup.
+
+### Claude Code
 
 ```bash
 # Add the VCP marketplace
@@ -75,7 +77,23 @@ One AI writing and reviewing its own code is like grading your own homework. VCP
 /vcp-init
 ```
 
-That's it. Standards are injected at session start, dangerous patterns are blocked on every write, and 10 scanning skills are available on demand.
+### OpenAI Codex CLI
+
+```bash
+# Clone into Codex's plugin dir
+git clone https://github.com/Z-M-Huang/vcp ~/.codex/plugins/vcp
+(cd ~/.codex/plugins/vcp && bun install)
+
+# Start Codex; skills auto-load from .codex-plugin/plugin.json
+codex
+
+# Initialize your project
+$vcp-init
+```
+
+See [`docs/codex-install.md`](docs/codex-install.md) for the full Codex walkthrough including MCP server registration, host capability differences, and known gaps.
+
+That's it. Standards are injected at session start, dangerous patterns are blocked on every write, and 10 scanning skills are available on demand on either host.
 
 ### Docker
 

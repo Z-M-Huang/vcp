@@ -4,22 +4,22 @@
     "name": "Z-M-Huang"
   },
   "metadata": {
-    "description": "Vibe Coding Protocol — Standards and enforcement for AI-generated code quality",
-    "version": "0.5.10"
+    "description": "Vibe Coding Protocol — Standards and enforcement for AI-generated code quality. Cross-host: Claude Code + OpenAI Codex CLI.",
+    "version": "0.6.0"
   },
   "plugins": [
     {
       "name": "vcp",
       "description": "Vibe Coding Protocol — project initialization, security enforcement, quality checks, and dependency verification for AI-generated code",
-      "version": "0.3.1",
+      "version": "0.6.0",
       "author": { "name": "Z-M-Huang" },
       "source": "./plugins/vcp",
       "category": "security"
     },
     {
       "name": "dev-buddy",
-      "description": "Ralph loop architecture — multi-AI feature development with discovery, requirements, decomposition, build, code review, and UAT stages",
-      "version": "0.5.10",
+      "description": "Ralph loop architecture via dev-buddy MCP server — multi-AI feature development with discovery, requirements, decomposition, build, code review, and UAT stages",
+      "version": "0.6.0",
       "author": { "name": "Z-M-Huang" },
       "source": "./plugins/dev-buddy",
       "category": "development"
@@ -27,7 +27,7 @@
     {
       "name": "mcp-doc",
       "description": "Documentation manifest generator for git-doc-mcp — indexes project docs as MCP resources with search, path-lookup, and tree-view tools for AI assistants",
-      "version": "0.3.5",
+      "version": "0.6.0",
       "author": { "name": "Z-M-Huang" },
       "source": "./plugins/mcp-doc",
       "category": "documentation"
