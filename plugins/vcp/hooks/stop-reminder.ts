@@ -8,9 +8,10 @@
  */
 
 import { loadGlobalConfig } from "../lib/global-config";
-import { vcpLog } from "../lib/vcp-logger";
+import { vcpLog } from "@vcp-lib/logging";
+import { projectDir } from "@vcp-lib/runtime-adapter";
 
-const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const projectRoot = projectDir();
 const globalConfig = await loadGlobalConfig();
 const debug = globalConfig?.debug ?? false;
 

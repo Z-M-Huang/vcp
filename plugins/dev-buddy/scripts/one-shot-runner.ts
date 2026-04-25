@@ -30,7 +30,8 @@ import {
 } from './preset-utils.ts';
 import { MODEL_NAME_REGEX } from '../types/stage-definitions.ts';
 import type { ApiPreset, CliPreset } from '../types/presets.ts';
-import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
+import { createLogger, isDebugEnabled } from '@vcp-lib/logging';
+const vcpLog = createLogger('dev-buddy.log');
 
 // ================== CONFIGURATION ==================
 

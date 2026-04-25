@@ -8,7 +8,7 @@
 import { describe, test, expect } from "bun:test";
 import { join } from "path";
 
-const HOOK_PATH = join(import.meta.dir, "test-quality-warning.ts");
+const HOOK_PATH = join(import.meta.dir, "..", "hooks", "test-quality-warning.ts");
 
 // --- Helpers ---
 

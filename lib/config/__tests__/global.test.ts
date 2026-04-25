@@ -7,14 +7,12 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { mkdtemp, writeFile, readFile, rm } from "fs/promises";
 import { join } from "path";
-import { tmpdir, homedir } from "os";
+import { homedir } from "os";
 
 import {
   globalConfigPath,
   loadGlobalConfig,
-  saveGlobalConfig,
   ensureGlobalConfig,
   validateStandardsUrl,
   resolveStandardsUrl,
@@ -23,20 +21,9 @@ import {
   applyGlobalDefaults,
   DEFAULT_MANIFEST_URL,
   type VcpGlobalConfig,
-} from "./global-config";
+} from "../src/global";
 
-import type { VcpConfig } from "./vcp-context-core";
-
-// --- Helpers ---
-
-async function withTmpDir(fn: (dir: string) => Promise<void>): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "vcp-gc-test-"));
-  try {
-    await fn(dir);
-  } finally {
-    await rm(dir, { recursive: true });
-  }
-}
+import type { VcpConfig } from "../src/types";
 
 const SAMPLE_GLOBAL: VcpGlobalConfig = {
   standards_url: DEFAULT_MANIFEST_URL,
@@ -57,9 +44,6 @@ const SAMPLE_PROJECT: VcpConfig = {
   ignore: ["core-architecture/rule-5"],
 };
 
-// ---------------------------------------------------------------------------
-// globalConfigPath
-// ---------------------------------------------------------------------------
 describe("globalConfigPath", () => {
   test("returns path ending in .vcp/config.json", () => {
     const p = globalConfigPath();
@@ -72,34 +56,17 @@ describe("globalConfigPath", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// loadGlobalConfig
-// ---------------------------------------------------------------------------
 describe("loadGlobalConfig", () => {
-  // Note: loadGlobalConfig reads from the real ~/.vcp/config.json.
-  // We can't easily mock the path, so we test the error handling.
-
   test("returns null when file doesn't exist", async () => {
-    // This test relies on the actual file not existing or existing.
-    // We test the contract: it never throws.
     const result = await loadGlobalConfig();
-    // Either a valid config or null — never throws
     expect(result === null || typeof result === "object").toBe(true);
   });
 });
 
-// ---------------------------------------------------------------------------
-// saveGlobalConfig
-// ---------------------------------------------------------------------------
 describe("saveGlobalConfig", () => {
-  // Note: saveGlobalConfig writes to the real ~/.vcp/config.json.
-  // We test the module functions that don't depend on fixed paths instead.
-  // The save/load integration is covered by the verification steps.
+  // Integration covered by ensureGlobalConfig's auto-create test.
 });
 
-// ---------------------------------------------------------------------------
-// validateStandardsUrl
-// ---------------------------------------------------------------------------
 describe("validateStandardsUrl", () => {
   test("accepts valid HTTPS URL", () => {
     expect(validateStandardsUrl("https://example.com/manifest.json")).toBeNull();
@@ -130,7 +97,6 @@ describe("validateStandardsUrl", () => {
 
   test("rejects link-local addresses", () => {
     expect(validateStandardsUrl("https://169.254.1.1/manifest.json")).toContain("link-local");
-    // fe80::1 without brackets is an invalid URL; with brackets it's caught as link-local
     expect(validateStandardsUrl("https://[fe80::1]/manifest.json")).toContain("link-local");
   });
 
@@ -159,16 +125,12 @@ describe("validateStandardsUrl", () => {
   });
 
   test("rejects IPv4-mapped IPv6 loopback", () => {
-    // bun normalizes ::ffff:127.0.0.1 to ::ffff:7f00:1
     expect(validateStandardsUrl("https://[::ffff:7f00:1]/manifest.json")).toContain("localhost");
   });
 
   test("rejects IPv4-mapped IPv6 private ranges", () => {
-    // ::ffff:10.0.0.1 → ::ffff:a00:1
     expect(validateStandardsUrl("https://[::ffff:a00:1]/manifest.json")).toContain("private");
-    // ::ffff:192.168.1.1 → ::ffff:c0a8:101
     expect(validateStandardsUrl("https://[::ffff:c0a8:101]/manifest.json")).toContain("private");
-    // ::ffff:172.16.0.1 → ::ffff:ac10:1
     expect(validateStandardsUrl("https://[::ffff:ac10:1]/manifest.json")).toContain("private");
   });
 
@@ -177,9 +139,6 @@ describe("validateStandardsUrl", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// resolveStandardsUrl
-// ---------------------------------------------------------------------------
 describe("resolveStandardsUrl", () => {
   test("project URL wins over global", () => {
     const project: VcpConfig = {
@@ -229,9 +188,6 @@ describe("resolveStandardsUrl", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// resolvePluginRoot
-// ---------------------------------------------------------------------------
 describe("resolvePluginRoot", () => {
   test("project pluginRoot wins over global", () => {
     const project: VcpConfig = {
@@ -253,9 +209,6 @@ describe("resolvePluginRoot", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// mergeIgnoreArrays
-// ---------------------------------------------------------------------------
 describe("mergeIgnoreArrays", () => {
   test("unions two arrays", () => {
     const result = mergeIgnoreArrays(["CWE-798"], ["core-architecture/rule-5"]);
@@ -280,13 +233,10 @@ describe("mergeIgnoreArrays", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// applyGlobalDefaults
-// ---------------------------------------------------------------------------
 describe("applyGlobalDefaults", () => {
   test("project severity overrides global", () => {
     const result = applyGlobalDefaults(SAMPLE_GLOBAL, SAMPLE_PROJECT);
-    expect(result.severity).toBe("medium"); // project has "medium", global has "high"
+    expect(result.severity).toBe("medium");
   });
 
   test("global severity used when project omits it", () => {
@@ -294,27 +244,25 @@ describe("applyGlobalDefaults", () => {
       version: "1.0",
       scopes: { "web-frontend": true },
       compliance: [],
-      // no severity field
     };
     const result = applyGlobalDefaults(SAMPLE_GLOBAL, project);
-    expect(result.severity).toBe("high"); // from global defaults
+    expect(result.severity).toBe("high");
   });
 
   test("ignore arrays merged (union)", () => {
     const result = applyGlobalDefaults(SAMPLE_GLOBAL, SAMPLE_PROJECT);
-    expect(result.ignore).toContain("CWE-798"); // from global
-    expect(result.ignore).toContain("core-architecture/rule-5"); // from project
+    expect(result.ignore).toContain("CWE-798");
+    expect(result.ignore).toContain("core-architecture/rule-5");
   });
 
-  test("scopes not merged — project wins entirely", () => {
+  test("scopes not merged - project wins entirely", () => {
     const result = applyGlobalDefaults(SAMPLE_GLOBAL, SAMPLE_PROJECT);
-    // Project has web-frontend and web-backend, global default has web-backend only
     expect(result.scopes).toEqual(SAMPLE_PROJECT.scopes);
   });
 
-  test("compliance not merged — project wins entirely", () => {
+  test("compliance not merged - project wins entirely", () => {
     const result = applyGlobalDefaults(SAMPLE_GLOBAL, SAMPLE_PROJECT);
-    expect(result.compliance).toEqual(["pci-dss"]); // project value, not global "gdpr"
+    expect(result.compliance).toEqual(["pci-dss"]);
   });
 
   test("null global config returns project config unchanged", () => {
@@ -338,26 +286,14 @@ describe("applyGlobalDefaults", () => {
   test("does not mutate original project config", () => {
     const original = { ...SAMPLE_PROJECT, ignore: ["original-entry"] };
     const result = applyGlobalDefaults(SAMPLE_GLOBAL, original);
-    // Result should have merged ignores
     expect(result.ignore).toContain("CWE-798");
-    // Original should be untouched
     expect(original.ignore).toEqual(["original-entry"]);
   });
 });
 
-// ---------------------------------------------------------------------------
-// ensureGlobalConfig
-// ---------------------------------------------------------------------------
 describe("ensureGlobalConfig", () => {
-  // Note: ensureGlobalConfig reads/writes the real ~/.vcp/config.json.
-  // These tests verify the logic paths. The first test works regardless of
-  // whether the file exists — it just validates the contract.
-
   test("returns existing config if present (or null if absent)", async () => {
-    // ensureGlobalConfig with null projectConfig should never create a file.
-    // If a global config exists, it returns it; if not, returns null.
     const result = await ensureGlobalConfig(null);
-    // Either returns existing config or null — never throws
     expect(result === null || typeof result === "object").toBe(true);
   });
 
@@ -366,11 +302,7 @@ describe("ensureGlobalConfig", () => {
       version: "1.0",
       scopes: { "web-backend": true },
       compliance: [],
-      // no pluginRoot
     };
-    // If global config doesn't exist AND project has no pluginRoot,
-    // ensureGlobalConfig can't create a config and returns null (or
-    // returns the existing global config if it happens to exist).
     const result = await ensureGlobalConfig(project);
     const globalExists = await loadGlobalConfig();
     if (globalExists) {
@@ -381,11 +313,8 @@ describe("ensureGlobalConfig", () => {
   });
 
   test("always uses DEFAULT_MANIFEST_URL (never promotes project standards_url)", async () => {
-    // Security: ensureGlobalConfig must never write untrusted project
-    // config values to global config. It always uses DEFAULT_MANIFEST_URL.
     const globalExists = await loadGlobalConfig();
     if (globalExists) {
-      // Can't test auto-creation when config already exists
       return;
     }
 
@@ -398,13 +327,10 @@ describe("ensureGlobalConfig", () => {
     };
     const result = await ensureGlobalConfig(project);
     expect(result).not.toBeNull();
-    // Must use safe default, NOT the project's untrusted URL
     expect(result!.standards_url).toBe(DEFAULT_MANIFEST_URL);
     expect(result!.pluginRoot).toBe("/tmp/test-vcp-plugin");
-    // Debug must default to false
     expect(result!.debug).toBe(false);
 
-    // Cleanup: remove the auto-created config
     const { unlink } = await import("fs/promises");
     try {
       await unlink(globalConfigPath());
@@ -414,9 +340,6 @@ describe("ensureGlobalConfig", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// DEFAULT_MANIFEST_URL
-// ---------------------------------------------------------------------------
 describe("DEFAULT_MANIFEST_URL", () => {
   test("points to the VCP main branch manifest", () => {
     expect(DEFAULT_MANIFEST_URL).toContain("Z-M-Huang/vcp");

@@ -1,4 +1,4 @@
-import { describe, test, expect, afterAll } from 'bun:test';
+import { describe, test, expect, afterAll, beforeAll } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -12,6 +12,31 @@ function makeTmpDir(): string {
   tmpDirs.push(d);
   return d;
 }
+
+// Warm the TypeScript Compiler API + bun's TS transpilation cache once.
+// Cold-cache verifyContract takes ~5s; subsequent calls are ms-fast. Pay the
+// cost in suite setup so individual test cases stay under their default
+// 5-second timeout.
+beforeAll(() => {
+  const projectDir = makeTmpDir();
+  writeFileSync(path.join(projectDir, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: {
+      target: 'ESNext', module: 'ESNext', moduleResolution: 'Bundler',
+      strict: true, skipLibCheck: true, noEmit: true, allowImportingTsExtensions: true,
+    },
+    include: ['src/**/*.ts'],
+  }));
+  mkdirSync(path.join(projectDir, 'src'), { recursive: true });
+  writeFileSync(path.join(projectDir, 'src', 'warmup.ts'), 'export const x = 1;\n');
+  const planDir = path.join(projectDir, '.vcp', 'plan', 'ralph', 'warmup');
+  mkdirSync(planDir, { recursive: true });
+  const unitFile = path.join(planDir, 'unit-1.md');
+  writeFileSync(unitFile,
+    '# Unit 1: Warmup\n\n**Status:** pending\n\n### Contract Manifest\n\n```json\n' +
+    JSON.stringify({ exports: [{ symbol: 'x', module: 'src/warmup.ts', kind: 'named' }], consumes: [] }, null, 2) +
+    '\n```\n\n## Backpressure\n- `bun test`\n');
+  verifyContract({ unitFile, projectDir });
+}, 30000);
 
 interface ProjectFixture {
   /** project root dir */
@@ -87,7 +112,7 @@ describe('verifyContract', () => {
     expect(result.event).toBe('skip');
     if (result.event !== 'skip') return;
     expect(result.skipReason).toContain('no Contract Manifest');
-  });
+  }, 15000);
 
   test('skips when manifest has empty exports[]', () => {
     const { projectDir, unitFile } = setupProject({
@@ -99,7 +124,7 @@ describe('verifyContract', () => {
     expect(result.event).toBe('skip');
     if (result.event !== 'skip') return;
     expect(result.skipReason).toContain('empty exports');
-  });
+  }, 15000);
 
   test('passes when promised named export actually exists', () => {
     const { projectDir, unitFile } = setupProject({
@@ -115,7 +140,7 @@ describe('verifyContract', () => {
 
     const result = verifyContract({ unitFile, projectDir });
     expect(result.event).toBe('pass');
-  });
+  }, 15000);
 
   test('passes when promised type export actually exists', () => {
     const { projectDir, unitFile } = setupProject({
@@ -128,7 +153,7 @@ describe('verifyContract', () => {
 
     const result = verifyContract({ unitFile, projectDir });
     expect(result.event).toBe('pass');
-  });
+  }, 15000);
 
   test('fails TS2459 when named export is declared but missing the export keyword (Class A bug, file has other exports)', () => {
     // The openhive Unit 27 scenario: ConcurrencyManager class declared but no
@@ -154,7 +179,7 @@ describe('verifyContract', () => {
     expect(result.failures[0].symbol).toBe('ConcurrencyManager');
     expect(result.failures[0].tsCode).toBe(2459);
     expect(result.failures[0].kind).toBe('named');
-  });
+  }, 15000);
 
   test('fails TS2305 when named symbol does not exist in the producer file at all', () => {
     // The producer file is a module but the requested symbol simply isn't there
@@ -171,7 +196,7 @@ describe('verifyContract', () => {
     expect(result.event).toBe('fail');
     if (result.event !== 'fail') return;
     expect(result.failures[0].tsCode).toBe(2305);
-  });
+  }, 15000);
 
   test('fails TS2306 when the source file has no exports at all (file is not a module)', () => {
     // Pathological variant of Class A: the producer file forgot all exports,
@@ -191,7 +216,7 @@ describe('verifyContract', () => {
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].symbol).toBe('ConcurrencyManager');
     expect(result.failures[0].tsCode).toBe(2306);
-  });
+  }, 15000);
 
   test('fails TS2459 when type export is declared but missing the export keyword (Class A type-only bug)', () => {
     // The openhive Unit 22 scenario: WindowTriggerConfig declared but not exported.
@@ -214,7 +239,7 @@ describe('verifyContract', () => {
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].symbol).toBe('WindowTriggerConfig');
     expect(result.failures[0].tsCode).toBe(2459);
-  });
+  }, 15000);
 
   test('fails with TS2307 when the module file does not exist', () => {
     const { projectDir, unitFile } = setupProject({
@@ -230,7 +255,7 @@ describe('verifyContract', () => {
     if (result.event !== 'fail') return;
     expect(result.failures[0].tsCode).toBe(2307);
     expect(result.failures[0].module).toBe('src/missing.ts');
-  });
+  }, 15000);
 
   test('passes default exports', () => {
     const { projectDir, unitFile } = setupProject({
@@ -243,7 +268,7 @@ describe('verifyContract', () => {
 
     const result = verifyContract({ unitFile, projectDir });
     expect(result.event).toBe('pass');
-  });
+  }, 15000);
 
   test('fails TS1192 when default export is missing (file is a module)', () => {
     const { projectDir, unitFile } = setupProject({
@@ -259,7 +284,7 @@ describe('verifyContract', () => {
     if (result.event !== 'fail') return;
     expect(result.failures[0].tsCode).toBe(1192);
     expect(result.failures[0].kind).toBe('default');
-  });
+  }, 15000);
 
   test('handles re-exports (export { X } from)', () => {
     // Probe imports from the re-exporting file; tsc should resolve through.
@@ -276,7 +301,7 @@ describe('verifyContract', () => {
 
     const result = verifyContract({ unitFile, projectDir });
     expect(result.event).toBe('pass');
-  });
+  }, 15000);
 
   test('handles aliased re-exports (export { X as Y } from)', () => {
     const { projectDir, unitFile } = setupProject({
@@ -292,7 +317,7 @@ describe('verifyContract', () => {
 
     const result = verifyContract({ unitFile, projectDir });
     expect(result.event).toBe('pass');
-  });
+  }, 15000);
 
   test('handles export-star (export * from)', () => {
     const { projectDir, unitFile } = setupProject({
@@ -308,7 +333,7 @@ describe('verifyContract', () => {
 
     const result = verifyContract({ unitFile, projectDir });
     expect(result.event).toBe('pass');
-  });
+  }, 15000);
 
   test('reports multiple failures across multiple modules in one run', () => {
     const { projectDir, unitFile } = setupProject({
@@ -331,7 +356,7 @@ describe('verifyContract', () => {
     expect(result.failures).toHaveLength(2);
     const symbols = result.failures.map(f => f.symbol).sort();
     expect(symbols).toEqual(['HiddenA', 'HiddenB']);
-  });
+  }, 15000);
 
   test('errors when no tsconfig.json is found', () => {
     const projectDir = makeTmpDir();
@@ -349,7 +374,7 @@ describe('verifyContract', () => {
     expect(result.event).toBe('error');
     if (result.event !== 'error') return;
     expect(result.error).toContain('tsconfig');
-  });
+  }, 15000);
 
   test('errors on malformed manifest JSON', () => {
     const projectDir = makeTmpDir();
@@ -363,7 +388,7 @@ describe('verifyContract', () => {
     expect(result.event).toBe('error');
     if (result.event !== 'error') return;
     expect(result.error).toContain('JSON');
-  });
+  }, 15000);
 
   test('cleans up the probe file after verification (default)', () => {
     const { projectDir, unitFile } = setupProject({
@@ -377,7 +402,7 @@ describe('verifyContract', () => {
     verifyContract({ unitFile, projectDir });
     const probePath = path.join(projectDir, '.vcp', '.contract-probe-unit-1.ts');
     expect(() => require('fs').readFileSync(probePath)).toThrow();
-  });
+  }, 15000);
 
   test('keeps the probe file when --keep-probe is set', () => {
     const { projectDir, unitFile } = setupProject({
@@ -392,7 +417,7 @@ describe('verifyContract', () => {
     const probePath = path.join(projectDir, '.vcp', '.contract-probe-unit-1.ts');
     const body = require('fs').readFileSync(probePath, 'utf-8');
     expect(body).toContain("import { Foo as _n0 } from");
-  });
+  }, 15000);
 });
 
 describe('formatFailureMessage', () => {
@@ -411,7 +436,7 @@ describe('formatFailureMessage', () => {
     expect(msg).toContain('Unit 22');
     expect(msg).toContain('WindowTriggerConfig');
     expect(msg).toContain('Add the `export` keyword');
-  });
+  }, 15000);
 
   test('renders TS2307 fail differently from TS2305', () => {
     const msg = formatFailureMessage({
@@ -427,7 +452,7 @@ describe('formatFailureMessage', () => {
     });
     expect(msg).toContain('TS2307');
     expect(msg).toContain('src/missing.ts');
-  });
+  }, 15000);
 
   test('renders TS2459 with actionable "missing export keyword" text', () => {
     const msg = formatFailureMessage({
@@ -446,7 +471,7 @@ describe('formatFailureMessage', () => {
     expect(msg).toContain('TS2459');
     expect(msg).toContain('declared locally');
     expect(msg).toContain('`export` keyword');
-  });
+  }, 15000);
 
   test('renders TS1192 as "default export missing"', () => {
     const msg = formatFailureMessage({
@@ -462,5 +487,5 @@ describe('formatFailureMessage', () => {
     });
     expect(msg).toContain('default export');
     expect(msg).toContain('export default');
-  });
+  }, 15000);
 });

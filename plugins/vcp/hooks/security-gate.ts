@@ -20,7 +20,8 @@
  */
 
 import { mkdir, rename } from "fs/promises";
-import { vcpLog } from "../lib/vcp-logger";
+import { vcpLog } from "@vcp-lib/logging";
+import { projectDir } from "@vcp-lib/runtime-adapter";
 import { loadGlobalConfig, mergeIgnoreArrays } from "../lib/global-config";
 
 const [input, globalConfig] = await Promise.all([
@@ -49,7 +50,7 @@ try {
   }
 } catch {
   console.error("VCP Security Gate — BLOCKED: Could not parse hook input. Refusing to allow unverified tool call.");
-  const fallbackRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const fallbackRoot = projectDir();
   await vcpLog(fallbackRoot, {
     source: "security-gate",
     event: "PreToolUse",
@@ -59,7 +60,7 @@ try {
   process.exit(2);
 }
 
-const projectRoot = process.env.CLAUDE_PROJECT_DIR || cwd;
+const projectRoot = projectDir(cwd);
 
 if (!content) {
   await vcpLog(projectRoot, {

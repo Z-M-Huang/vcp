@@ -250,7 +250,7 @@ Only regenerate these three default tools:
                is available and what tools I can use, then ask what I'd like to learn about.
    ```
 
-10. **Pin git-doc-mcp version** — read `.mcp.json` and check if the server command uses an unpinned `git-doc-mcp` (e.g., `npx git-doc-mcp` without a version). If so, update it to `npx git-doc-mcp@0.2.2`. If it already has a pinned version, leave it unchanged.
+10. **Pin git-doc-mcp version** — read `.mcp.json` and check if the server command uses an unpinned `git-doc-mcp` (e.g., `npx git-doc-mcp` without a version). If so, update it to `npx git-doc-mcp@0.2.3`. If it already has a pinned version, leave it unchanged.
 
 ## Step 6: Report
 

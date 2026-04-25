@@ -524,7 +524,7 @@ Read the existing `.mcp.json` if present. Preserve any existing MCP server entri
   "mcpServers": {
     "{project-name}-docs": {
       "command": "npx",
-      "args": ["-y", "git-doc-mcp@0.2.2", "--manifest", ".mcp/manifest.yml"]
+      "args": ["-y", "git-doc-mcp@0.2.3", "--manifest", ".mcp/manifest.yml"]
     }
   }
 }

@@ -57,7 +57,7 @@ For projects with 50+ documentation files (e.g., monorepos with multiple teams),
 
 ## Prerequisites
 
-- **[git-doc-mcp](https://github.com/Z-M-Huang/git-doc-mcp)** v0.2.2+ — the MCP server that serves the manifest. Installed automatically via `npx` when the MCP server starts. Requires Node.js >= 20.11.0.
+- **[git-doc-mcp](https://github.com/Z-M-Huang/git-doc-mcp)** v0.2.3+ — the MCP server that serves the manifest. Installed automatically via `npx` when the MCP server starts. Requires Node.js >= 20.11.0.
 
 ## Documentation
 

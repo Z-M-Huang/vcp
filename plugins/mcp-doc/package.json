@@ -1,0 +1,6 @@
+{
+  "name": "@vcp-plugin/mcp-doc",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module"
+}

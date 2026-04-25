@@ -15,7 +15,7 @@ import { mkdtemp, writeFile, rm, mkdir } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
-const HOOK_PATH = join(import.meta.dir, "security-gate.ts");
+const HOOK_PATH = join(import.meta.dir, "..", "hooks", "security-gate.ts");
 
 // Runtime string builder — joins parts so no single source line contains
 // a complete pattern that would trigger the security gate on this file.

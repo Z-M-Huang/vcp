@@ -9,7 +9,7 @@
 import { describe, test, expect } from "bun:test";
 import { mkdtemp, writeFile, rm, mkdir, readFile } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { tmpdir } from "os";
 
 import {
@@ -29,9 +29,7 @@ import {
   type StandardEntry,
   type VcpConfig,
   type ScopedRules,
-} from "./vcp-context-core";
-
-// --- Test fixtures ---
+} from "../src/index";
 
 const BASE_URL = "https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/";
 
@@ -158,8 +156,6 @@ tags: [test]
 This standard has no rules section.
 `;
 
-// --- Helpers ---
-
 async function withTmpDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "vcp-ctx-test-"));
   try {
@@ -169,9 +165,6 @@ async function withTmpDir(fn: (dir: string) => Promise<void>): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// parseIgnoreList
-// ---------------------------------------------------------------------------
 describe("parseIgnoreList", () => {
   test("separates standard IDs, rule refs, and CWEs", () => {
     const result = parseIgnoreList([
@@ -199,11 +192,8 @@ describe("parseIgnoreList", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// resolveApplicableStandards
-// ---------------------------------------------------------------------------
 describe("resolveApplicableStandards", () => {
-  test("no config — returns only 'always' standards", () => {
+  test("no config - returns only 'always' standards", () => {
     const result = resolveApplicableStandards(BASE_MANIFEST, null);
     expect(result.every((s) => s.applies === "always")).toBe(true);
     expect(result.length).toBe(2);
@@ -213,7 +203,7 @@ describe("resolveApplicableStandards", () => {
     ]);
   });
 
-  test("config with web-backend scope — includes always + web-backend", () => {
+  test("config with web-backend scope - includes always + web-backend", () => {
     const config: VcpConfig = {
       version: "1.0",
       scopes: { "web-backend": true },
@@ -229,7 +219,7 @@ describe("resolveApplicableStandards", () => {
     expect(ids).not.toContain("database-encryption");
   });
 
-  test("config with compliance:gdpr — includes always + compliance:gdpr", () => {
+  test("config with compliance:gdpr - includes always + compliance:gdpr", () => {
     const config: VcpConfig = {
       version: "1.0",
       scopes: {},
@@ -242,7 +232,7 @@ describe("resolveApplicableStandards", () => {
     expect(ids).not.toContain("web-backend-security");
   });
 
-  test("config with all scopes and compliance — includes everything", () => {
+  test("config with all scopes and compliance - includes everything", () => {
     const config: VcpConfig = {
       version: "1.0",
       scopes: {
@@ -304,15 +294,11 @@ describe("resolveApplicableStandards", () => {
     };
     const result = resolveApplicableStandards(BASE_MANIFEST, config);
     const ids = result.map((s) => s.id);
-    // Both core standards should still be present
     expect(ids).toContain("core-security");
     expect(ids).toContain("core-architecture");
   });
 });
 
-// ---------------------------------------------------------------------------
-// extractRuleSummaries
-// ---------------------------------------------------------------------------
 describe("extractRuleSummaries", () => {
   test("extracts bold rule titles from markdown", () => {
     const standards = new Map([["core-security", SAMPLE_MARKDOWN]]);
@@ -420,7 +406,6 @@ describe("extractRuleSummaries", () => {
     const result = extractRuleSummaries(standards, entries, config);
     expect(result.core[0].rules).toEqual([
       "Validate all input at system boundaries.",
-      // Rule 2 ("Encode output...") should be filtered out
       "Never hardcode secrets.",
     ]);
   });
@@ -468,7 +453,6 @@ describe("extractRuleSummaries", () => {
       ignore: ["core-architecture/rule-1", "core-architecture/rule-2"],
     };
     const result = extractRuleSummaries(standards, entries, config);
-    // All rules ignored → standard should not appear
     expect(Object.keys(result).length).toBe(0);
   });
 
@@ -489,9 +473,6 @@ describe("extractRuleSummaries", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// formatContext
-// ---------------------------------------------------------------------------
 describe("formatContext", () => {
   test("output starts with VCP Standards Context heading", () => {
     const rules: ScopedRules = {
@@ -535,7 +516,6 @@ describe("formatContext", () => {
   });
 
   test("truncates lowest-severity standards when over budget", () => {
-    // Generate enough low-severity rules to exceed the core-only budget.
     const longRules = Array.from(
       { length: 100 },
       (_, i) => `This is a deliberately verbose rule number ${i + 1} that takes up space in the token budget.`,
@@ -547,11 +527,9 @@ describe("formatContext", () => {
       ],
     };
     const output = formatContext(rules);
-    // Critical standard should survive truncation
     expect(output).toContain("**Security** (critical)");
-    // Low-severity standard should be truncated if budget is exceeded
     const charBudget = CORE_TOKEN_BUDGET * CHARS_PER_TOKEN;
-    expect(output.length).toBeLessThanOrEqual(charBudget + 200); // Allow small margin for edge cases
+    expect(output.length).toBeLessThanOrEqual(charBudget + 200);
   });
 
   test("core rules appear before non-core rules", () => {
@@ -568,9 +546,6 @@ describe("formatContext", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// flattenV2Manifest
-// ---------------------------------------------------------------------------
 describe("flattenV2Manifest", () => {
   const V2_ROOT: ManifestV2Root = {
     version: "2.0",
@@ -711,7 +686,6 @@ describe("flattenV2Manifest", () => {
       },
     ]);
 
-    // Config enables web-backend but not mobile
     const config: VcpConfig = {
       version: "1.0",
       scopes: { "web-backend": true, mobile: false },
@@ -729,13 +703,16 @@ describe("flattenV2Manifest", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Integration: security-context.ts hook
-// ---------------------------------------------------------------------------
 describe("integration: security-context.ts", () => {
-  const HOOK_PATH = join(
+  // Resolve plugins/vcp/hooks/security-context.ts relative to this test file's
+  // location at lib/context-core/__tests__/. Three levels up reaches repo root.
+  const HOOK_PATH = resolve(
     import.meta.dir,
     "..",
+    "..",
+    "..",
+    "plugins",
+    "vcp",
     "hooks",
     "security-context.ts",
   );
@@ -751,7 +728,6 @@ describe("integration: security-context.ts", () => {
       const stdout = await new Response(proc.stdout).text();
 
       expect(exitCode).toBe(0);
-      // Should output formatted context, fallback, or init prompt
       expect(
         stdout.includes("VCP Standards Context") ||
           stdout.includes("VCP active") ||
@@ -762,7 +738,6 @@ describe("integration: security-context.ts", () => {
 
   test("exits 0 with no project config", async () => {
     await withTmpDir(async (dir) => {
-      // Empty dir — no .vcp/config.json. Hook should still exit 0 and produce output.
       const proc = Bun.spawn(["bun", "run", HOOK_PATH], {
         stdout: "pipe",
         stderr: "pipe",
@@ -783,8 +758,6 @@ describe("integration: security-context.ts", () => {
     expect(exitCode).toBe(0);
   }, 20000);
 });
-
-// --- loadConfig auto-migration tests ---
 
 describe("loadConfig auto-migration", () => {
   test("loads from .vcp/config.json when present", async () => {
@@ -807,19 +780,15 @@ describe("loadConfig auto-migration", () => {
   test("auto-migrates .vcp.json to .vcp/config.json", async () => {
     const dir = await mkdtemp(join(tmpdir(), "vcp-migrate-"));
     try {
-      // Place config at old location only
       await writeFile(
         join(dir, ".vcp.json"),
         JSON.stringify({ version: "1.0", scopes: { web: true }, compliance: ["soc2"] }),
       );
       const config = await loadConfig(dir);
-      // Config should be returned
       expect(config).not.toBeNull();
       expect(config!.scopes).toEqual({ web: true });
-      // Old file should be gone, new file should exist
       expect(existsSync(join(dir, ".vcp.json"))).toBe(false);
       expect(existsSync(join(dir, ".vcp", "config.json"))).toBe(true);
-      // New file should contain the same data
       const migrated = JSON.parse(await readFile(join(dir, ".vcp", "config.json"), "utf-8"));
       expect(migrated.scopes).toEqual({ web: true });
     } finally {
@@ -837,8 +806,6 @@ describe("loadConfig auto-migration", () => {
     }
   });
 });
-
-// --- buildReferenceSection ---
 
 describe("buildReferenceSection", () => {
   const makeEntry = (id: string, url: string): StandardEntry => ({
@@ -894,4 +861,3 @@ describe("buildReferenceSection", () => {
     expect(output).not.toContain("file:///etc/passwd");
   });
 });
-

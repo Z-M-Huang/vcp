@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
+import { createLogger, isDebugEnabled } from '@vcp-lib/logging';
+const vcpLog = createLogger('dev-buddy.log');
 import { loadDevBuddyConfig } from './pipeline-config.ts';
 
 // Re-export submodules so existing callers (tests, skills, CLI) keep working

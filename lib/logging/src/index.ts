@@ -1,10 +1,13 @@
 /**
- * VCP-compatible file logger for dev-buddy plugin.
+ * VCP-compatible file logger. Shared across plugins.
  *
- * Writes to <projectRoot>/.vcp/dev-buddy.log using the same line format as
- * VCP core's vcpLog(). Always logs — no debug gate. Rotates at 5 MB, keeping
- * 3 versions (.log, .log.1, .log.2). Never throws — logging failures are
- * silently ignored to prevent breaking plugin execution.
+ * Writes to <projectRoot>/.vcp/<filename> using a stable line format.
+ * Gated on a caller-supplied `debug` flag. Rotates at 5 MB, keeping
+ * 3 versions (.log, .log.1, .log.2). Never throws — logging failures
+ * are silently ignored so they cannot break plugin execution.
+ *
+ * Call sites bind their filename via `createLogger(filename)`; a default
+ * `vcpLog` is pre-bound to `vcp.log`.
  */
 import { appendFile, chmod, readFile, mkdir, stat, rename, unlink, open } from 'fs/promises';
 import { isAbsolute, join } from 'path';
@@ -17,15 +20,13 @@ export interface LogEntry {
   details?: string;
   /**
    * When true, fsync the log file before returning. Use sparingly — only for
-   * post-mortem payloads that must survive a crash of the same process
-   * (§11: backpressure.fail, review.needs_changes, review.feedback.cleared).
-   * The log remains best-effort under rotation; durable truth lives in
-   * units/unit-N.json.attemptHistory.
+   * post-mortem payloads that must survive a crash of the same process.
+   * The log remains best-effort under rotation; durable truth lives elsewhere.
    */
   fsync?: boolean;
 }
 
-/** Hard per-event cap for log payloads (§11 — "DEBUG level allows volume"). */
+/** Hard per-event cap for log payloads. */
 export const LOG_PAYLOAD_MAX_BYTES = 16 * 1024;
 
 /**
@@ -45,11 +46,6 @@ export function capLogPayload(payload: string, maxBytes: number = LOG_PAYLOAD_MA
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_LOG_VERSIONS = 3; // .log, .log.1, .log.2
 
-/**
- * Rotate the log file when it exceeds MAX_LOG_SIZE.
- * Keeps at most MAX_LOG_VERSIONS files:
- *   .log (current) → .log.1 → .log.2 (oldest, deleted on next rotate)
- */
 async function rotateIfNeeded(logFile: string): Promise<void> {
   try {
     const st = await stat(logFile);
@@ -68,24 +64,23 @@ async function rotateIfNeeded(logFile: string): Promise<void> {
   }
 }
 
-export async function vcpLog(
+async function writeLog(
   projectRoot: string,
   entry: LogEntry,
-  debug: boolean = false,
+  debug: boolean,
+  filename: string,
 ): Promise<void> {
   if (!debug) return;
   if (!projectRoot || !isAbsolute(projectRoot)) return;
   try {
     const logDir = join(projectRoot, '.vcp');
     await mkdir(logDir, { recursive: true });
-    const logFile = join(logDir, 'dev-buddy.log');
+    const logFile = join(logDir, filename);
     await rotateIfNeeded(logFile);
     const ts = new Date().toISOString();
     const det = entry.details ? ` — ${entry.details}` : '';
     const line = `${ts} [${entry.event}] ${entry.source}: ${entry.decision}${det}\n`;
     if (entry.fsync) {
-      // Append + fsync to survive a same-process crash. The log remains
-      // best-effort across rotation + heavy parallel writes (§11 caveat).
       const fh = await open(logFile, 'a');
       try {
         await fh.appendFile(line);
@@ -96,17 +91,25 @@ export async function vcpLog(
     } else {
       await appendFile(logFile, line);
     }
-    // Set restrictive permissions on log file (contains API keys in masked form)
     // chmod is a no-op on Windows — that's acceptable
     try {
       await chmod(logFile, 0o600);
     } catch {
-      // chmod failures are non-fatal — silent to avoid leaking to parent stderr
+      // chmod failures are non-fatal
     }
   } catch {
     // Never let logging failure break execution
   }
 }
+
+/** Create a logger bound to a specific filename. */
+export function createLogger(filename: string) {
+  return (projectRoot: string, entry: LogEntry, debug: boolean = false) =>
+    writeLog(projectRoot, entry, debug, filename);
+}
+
+/** Default logger — writes to `.vcp/vcp.log`. */
+export const vcpLog = createLogger('vcp.log');
 
 /** Read debug flag from ~/.vcp/config.json. Returns false on any error. */
 export async function isDebugEnabled(): Promise<boolean> {

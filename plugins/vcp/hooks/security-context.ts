@@ -9,9 +9,10 @@
 
 import { generateContext } from "../lib/vcp-context-core";
 import { loadGlobalConfig } from "../lib/global-config";
-import { vcpLog } from "../lib/vcp-logger";
+import { vcpLog } from "@vcp-lib/logging";
+import { projectDir } from "@vcp-lib/runtime-adapter";
 
-const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const projectRoot = projectDir();
 const [output, globalConfig] = await Promise.all([
   generateContext(projectRoot),
   loadGlobalConfig(),

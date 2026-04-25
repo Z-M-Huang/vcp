@@ -11,7 +11,7 @@ import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
-const HOOK_PATH = join(import.meta.dir, "security-context.ts");
+const HOOK_PATH = join(import.meta.dir, "..", "hooks", "security-context.ts");
 
 // --- Helpers ---
 

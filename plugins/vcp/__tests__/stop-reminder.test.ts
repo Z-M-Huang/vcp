@@ -9,7 +9,7 @@ import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
-const HOOK_PATH = join(import.meta.dir, "stop-reminder.ts");
+const HOOK_PATH = join(import.meta.dir, "..", "hooks", "stop-reminder.ts");
 
 // --- Helpers ---
 

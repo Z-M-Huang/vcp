@@ -1,0 +1,12 @@
+{
+  "name": "@vcp-plugin/vcp",
+  "private": true,
+  "version": "0.5.10",
+  "type": "module",
+  "dependencies": {
+    "@vcp-lib/config": "workspace:*",
+    "@vcp-lib/context-core": "workspace:*",
+    "@vcp-lib/logging": "workspace:*",
+    "@vcp-lib/runtime-adapter": "workspace:*"
+  }
+}
