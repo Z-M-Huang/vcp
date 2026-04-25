@@ -1164,10 +1164,14 @@ describe('main() — review gate e2e', () => {
 });
 
 describe('SKILL.md simplification', () => {
-  test('dev-buddy-ralph SKILL.md references state machine and task orchestration', () => {
+  test('dev-buddy-ralph SKILL.md is a thin MCP driver (v0.6.0+)', () => {
     const content = readFileSync(path.resolve(__dirname, '../../skills/dev-buddy-ralph/SKILL.md'), 'utf-8');
-    expect(content).toContain('ralph-state-machine');
-    expect(content).toContain('TaskCreate');
+    // v0.6.0 rewrote this skill as a thin driver over the dev-buddy MCP
+    // server tools. The legacy ralph-state-machine.ts + TaskCreate prose
+    // is gone; we now reference ralph_start / ralph_next instead.
+    expect(content).toContain('ralph_start');
+    expect(content).toContain('ralph_next');
+    expect(content).not.toContain('TaskCreate');
   });
 
   test('dev-buddy-discover SKILL.md is simplified', () => {
