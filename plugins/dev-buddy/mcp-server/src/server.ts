@@ -19,8 +19,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import {
+  initRunDir, writeState, readState, listRuns, readLease,
+  STATE_SCHEMA_VERSION, type RunState,
+} from "./engine/state-store.ts";
 
 // ─── stdio discipline ──────────────────────────────────────────────────
 // Re-route any stray console writes to stderr; only MCP framing should
@@ -34,6 +39,15 @@ console.warn = (...args: unknown[]) =>
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(HERE, "..", "..");
+const SERVER_STARTED_AT = new Date().toISOString();
+
+// ─── input guards ──────────────────────────────────────────────────────
+
+function assertAbsolutePath(p: string, field: string): void {
+  if (!isAbsolute(p)) {
+    throw new Error(`${field} must be an absolute path; got '${p}'`);
+  }
+}
 
 // ─── server ────────────────────────────────────────────────────────────
 
@@ -56,6 +70,116 @@ export async function main(): Promise<void> {
       return {
         content: [{ type: "text", text: reply }],
         structuredContent: { reply },
+      };
+    },
+  );
+
+  server.registerTool(
+    "ralph_start",
+    {
+      description: "Create a new Ralph run for a project. Persists initial state under <project_path>/.vcp/ralph/<run-id>/.",
+      inputSchema: {
+        project_path: z.string().describe("Absolute path to the user's project. State lives under this dir."),
+        goal: z.string().describe("Goal description for the Ralph run."),
+      },
+    },
+    async ({ project_path, goal }) => {
+      assertAbsolutePath(project_path, "project_path");
+      if (!goal.trim()) throw new Error("goal must be non-empty");
+
+      const runId = randomUUID();
+      initRunDir(project_path, runId);
+      const now = new Date().toISOString();
+      const initial: RunState = {
+        schema_version: STATE_SCHEMA_VERSION,
+        run_id: runId,
+        goal,
+        project_path,
+        status: "pending",
+        step: "discover",
+        created_at: now,
+        updated_at: now,
+        subprocess_pids: [],
+      };
+      writeState(project_path, initial);
+
+      return {
+        content: [{ type: "text", text: `Ralph run created: ${runId}` }],
+        structuredContent: {
+          run_id: runId,
+          status: initial.status,
+          step: initial.step,
+          state_path: join(project_path, ".vcp", "ralph", runId, "state.json"),
+        },
+      };
+    },
+  );
+
+  server.registerTool(
+    "ralph_list",
+    {
+      description: "List all Ralph runs in a project, newest first.",
+      inputSchema: {
+        project_path: z.string().describe("Absolute path to the user's project."),
+      },
+    },
+    async ({ project_path }) => {
+      assertAbsolutePath(project_path, "project_path");
+      const runs = listRuns(project_path);
+      const summary = runs.length === 0
+        ? "No Ralph runs found."
+        : runs.map((r) => `${r.run_id}  ${r.status}  step=${r.step}  goal="${r.goal}"`).join("\n");
+      return {
+        content: [{ type: "text", text: summary }],
+        structuredContent: { runs },
+      };
+    },
+  );
+
+  server.registerTool(
+    "ralph_health",
+    {
+      description: "Report MCP server health. With project_path, includes per-project active-run info and current lease holders.",
+      inputSchema: {
+        project_path: z.string().optional().describe("Optional absolute path to a project; when provided, the response includes that project's active runs."),
+      },
+    },
+    async ({ project_path }) => {
+      const uptime_ms = Date.now() - new Date(SERVER_STARTED_AT).getTime();
+      const base = {
+        version: "0.6.0",
+        started_at: SERVER_STARTED_AT,
+        uptime_ms,
+      };
+
+      if (!project_path) {
+        return {
+          content: [{ type: "text", text: `dev-buddy MCP server up; uptime ${uptime_ms} ms` }],
+          structuredContent: base,
+        };
+      }
+
+      assertAbsolutePath(project_path, "project_path");
+      const runs = listRuns(project_path);
+      const runDetails = runs.map((r) => {
+        const lease = readLease(project_path, r.run_id);
+        return {
+          ...r,
+          lease: lease
+            ? { owner_id: lease.owner_id, step: lease.step_name, heartbeat_at: lease.heartbeat_at }
+            : null,
+        };
+      });
+      const active = runDetails.filter((r) =>
+        r.status === "pending" || r.status === "running"
+      );
+
+      return {
+        content: [{
+          type: "text",
+          text: `dev-buddy MCP server up; uptime ${uptime_ms} ms; ${runs.length} runs (${active.length} active) in ${project_path}`,
+        }],
+        structuredContent: { ...base, project_path, runs: runDetails, active_count: active.length },
       };
     },
   );
