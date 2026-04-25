@@ -7,12 +7,21 @@ description: >
   Run this once when setting up VCP for a new project.
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Bash, WebFetch, AskUserQuestion
-argument-hint: ""
+argument-hint: "[--standards-url <url|default>] [--confirm]"
 ---
 
 # VCP Project Initialization
 
 Create both a global config (`~/.vcp/config.json`) and a project config (`.vcp/config.json`). The global config stores the standards repository URL and plugin path, shared by all projects. The project config stores project-specific settings.
+
+## Cross-host UX
+
+This skill runs on both Claude Code and Codex CLI. Where it needs user input:
+
+- If the `AskUserQuestion` tool is available (Claude Code), use it for an interactive prompt.
+- Otherwise (Codex CLI), print the question as plain text along with the exact re-invocation command the user should run to provide the answer (e.g. `/vcp-init --standards-url default`). Then stop. The user re-invokes; the skill picks up using the flags they supplied.
+
+Each question below names the corresponding CLI flag for the Codex path.
 
 ## Step 1: Check for Existing Configs
 
@@ -32,9 +41,11 @@ Read both `~/.vcp/config.json` and `.vcp/config.json` from the project root.
 
 1. Tell the user: "VCP needs a global config at `~/.vcp/config.json`. This stores the standards repository URL and plugin path, shared by all your projects on this machine."
 
-2. Ask via AskUserQuestion: "Do you want to use a custom standards repository, or the default VCP public standards?"
-   - **Custom:** Ask for the URL. It must start with `https://` and point to a VCP-compatible `manifest.json`. Validate the URL format.
-   - **Default:** Use `https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/manifest.json`
+2. Ask whether to use a custom standards repository or the default VCP public standards.
+   - On Claude: use `AskUserQuestion` with two choices.
+   - On Codex (or when `AskUserQuestion` is unavailable): print the question and instruct the user: "Re-run `/vcp-init --standards-url default` for the public standards, or `/vcp-init --standards-url <https://...>` for a custom repository." Then stop. When the user re-invokes with `--standards-url`, accept the value without re-asking.
+   - **Custom:** Must start with `https://` and point to a VCP-compatible `manifest.json`. Validate the URL format.
+   - **Default:** `https://raw.githubusercontent.com/Z-M-Huang/vcp/main/standards/manifest.json`
 
 3. Discover the VCP plugin path:
    - Use Glob to search `~/.claude/` with pattern `**/vcp/lib/vcp-context-core.ts`
@@ -78,6 +89,8 @@ Use your judgment. Do not rely on a fixed lookup table — understand the projec
 ## Step 4: Confirm with the User
 
 **Always ask the user to confirm before writing the config.** Present your proposed configuration and ask for approval. Do not write `.vcp/config.json` until the user explicitly confirms.
+
+On Codex: the user confirms by re-invoking `/vcp-init --confirm` after reviewing the proposed config you printed. If `--confirm` is not present, print the proposal and stop with: "Run `/vcp-init --confirm` to write this config, or re-run with adjustments (e.g., `--scopes web-backend,database`)."
 
 Show the user:
 

@@ -6,12 +6,19 @@ description: >
   Supports both project config (.vcp/config.json) and global config (~/.vcp/config.json).
 user-invocable: true
 allowed-tools: Read, Write, WebFetch, AskUserQuestion
-argument-hint: "<natural language command>"
+argument-hint: "<natural language command> [--confirm | --force]"
 ---
 
 # VCP Config
 
 View and modify `.vcp/config.json` (project) or `~/.vcp/config.json` (global) configuration via natural language commands.
+
+## Cross-host UX
+
+This skill runs on both Claude Code and Codex CLI. Where it needs user confirmation:
+
+- If `AskUserQuestion` is available (Claude Code), use it for the interactive prompt.
+- Otherwise (Codex CLI), print the question and the exact re-invocation command, then stop. Examples: `--confirm` for risky security ignores, `--force` to bypass an unknown-standard warning. The user re-invokes; the skill detects the flag and skips the prompt.
 
 ## Examples
 
@@ -95,7 +102,7 @@ Interpret `$ARGUMENTS` as a natural language command. Determine the **action** a
 | **remove default ignore** | entry | Remove entry from `defaults.ignore` |
 | **reset** | entire global config | Delete `~/.vcp/config.json` after explicit confirmation |
 
-If the intent is ambiguous, use AskUserQuestion to clarify. Do not guess.
+If the intent is ambiguous: prefer `AskUserQuestion` when available. When unavailable (Codex), tell the user "Please rephrase your request with an explicit action — for example: `/vcp-config add-ignore core-architecture/rule-3` or `/vcp-config enable-scope database`." and stop. Do not guess.
 
 If no arguments are provided, default to **show config**.
 
@@ -116,7 +123,7 @@ The entry must match the regex: `^(CWE-\d+|[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*(\/ru
 
 The manifest `scopes` is an object where each key maps to `{ "manifest": "<full-url>", "applies": "<scope>" }`. To get the list of standard IDs, fetch each scope manifest from the full URL in the `manifest` field — each contains a `standards` array with `id` and `url` fields.
 
-- For standard IDs: check that the `id` exists in any scope manifest's `standards` array. If not found, warn the user: "Standard '[id]' not found in the manifest. Available standards: [list ids]." Use AskUserQuestion to confirm whether to add it anyway.
+- For standard IDs: check that the `id` exists in any scope manifest's `standards` array. If not found, warn the user: "Standard '[id]' not found in the manifest. Available standards: [list ids]." On Claude, use `AskUserQuestion` to confirm whether to add it anyway. On Codex, instruct the user: "Re-run with `--force` to add it anyway." and stop.
 - For rule references: check that the standard part exists. The rule number cannot be validated against the manifest (rules are in the standard content), so accept it if the standard exists.
 - For CWE patterns: accept any `CWE-{digits}` without manifest validation (CWEs are matched by the security gate).
 
@@ -148,7 +155,7 @@ Before removing, check if the entry exists. If not, tell the user: "'{entry}' is
 
 ## Step 4: Confirm Security-Sensitive Changes
 
-If the action adds an ignore for any of these, **always** use AskUserQuestion to get explicit confirmation before applying:
+If the action adds an ignore for any of these, **always** require explicit confirmation. On Claude, use `AskUserQuestion`. On Codex, print the warning and instruct the user: "Re-run the command with `--confirm` to suppress this finding." Then stop. The targets requiring confirmation are:
 
 1. **Any standard with `"security"` in its tags** (fetch manifest to check) — e.g., `core-security`, `web-backend-security`, `web-frontend-security`
 2. **Any rule from a security-tagged standard** — e.g., `core-security/rule-3`
@@ -160,7 +167,7 @@ Display the warning:
 
 For non-security changes (scopes, severity, exclude, non-security ignores), proceed without extra confirmation.
 
-For global config `reset`, always ask for explicit confirmation: "This will delete `~/.vcp/config.json`. All projects will need to re-run `/vcp-init`. Are you sure?"
+For global config `reset`, always require explicit confirmation. On Claude, use `AskUserQuestion`: "This will delete `~/.vcp/config.json`. All projects will need to re-run `/vcp-init`. Are you sure?" On Codex, print the warning and instruct the user to re-run with `/vcp-config global reset --confirm`.
 
 ## Step 5: Apply Change
 
