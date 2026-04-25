@@ -483,6 +483,389 @@ export function renderQuickMarkdown(out: AuditOutput): string {
   return lines.join("\n");
 }
 
+// ─── Domain Partition ──────────────────────────────────────────────────────
+
+/**
+ * Domain → standard-id mapping mirrors the table in vcp-audit/SKILL.md.
+ * When a new standard is added to the manifest, extend this map. Standards
+ * that don't match any domain fall through to "architecture" with a warning.
+ */
+const DOMAIN_MAP: Record<string, string[]> = {
+  backend: [
+    "core-security", "core-secure-defaults", "core-api-design-security",
+    "core-data-flow-security", "core-attack-surface", "web-backend-security",
+    "web-backend-structure", "web-backend-data-access", "web-backend-api-design",
+    "web-backend-realtime", "web-backend-caching",
+  ],
+  frontend: [
+    "web-frontend-security", "web-frontend-structure",
+    "web-frontend-performance", "web-frontend-accessibility",
+  ],
+  architecture: [
+    "core-architecture", "core-code-quality", "core-error-handling",
+    "core-testing", "core-root-cause-analysis", "core-concurrency-security",
+  ],
+  database: [
+    "database-encryption", "database-schema-security", "core-dependency-management",
+  ],
+  compliance: ["compliance-gdpr", "compliance-pci-dss", "compliance-hipaa"],
+  mobile: ["mobile-security", "mobile-platform-configuration"],
+  desktop: ["desktop-security"],
+  cli: ["cli-security-and-quality"],
+  devops: [
+    "devops-container-security", "devops-cicd-security",
+    "devops-iac-security", "devops-kubernetes-security",
+  ],
+  "agentic-ai": [
+    "agentic-ai-agent-security", "agentic-ai-tool-security",
+    "agentic-ai-permissions", "agentic-ai-supply-chain", "agentic-ai-communication",
+  ],
+};
+
+function findDomain(standardId: string): { domain: string; mapped: boolean } {
+  for (const [domain, ids] of Object.entries(DOMAIN_MAP)) {
+    if (ids.includes(standardId)) return { domain, mapped: true };
+  }
+  return { domain: "architecture", mapped: false };
+}
+
+interface DomainGroup {
+  domain: string;
+  standards: Array<{ id: string; severity?: string; tags?: string[] }>;
+}
+
+export function partitionByDomain(
+  applicableStandards: Array<{ id: string; severity?: string; tags?: string[] }>,
+): { groups: DomainGroup[]; unmapped: string[] } {
+  const map = new Map<string, DomainGroup>();
+  const unmapped: string[] = [];
+
+  for (const std of applicableStandards) {
+    const { domain, mapped } = findDomain(std.id);
+    if (!mapped) unmapped.push(std.id);
+    if (!map.has(domain)) map.set(domain, { domain, standards: [] });
+    map.get(domain)!.standards.push(std);
+  }
+
+  // Stable order: keys of DOMAIN_MAP, then any extras (unlikely)
+  const orderedDomains = Object.keys(DOMAIN_MAP);
+  const groups: DomainGroup[] = [];
+  for (const d of orderedDomains) {
+    if (map.has(d)) groups.push(map.get(d)!);
+  }
+  for (const [d, g] of map.entries()) {
+    if (!orderedDomains.includes(d)) groups.push(g);
+  }
+  return { groups, unmapped };
+}
+
+// ─── Concurrency-capped runner ─────────────────────────────────────────────
+
+async function runWithCap<T>(tasks: Array<() => Promise<T>>, cap: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let nextIdx = 0;
+  const workerCount = Math.min(cap, tasks.length);
+  if (workerCount === 0) return [];
+
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const idx = nextIdx++;
+      if (idx >= tasks.length) return;
+      results[idx] = await tasks[idx]();
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+// ─── Scanner Prompt Builder ────────────────────────────────────────────────
+
+function buildScannerPrompt(opts: {
+  domain: string;
+  projectRoot: string;
+  exclude: string[];
+  rules: string;
+}): string {
+  const excludeBlock = opts.exclude.length > 0
+    ? opts.exclude.map((g) => `  - \`${g}\``).join("\n")
+    : "  (none)";
+
+  return `You are a domain-specific code auditor. Your domain: **${opts.domain}**.
+Scan the codebase at ${opts.projectRoot} for violations of the rules below. Report every plausible violation; a downstream validator pass will eliminate false positives, so err on the side of inclusion.
+
+Use Glob to enumerate code files (skip the Exclude patterns below). Use Read to inspect files. Use Grep when looking for specific patterns. Do NOT use Bash to run commands.
+
+Exclude patterns:
+${excludeBlock}
+
+For each finding, include the literal code you read as EVIDENCE — findings without evidence cannot be validated.
+
+Output format — one block per finding, no preamble, no summary:
+
+FINDING: {standard-id}/rule-{N} ({severity})
+FILE: {relative-path}:{line}
+EVIDENCE: {3-5 lines of the actual code, exactly as it appears}
+ISSUE: {one-sentence problem description}
+FIX: {one-sentence remediation}
+
+If no violations are found in this domain: output exactly the string "NO_FINDINGS" and nothing else.
+
+Rules to check (extracted summaries):
+
+${opts.rules}
+`;
+}
+
+// ─── Full Mode ─────────────────────────────────────────────────────────────
+
+interface DomainResult {
+  domain: string;
+  findings: Finding[];
+  error: string | null;
+  durationMs: number;
+}
+
+async function runFullMode(opts: {
+  projectRoot: string;
+  config: ResolvedConfig;
+  preset: ApiPreset;
+  model: string;
+  concurrencyCap?: number;
+  /** Filter applied before domain partition (for compliance mode). */
+  standardFilter?: (std: { id: string; tags?: string[] }) => boolean;
+  modeLabel?: Mode;
+}): Promise<AuditOutput> {
+  const modeLabel = opts.modeLabel ?? "full";
+  const { applicableStandards, exclude, ignoredRules } = opts.config;
+
+  const filtered = opts.standardFilter
+    ? applicableStandards.filter(opts.standardFilter)
+    : applicableStandards;
+
+  if (filtered.length === 0) {
+    return {
+      mode: modeLabel,
+      target: opts.projectRoot,
+      standardsLoaded: 0,
+      rulesChecked: 0,
+      findings: [],
+      warnings: ["No applicable standards after filter; nothing to scan."],
+    };
+  }
+
+  // Fetch standards content + extract rules
+  const standardsContent = await fetchStandards(filtered);
+  const ruleSummaries = extractRuleSummaries(standardsContent);
+
+  // Partition
+  const { groups, unmapped } = partitionByDomain(filtered);
+
+  // Build per-domain rule listings + count total rules
+  let totalRules = 0;
+  const domainPrompts: Array<{ domain: string; prompt: string; ruleCount: number }> = [];
+  for (const group of groups) {
+    const ruleLines: string[] = [];
+    let ruleCount = 0;
+    for (const std of group.standards) {
+      const scoped = ruleSummaries[std.id];
+      if (!scoped) continue;
+      for (const rule of scoped.rules) {
+        const severity = (rule.severity ?? scoped.severity ?? "medium").toLowerCase();
+        ruleLines.push(`${std.id} rule ${rule.number} (${severity}) — ${rule.summary}`);
+        ruleCount++;
+        totalRules++;
+      }
+    }
+    if (ruleCount === 0) continue;
+    domainPrompts.push({
+      domain: group.domain,
+      ruleCount,
+      prompt: buildScannerPrompt({
+        domain: group.domain,
+        projectRoot: opts.projectRoot,
+        exclude,
+        rules: ruleLines.join("\n"),
+      }),
+    });
+  }
+
+  // Run scanners in parallel with concurrency cap
+  const cap = opts.concurrencyCap ?? 4;
+  const timeoutMs = opts.preset.timeout_ms ?? 600_000;
+  const tasks = domainPrompts.map(({ domain, prompt }) => async (): Promise<DomainResult> => {
+    const started = Date.now();
+    const runner = createRunner(opts.preset);
+    try {
+      const result = await runner.run(prompt, {
+        model: opts.model,
+        timeoutMs,
+        cwd: opts.projectRoot,
+        debugEnabled: false,
+        presetName: opts.preset.name,
+        allowedTools: ["Read", "Glob", "Grep"],
+      });
+      const durationMs = Date.now() - started;
+      if (result.timedOut) return { domain, findings: [], error: "scanner timed out", durationMs };
+      if (result.error) return { domain, findings: [], error: result.error, durationMs };
+      if (!result.result) return { domain, findings: [], error: "empty scanner output", durationMs };
+      const { findings } = parseFindings(result.result);
+      return { domain, findings, error: null, durationMs };
+    } catch (err) {
+      return {
+        domain,
+        findings: [],
+        error: (err as Error).message,
+        durationMs: Date.now() - started,
+      };
+    }
+  });
+
+  const results = await runWithCap(tasks, cap);
+
+  // Aggregate findings + collect warnings for failed scanners
+  const allFindings: Finding[] = [];
+  const warnings: string[] = [];
+  if (unmapped.length > 0) {
+    warnings.push(
+      `Standards not mapped to a domain (defaulted to 'architecture'): ${unmapped.join(", ")}. Update DOMAIN_MAP in audit-runner.ts.`,
+    );
+  }
+  for (const r of results) {
+    if (r.error) {
+      warnings.push(`Scanner '${r.domain}' did not complete (${r.error}). Domain results may be incomplete.`);
+    }
+    allFindings.push(...r.findings);
+  }
+
+  // Apply ignore list (rule-level + standard-level)
+  const ignoreSet = new Set(ignoredRules);
+  const kept = allFindings.filter(
+    (f) => !ignoreSet.has(`${f.standardId}/rule-${f.rule}`) && !ignoreSet.has(f.standardId),
+  );
+  const suppressed = allFindings.length - kept.length;
+  if (suppressed > 0) warnings.push(`Suppressed ${suppressed} finding(s) by ignore config.`);
+
+  return {
+    mode: modeLabel,
+    target: opts.projectRoot,
+    standardsLoaded: filtered.length,
+    rulesChecked: totalRules,
+    findings: kept,
+    warnings,
+  };
+}
+
+// ─── Compliance Mode ───────────────────────────────────────────────────────
+
+const FRAMEWORK_TO_STANDARD: Record<Framework, string> = {
+  gdpr: "compliance-gdpr",
+  "pci-dss": "compliance-pci-dss",
+  hipaa: "compliance-hipaa",
+};
+
+async function runComplianceMode(opts: {
+  projectRoot: string;
+  config: ResolvedConfig;
+  preset: ApiPreset;
+  model: string;
+  framework: Framework;
+  concurrencyCap?: number;
+}): Promise<AuditOutput> {
+  const targetStandardId = FRAMEWORK_TO_STANDARD[opts.framework];
+  const hasFramework = opts.config.applicableStandards.some((s) => s.id === targetStandardId);
+  if (!hasFramework) {
+    throw new Error(
+      `Compliance framework '${opts.framework}' is not configured in .vcp/config.json. Run /vcp-init to add it.`,
+    );
+  }
+
+  // Filter: keep the target compliance standard + anything tagged "security"
+  const standardFilter = (std: { id: string; tags?: string[] }) =>
+    std.id === targetStandardId || (Array.isArray(std.tags) && std.tags.includes("security"));
+
+  return runFullMode({
+    projectRoot: opts.projectRoot,
+    config: opts.config,
+    preset: opts.preset,
+    model: opts.model,
+    concurrencyCap: opts.concurrencyCap,
+    standardFilter,
+    modeLabel: "compliance",
+  });
+}
+
+// ─── Full-mode Renderer ────────────────────────────────────────────────────
+
+export function renderFullMarkdown(out: AuditOutput): string {
+  const { findings, standardsLoaded, rulesChecked, warnings, mode, target } = out;
+  const summary = summarizeByStandard(findings);
+
+  // Order summary rows by verdict severity then by standard id
+  const verdictRank: Record<StandardSummary["verdict"], number> = { FAIL: 0, WARN: 1, PASS: 2 };
+  summary.sort((a, b) =>
+    verdictRank[a.verdict] - verdictRank[b.verdict] || a.standardId.localeCompare(b.standardId),
+  );
+
+  const totalCritical = summary.reduce((s, r) => s + r.critical, 0);
+  const totalHigh = summary.reduce((s, r) => s + r.high, 0);
+  const totalMedium = summary.reduce((s, r) => s + r.medium, 0);
+
+  const heading = mode === "compliance" ? "### VCP Compliance Audit" : "### VCP Audit";
+  const lines: string[] = [
+    heading,
+    "",
+    `**Standards loaded:** ${standardsLoaded} standards, ${rulesChecked} rules checked`,
+    `**Target:** ${target}`,
+    "",
+  ];
+
+  if (summary.length === 0) {
+    lines.push("**Result:** No findings across all scanned standards.");
+  } else {
+    lines.push("#### Standards Summary");
+    lines.push("");
+    lines.push("| Standard | Status | Critical | High | Medium |");
+    lines.push("|----------|--------|----------|------|--------|");
+    for (const s of summary) {
+      lines.push(`| ${s.standardId} | ${s.verdict} | ${s.critical} | ${s.high} | ${s.medium} |`);
+    }
+    lines.push("");
+    lines.push(
+      `**Overall: ${totalCritical} critical, ${totalHigh} high, ${totalMedium} medium findings across ${summary.length} standards.**`,
+    );
+    lines.push("");
+
+    // Group findings by standard
+    const byStandard = new Map<string, Finding[]>();
+    for (const f of findings) {
+      if (!byStandard.has(f.standardId)) byStandard.set(f.standardId, []);
+      byStandard.get(f.standardId)!.push(f);
+    }
+
+    lines.push("#### Findings by Standard");
+    lines.push("");
+    for (const s of summary) {
+      const stdFindings = byStandard.get(s.standardId) ?? [];
+      if (stdFindings.length === 0) continue;
+      lines.push(`##### ${s.standardId}`);
+      lines.push("");
+      for (const f of stdFindings) {
+        lines.push(`- **Rule ${f.rule}** (${f.severity}) — ${f.issue}`);
+        lines.push(`  - **File:** ${f.file}${f.line !== null ? `:${f.line}` : ""}`);
+        if (f.fix) lines.push(`  - **Fix:** ${f.fix}`);
+      }
+      lines.push("");
+    }
+  }
+
+  if (warnings.length > 0) {
+    lines.push("");
+    for (const w of warnings) lines.push(`> ${w}`);
+  }
+
+  return lines.join("\n");
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -517,10 +900,18 @@ async function main(): Promise<void> {
   try {
     if (args.mode === "quick") {
       output = await runQuickMode({ projectRoot, config, preset, model });
+    } else if (args.mode === "full") {
+      output = await runFullMode({ projectRoot, config, preset, model });
+    } else if (args.mode === "compliance") {
+      output = await runComplianceMode({
+        projectRoot,
+        config,
+        preset,
+        model,
+        framework: args.framework!,
+      });
     } else {
-      console.error(
-        `[audit-runner] mode '${args.mode}' is not yet implemented in this build. Use --mode quick.`,
-      );
+      console.error(`[audit-runner] unknown mode '${args.mode}'`);
       process.exit(1);
     }
   } catch (err) {
@@ -531,8 +922,11 @@ async function main(): Promise<void> {
   if (args.format === "json") {
     console.log(JSON.stringify(output, null, 2));
   } else {
-    if (output.mode === "quick") console.log(renderQuickMarkdown(output));
-    else console.log(JSON.stringify(output, null, 2));
+    if (output.mode === "quick") {
+      console.log(renderQuickMarkdown(output));
+    } else {
+      console.log(renderFullMarkdown(output));
+    }
   }
 }
 

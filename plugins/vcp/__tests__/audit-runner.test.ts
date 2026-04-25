@@ -6,7 +6,13 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { parseArgs, parseFindings, renderQuickMarkdown } from '../scripts/audit-runner.ts';
+import {
+  parseArgs,
+  parseFindings,
+  renderQuickMarkdown,
+  partitionByDomain,
+  renderFullMarkdown,
+} from '../scripts/audit-runner.ts';
 
 describe('parseArgs', () => {
   test('--mode quick is sufficient', () => {
@@ -203,5 +209,116 @@ describe('renderQuickMarkdown', () => {
       warnings: ['Suppressed 2 finding(s) by ignore config.'],
     });
     expect(md).toContain('> Suppressed 2 finding(s) by ignore config.');
+  });
+});
+
+describe('partitionByDomain', () => {
+  test('groups known standards into their declared domains', () => {
+    const { groups, unmapped } = partitionByDomain([
+      { id: 'core-security' },
+      { id: 'web-frontend-security' },
+      { id: 'database-encryption' },
+      { id: 'core-architecture' },
+    ]);
+    expect(unmapped).toEqual([]);
+    const domainNames = groups.map((g) => g.domain);
+    expect(domainNames).toContain('backend');
+    expect(domainNames).toContain('frontend');
+    expect(domainNames).toContain('database');
+    expect(domainNames).toContain('architecture');
+  });
+
+  test('falls back to architecture for unknown standards', () => {
+    const { groups, unmapped } = partitionByDomain([
+      { id: 'made-up-standard-id' },
+    ]);
+    expect(unmapped).toEqual(['made-up-standard-id']);
+    const arch = groups.find((g) => g.domain === 'architecture');
+    expect(arch).toBeDefined();
+    expect(arch!.standards.map((s) => s.id)).toContain('made-up-standard-id');
+  });
+
+  test('groups in stable DOMAIN_MAP order', () => {
+    const { groups } = partitionByDomain([
+      { id: 'mobile-security' },
+      { id: 'core-security' },
+    ]);
+    // backend (core-security) should come before mobile in the declared order
+    const idxBackend = groups.findIndex((g) => g.domain === 'backend');
+    const idxMobile = groups.findIndex((g) => g.domain === 'mobile');
+    expect(idxBackend).toBeGreaterThanOrEqual(0);
+    expect(idxMobile).toBeGreaterThanOrEqual(0);
+    expect(idxBackend).toBeLessThan(idxMobile);
+  });
+});
+
+describe('renderFullMarkdown', () => {
+  test('full mode header and summary table', () => {
+    const md = renderFullMarkdown({
+      mode: 'full',
+      target: '/proj',
+      standardsLoaded: 5,
+      rulesChecked: 30,
+      findings: [
+        { standardId: 'core-architecture', rule: 1, severity: 'critical', file: 'a.py', line: 10, evidence: '', issue: 'Layer violation', fix: 'Refactor' },
+        { standardId: 'core-error-handling', rule: 3, severity: 'high', file: 'b.py', line: 5, evidence: '', issue: 'Empty catch', fix: 'Re-raise' },
+      ],
+      warnings: [],
+    });
+    expect(md).toContain('### VCP Audit');
+    expect(md).toContain('**Standards loaded:** 5 standards, 30 rules checked');
+    expect(md).toContain('**Target:** /proj');
+    expect(md).toContain('| core-architecture | FAIL | 1 | 0 | 0 |');
+    expect(md).toContain('| core-error-handling | WARN | 0 | 1 | 0 |');
+    expect(md).toContain('**Overall: 1 critical, 1 high, 0 medium findings');
+  });
+
+  test('compliance mode uses VCP Compliance Audit header', () => {
+    const md = renderFullMarkdown({
+      mode: 'compliance',
+      target: '/proj',
+      standardsLoaded: 2,
+      rulesChecked: 8,
+      findings: [],
+      warnings: [],
+    });
+    expect(md).toContain('### VCP Compliance Audit');
+    expect(md).toContain('No findings across all scanned standards.');
+  });
+
+  test('orders standards by verdict severity (FAIL before WARN before PASS)', () => {
+    const md = renderFullMarkdown({
+      mode: 'full',
+      target: '/proj',
+      standardsLoaded: 3,
+      rulesChecked: 5,
+      findings: [
+        { standardId: 'core-error-handling', rule: 3, severity: 'high', file: 'a', line: 1, evidence: '', issue: 'X', fix: 'Y' },
+        { standardId: 'core-architecture', rule: 1, severity: 'critical', file: 'b', line: 1, evidence: '', issue: 'X', fix: 'Y' },
+      ],
+      warnings: [],
+    });
+    const failIdx = md.indexOf('| core-architecture | FAIL');
+    const warnIdx = md.indexOf('| core-error-handling | WARN');
+    expect(failIdx).toBeGreaterThanOrEqual(0);
+    expect(warnIdx).toBeGreaterThanOrEqual(0);
+    expect(failIdx).toBeLessThan(warnIdx);
+  });
+
+  test('renders per-standard findings list with Rule N, file, fix', () => {
+    const md = renderFullMarkdown({
+      mode: 'full',
+      target: '/proj',
+      standardsLoaded: 1,
+      rulesChecked: 1,
+      findings: [
+        { standardId: 'core-architecture', rule: 7, severity: 'critical', file: 'src/x.py', line: 42, evidence: 'foo', issue: 'Bad coupling', fix: 'Use abstraction' },
+      ],
+      warnings: [],
+    });
+    expect(md).toContain('##### core-architecture');
+    expect(md).toContain('- **Rule 7** (critical) — Bad coupling');
+    expect(md).toContain('  - **File:** src/x.py:42');
+    expect(md).toContain('  - **Fix:** Use abstraction');
   });
 });
