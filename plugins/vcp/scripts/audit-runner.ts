@@ -50,6 +50,7 @@ import { projectDir as adapterProjectDir } from "@vcp-lib/runtime-adapter";
 
 type Mode = "quick" | "full" | "compliance";
 type Framework = "gdpr" | "pci-dss" | "hipaa";
+type Format = "markdown" | "json";
 
 interface ParsedArgs {
   mode: Mode;
@@ -57,6 +58,7 @@ interface ParsedArgs {
   path?: string;
   preset?: string;
   model?: string;
+  format: Format;
 }
 
 interface Finding {
@@ -120,6 +122,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
         result.model = value;
         i++;
         break;
+      case "--format":
+        if (!value) throw new Error("--format requires a value");
+        if (value !== "markdown" && value !== "json") {
+          throw new Error(`Invalid --format '${value}'. Expected: markdown | json`);
+        }
+        result.format = value;
+        i++;
+        break;
       default:
         if (flag.startsWith("--")) throw new Error(`Unknown flag: ${flag}`);
     }
@@ -129,6 +139,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   if (result.mode === "compliance" && !result.framework) {
     throw new Error("--framework is required when --mode=compliance");
   }
+  if (!result.format) result.format = "markdown";
   return result as ParsedArgs;
 }
 
@@ -394,6 +405,84 @@ async function runQuickMode(opts: {
   };
 }
 
+// ─── Markdown Renderer ──────────────────────────────────────────────────────
+
+interface StandardSummary {
+  standardId: string;
+  critical: number;
+  high: number;
+  medium: number;
+  verdict: "FAIL" | "WARN" | "PASS";
+}
+
+function summarizeByStandard(findings: Finding[]): StandardSummary[] {
+  const grouped = new Map<string, { critical: number; high: number; medium: number }>();
+  for (const f of findings) {
+    const sev = f.severity.toLowerCase();
+    const cur = grouped.get(f.standardId) ?? { critical: 0, high: 0, medium: 0 };
+    if (sev === "critical") cur.critical++;
+    else if (sev === "high") cur.high++;
+    else cur.medium++;
+    grouped.set(f.standardId, cur);
+  }
+
+  return [...grouped.entries()].map(([standardId, counts]) => {
+    let verdict: StandardSummary["verdict"];
+    if (counts.critical > 0) verdict = "FAIL";
+    else if (counts.high > 0) verdict = "WARN";
+    else verdict = "PASS";
+    return { standardId, ...counts, verdict };
+  });
+}
+
+export function renderQuickMarkdown(out: AuditOutput): string {
+  const { findings, standardsLoaded, rulesChecked, warnings } = out;
+  const summary = summarizeByStandard(findings);
+  const totalCritical = summary.reduce((s, r) => s + r.critical, 0);
+  const totalHigh = summary.reduce((s, r) => s + r.high, 0);
+  const failCount = summary.filter((r) => r.verdict === "FAIL").length;
+
+  const lines: string[] = [
+    "### VCP Release Readiness",
+    "",
+    `**Standards loaded:** ${standardsLoaded}`,
+    `**Rules checked:** ${rulesChecked} critical/high rules (medium skipped)`,
+    `**Note:** Quick mode does not validate findings. Run \`/vcp-audit\` for validated results.`,
+    "",
+  ];
+
+  if (summary.length === 0) {
+    lines.push(`**Verdict: READY — No critical or high issues found across ${standardsLoaded} standards.**`);
+  } else {
+    lines.push("| Standard | Verdict | Blocking Issues |");
+    lines.push("|----------|---------|-----------------|");
+    for (const s of summary) {
+      const issues =
+        s.critical > 0 ? `${s.critical} critical finding${s.critical === 1 ? "" : "s"}`
+          : s.high > 0 ? `${s.high} high finding${s.high === 1 ? "" : "s"}`
+            : "—";
+      lines.push(`| ${s.standardId} | ${s.verdict} | ${issues} |`);
+    }
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+    if (failCount > 0) {
+      lines.push(`**Verdict: NOT READY — ${totalCritical} critical issue${totalCritical === 1 ? "" : "s"} must be resolved before release.**`);
+    } else if (totalHigh > 0) {
+      lines.push(`**Verdict: REVIEW — ${totalHigh} high finding${totalHigh === 1 ? "" : "s"} should be evaluated before release.**`);
+    } else {
+      lines.push(`**Verdict: READY — No critical or high issues found across ${standardsLoaded} standards.**`);
+    }
+  }
+
+  if (warnings.length > 0) {
+    lines.push("");
+    for (const w of warnings) lines.push(`> ${w}`);
+  }
+
+  return lines.join("\n");
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -439,7 +528,12 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  console.log(JSON.stringify(output, null, 2));
+  if (args.format === "json") {
+    console.log(JSON.stringify(output, null, 2));
+  } else {
+    if (output.mode === "quick") console.log(renderQuickMarkdown(output));
+    else console.log(JSON.stringify(output, null, 2));
+  }
 }
 
 if (import.meta.main) {

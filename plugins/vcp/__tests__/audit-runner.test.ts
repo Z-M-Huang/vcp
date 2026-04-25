@@ -6,7 +6,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { parseArgs, parseFindings } from '../scripts/audit-runner.ts';
+import { parseArgs, parseFindings, renderQuickMarkdown } from '../scripts/audit-runner.ts';
 
 describe('parseArgs', () => {
   test('--mode quick is sufficient', () => {
@@ -140,5 +140,68 @@ FIX: baz`;
     const { findings } = parseFindings(raw);
     expect(findings[0].line).toBeNull();
     expect(findings[0].file).toBe('src/foo.py');
+  });
+});
+
+describe('renderQuickMarkdown', () => {
+  test('READY when no findings', () => {
+    const md = renderQuickMarkdown({
+      mode: 'quick',
+      target: '/proj',
+      standardsLoaded: 5,
+      rulesChecked: 12,
+      findings: [],
+      warnings: [],
+    });
+    expect(md).toContain('### VCP Release Readiness');
+    expect(md).toContain('**Standards loaded:** 5');
+    expect(md).toContain('**Rules checked:** 12 critical/high rules');
+    expect(md).toContain('READY — No critical or high issues found');
+  });
+
+  test('NOT READY with critical findings', () => {
+    const md = renderQuickMarkdown({
+      mode: 'quick',
+      target: '/proj',
+      standardsLoaded: 3,
+      rulesChecked: 8,
+      findings: [
+        { standardId: 'core-architecture', rule: 1, severity: 'critical', file: 'a.py', line: 1, evidence: '', issue: '', fix: '' },
+        { standardId: 'core-architecture', rule: 2, severity: 'critical', file: 'b.py', line: 2, evidence: '', issue: '', fix: '' },
+        { standardId: 'core-error-handling', rule: 3, severity: 'high', file: 'c.py', line: 3, evidence: '', issue: '', fix: '' },
+      ],
+      warnings: [],
+    });
+    expect(md).toContain('| core-architecture | FAIL | 2 critical findings |');
+    expect(md).toContain('| core-error-handling | WARN | 1 high finding |');
+    expect(md).toContain('NOT READY — 2 critical issues');
+  });
+
+  test('REVIEW when only high findings, no critical', () => {
+    const md = renderQuickMarkdown({
+      mode: 'quick',
+      target: '/proj',
+      standardsLoaded: 3,
+      rulesChecked: 8,
+      findings: [
+        { standardId: 'core-error-handling', rule: 3, severity: 'high', file: 'c.py', line: 3, evidence: '', issue: '', fix: '' },
+      ],
+      warnings: [],
+    });
+    expect(md).toContain('| core-error-handling | WARN |');
+    expect(md).toContain('REVIEW — 1 high finding');
+    expect(md).not.toContain('NOT READY');
+  });
+
+  test('appends warnings', () => {
+    const md = renderQuickMarkdown({
+      mode: 'quick',
+      target: '/proj',
+      standardsLoaded: 1,
+      rulesChecked: 1,
+      findings: [],
+      warnings: ['Suppressed 2 finding(s) by ignore config.'],
+    });
+    expect(md).toContain('> Suppressed 2 finding(s) by ignore config.');
   });
 });
