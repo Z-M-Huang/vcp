@@ -1,4 +1,18 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["hooks/**/*.ts", "scripts/**/*.ts", "types/**/*.ts"]
+  "include": [
+    "hooks/**/*.ts",
+    "scripts/**/*.ts",
+    "types/**/*.ts",
+    "mcp-server/**/*.ts"
+  ],
+  "exclude": [
+    "scripts/config-server.ts",
+    "scripts/one-shot-runner.ts",
+    "scripts/ralph-state-machine.ts",
+    "scripts/__tests__/pipeline-config.test.ts",
+    "scripts/__tests__/one-shot-runner.test.ts",
+    "scripts/__tests__/build-loop-runner.test.ts",
+    "scripts/__tests__/ralph-state-machine.test.ts"
+  ]
 }

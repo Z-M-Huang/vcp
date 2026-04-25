@@ -13,6 +13,7 @@ import {
   partitionByDomain,
   renderFullMarkdown,
   parseValidatorOutput,
+  extractAuditRules,
 } from '../scripts/audit-runner.ts';
 
 const baseFinding = {
@@ -397,5 +398,95 @@ describe('parseValidatorOutput', () => {
     expect(out.verdict).toBe('CONFIRMED');
     expect(out.severity).toBe('critical');
     expect(out.severityAdjusted).toBe(true);
+  });
+});
+
+describe('parseFindings multi-line EVIDENCE', () => {
+  test('preserves newlines inside EVIDENCE through to ISSUE marker', () => {
+    const raw = [
+      'FINDING: core-architecture/rule-1 (high)',
+      'FILE: src/db.ts:42',
+      'EVIDENCE: line one of the snippet',
+      '  line two indented',
+      '  line three indented',
+      'ISSUE: User input flows directly into a dangerous sink',
+      'FIX: Validate at the boundary',
+    ].join('\n');
+
+    const { findings } = parseFindings(raw);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].evidence.split('\n')).toHaveLength(3);
+    expect(findings[0].evidence).toContain('line one');
+    expect(findings[0].evidence).toContain('line two indented');
+    expect(findings[0].evidence).toContain('line three indented');
+    expect(findings[0].issue).toBe('User input flows directly into a dangerous sink');
+  });
+
+  test('blank lines inside EVIDENCE are preserved', () => {
+    const raw = [
+      'FINDING: core-architecture/rule-1 (high)',
+      'FILE: src/x.ts:1',
+      'EVIDENCE: foo',
+      '',
+      'bar',
+      'ISSUE: x',
+      'FIX: y',
+    ].join('\n');
+    const { findings } = parseFindings(raw);
+    expect(findings[0].evidence).toContain('foo');
+    expect(findings[0].evidence).toContain('bar');
+  });
+});
+
+describe('extractAuditRules', () => {
+  const baseEntry = {
+    id: 'core-security',
+    url: 'https://example/core-security.md',
+    scope: 'core',
+    severity: 'critical',
+    tags: ['security'],
+    applies: 'always',
+  };
+
+  test('parses numbered, bolded rules from a Rules section', () => {
+    const md = `# Core Security
+
+Some preamble.
+
+## Rules
+
+1. **Validate all input at system boundaries.**
+   Description text.
+
+2. **Encode output for its destination context.**
+   More text.
+
+## Other Section
+
+Should be ignored.
+`;
+    const standards = new Map<string, string>([['core-security', md]]);
+    const rules = extractAuditRules(standards, [baseEntry]);
+    expect(rules).toHaveLength(2);
+    expect(rules[0]).toEqual({
+      standardId: 'core-security',
+      ruleNumber: 1,
+      severity: 'critical',
+      summary: 'Validate all input at system boundaries.',
+    });
+    expect(rules[1].ruleNumber).toBe(2);
+  });
+
+  test('skips entries with no markdown', () => {
+    const standards = new Map<string, string>();
+    const rules = extractAuditRules(standards, [baseEntry]);
+    expect(rules).toHaveLength(0);
+  });
+
+  test('falls back to severity from the entry', () => {
+    const md = `## Rules\n\n1. **Test rule.**\n`;
+    const standards = new Map<string, string>([['core-security', md]]);
+    const rules = extractAuditRules(standards, [{ ...baseEntry, severity: 'high' }]);
+    expect(rules[0].severity).toBe('high');
   });
 });

@@ -181,9 +181,15 @@ export function walkProject(projectRoot: string, subtree?: string): WalkResult {
   const significantDirs = new Set<string>();
   const nonMarkdownDocs: string[] = [];
 
-  const startDir = subtree
-    ? path.resolve(projectRoot, subtree)
-    : projectRoot;
+  // Subtree must resolve inside projectRoot. `--path ../somewhere` would
+  // otherwise let scan-runner walk arbitrary parent directories.
+  const root = path.resolve(projectRoot);
+  const startDir = subtree ? path.resolve(root, subtree) : root;
+  if (startDir !== root && !startDir.startsWith(root + path.sep)) {
+    throw new Error(
+      `--path '${subtree}' resolves outside project root '${root}'; refusing to scan.`,
+    );
+  }
 
   if (!fs.existsSync(startDir) || !fs.statSync(startDir).isDirectory()) {
     return { docFiles, significantDirs, nonMarkdownDocs };

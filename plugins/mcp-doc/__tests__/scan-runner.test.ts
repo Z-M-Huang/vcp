@@ -223,6 +223,14 @@ describe('walkProject', () => {
     expect(result.significantDirs.size).toBe(0);
     expect(result.docFiles.size).toBe(0);
   });
+
+  test('rejects subtree paths that escape projectRoot', () => {
+    const dir = makeTmp();
+    expect(() => walkProject(dir, '../../etc'))
+      .toThrow(/resolves outside project root/);
+    expect(() => walkProject(dir, '/totally/elsewhere'))
+      .toThrow(/resolves outside project root/);
+  });
 });
 
 describe('categorize', () => {

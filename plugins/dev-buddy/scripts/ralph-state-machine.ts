@@ -225,7 +225,12 @@ export function main(planPath: string, action: string): StateMachineOutput {
     try {
       const plan = readPlanState(projectDir, slug);
       if (plan && !plan.completedAt) {
-        markPlanComplete(projectDir, slug, updatedState.status);
+        markPlanComplete(
+          projectDir,
+          slug,
+          updatedState.status,
+          `pipeline ${updatedState.status}`,
+        );
       }
     } catch {
       // best-effort — retention is not load-bearing for correctness

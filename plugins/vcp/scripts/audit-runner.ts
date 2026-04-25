@@ -31,15 +31,13 @@ import {
   fetchManifest,
   resolveApplicableStandards,
   fetchStandards,
-  parseIgnoreList,
-  extractRuleSummaries,
+  type StandardEntry,
 } from "@vcp-lib/context-core";
 import {
   loadGlobalConfig,
   ensureGlobalConfig,
   resolveStandardsUrl,
   applyGlobalDefaults,
-  mergeIgnoreArrays,
 } from "@vcp-lib/config/global";
 import { readPresets } from "@vcp-lib/llm-runner/presets";
 import { createRunner } from "@vcp-lib/llm-runner";
@@ -195,9 +193,13 @@ async function resolveConfig(projectRoot: string): Promise<ResolvedConfig> {
   }
 
   const manifest = await fetchManifest(standardsUrl);
-  const ignoredRules = mergeIgnoreArrays(globalConfig?.ignore, config.ignore);
-  const parsedIgnores = parseIgnoreList(ignoredRules);
-  const applicableStandards = resolveApplicableStandards(manifest, config, parsedIgnores);
+  // applyGlobalDefaults already merged global defaults.ignore with project
+  // config.ignore — we do not double-merge here. VcpGlobalConfig has no
+  // top-level `ignore` field (defaults.ignore is the only one), so the
+  // earlier mergeIgnoreArrays(globalConfig?.ignore, ...) call always
+  // spread `undefined` and crashed before the audit could start.
+  const ignoredRules = config.ignore ?? [];
+  const applicableStandards = resolveApplicableStandards(manifest, config);
 
   return {
     applicableStandards,
@@ -294,6 +296,8 @@ ${opts.rules}
 
 const FINDING_RE = /^FINDING:\s*([\w-]+)\/rule-(\d+)\s*\((\w+)\)\s*$/i;
 
+const FIELD_RE = /^(FILE|EVIDENCE|ISSUE|FIX):\s*(.*)$/i;
+
 export function parseFindings(raw: string): { findings: Finding[]; parseWarnings: string[] } {
   const findings: Finding[] = [];
   const parseWarnings: string[] = [];
@@ -304,12 +308,14 @@ export function parseFindings(raw: string): { findings: Finding[]; parseWarnings
   const blocks = raw.split(/\n(?=FINDING:)/);
 
   for (const block of blocks) {
-    const lines = block.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+    // Keep the raw line shape so multi-line EVIDENCE survives; we will
+    // trim individual values when extracting.
+    const lines = block.split("\n");
     if (lines.length === 0) continue;
 
-    const headerMatch = FINDING_RE.exec(lines[0]);
+    const headerMatch = FINDING_RE.exec(lines[0].trim());
     if (!headerMatch) {
-      // Not a finding block — likely preamble before the first FINDING.
+      // Preamble before the first FINDING block; skip.
       continue;
     }
 
@@ -317,10 +323,23 @@ export function parseFindings(raw: string): { findings: Finding[]; parseWarnings
     const rule = parseInt(headerMatch[2], 10);
     const severity = headerMatch[3].toLowerCase();
 
-    const get = (key: string): string => {
-      const line = lines.find((l) => l.toUpperCase().startsWith(`${key.toUpperCase()}:`));
-      return line ? line.slice(key.length + 1).trim() : "";
-    };
+    // Walk lines accumulating into the current field. A line that starts
+    // with a known field marker (FILE/EVIDENCE/ISSUE/FIX) closes the
+    // previous field and opens a new one. Other lines (including blank
+    // lines inside multi-line EVIDENCE) append to the current field.
+    const fields: Record<string, string[]> = {};
+    let current: string | null = null;
+    for (let i = 1; i < lines.length; i++) {
+      const fieldMatch = FIELD_RE.exec(lines[i].trim());
+      if (fieldMatch) {
+        current = fieldMatch[1].toUpperCase();
+        fields[current] = [fieldMatch[2]];
+      } else if (current) {
+        fields[current].push(lines[i]);
+      }
+    }
+    const get = (key: string): string =>
+      (fields[key] ?? []).join("\n").trim();
 
     const fileLine = get("FILE");
     const colonIdx = fileLine.lastIndexOf(":");
@@ -342,6 +361,54 @@ export function parseFindings(raw: string): { findings: Finding[]; parseWarnings
   return { findings, parseWarnings };
 }
 
+// ─── Rule extraction ────────────────────────────────────────────────────────
+
+/**
+ * Per-rule descriptor that audit-runner needs to build scanner prompts.
+ * The shape of @vcp-lib/context-core's `extractRuleSummaries` (ScopedRules
+ * keyed by scope, rules as a flat string[]) is the wrong shape for this
+ * script: we want per-rule severity, number, and summary so each prompt
+ * line says "core-security rule 3 (critical) — Validate all input...".
+ *
+ * The Markdown-rule format we parse is the same one context-core uses,
+ * just exposed at a different granularity.
+ */
+export interface AuditRule {
+  standardId: string;
+  ruleNumber: number;
+  severity: string;
+  summary: string;
+}
+
+const RULES_SECTION_RE = /^##\s+rules\b([\s\S]*?)(?=^##\s+|\Z)/im;
+const RULE_LINE_RE = /^(\d+)\.\s+\*\*(.+?)\*\*/gm;
+
+export function extractAuditRules(
+  standards: Map<string, string>,
+  entries: StandardEntry[],
+): AuditRule[] {
+  const rules: AuditRule[] = [];
+  for (const entry of entries) {
+    const markdown = standards.get(entry.id);
+    if (!markdown) continue;
+
+    const sectionMatch = RULES_SECTION_RE.exec(markdown);
+    const rulesSection = sectionMatch ? sectionMatch[1] : markdown;
+
+    let m: RegExpExecArray | null;
+    const re = new RegExp(RULE_LINE_RE.source, "gm");
+    while ((m = re.exec(rulesSection)) !== null) {
+      rules.push({
+        standardId: entry.id,
+        ruleNumber: parseInt(m[1], 10),
+        severity: entry.severity ?? "medium",
+        summary: m[2],
+      });
+    }
+  }
+  return rules;
+}
+
 // ─── Quick Mode ─────────────────────────────────────────────────────────────
 
 async function runQuickMode(opts: {
@@ -354,21 +421,19 @@ async function runQuickMode(opts: {
 
   // Fetch standards content + extract rules
   const standardsContent = await fetchStandards(applicableStandards);
-  const ruleSummaries = extractRuleSummaries(standardsContent);
+  const allRules = extractAuditRules(standardsContent, applicableStandards);
 
   // Build a flat rule listing for the prompt: "core-security rule 1 (critical) — Validate all input..."
   const ruleLines: string[] = [];
   let totalRules = 0;
-  for (const [standardId, scoped] of Object.entries(ruleSummaries)) {
-    for (const rule of scoped.rules) {
-      // Quick mode = critical + high only
-      const severity = (rule.severity ?? scoped.severity ?? "medium").toLowerCase();
-      if (severity !== "critical" && severity !== "high") continue;
-      ruleLines.push(
-        `${standardId} rule ${rule.number} (${severity}) — ${rule.summary}`,
-      );
-      totalRules++;
-    }
+  for (const rule of allRules) {
+    // Quick mode = critical + high only
+    const severity = rule.severity.toLowerCase();
+    if (severity !== "critical" && severity !== "high") continue;
+    ruleLines.push(
+      `${rule.standardId} rule ${rule.ruleNumber} (${severity}) — ${rule.summary}`,
+    );
+    totalRules++;
   }
 
   if (ruleLines.length === 0) {
@@ -674,8 +739,14 @@ async function runFullMode(opts: {
   }
 
   // Fetch standards content + extract rules
-  const standardsContent = await fetchStandards(filtered);
-  const ruleSummaries = extractRuleSummaries(standardsContent);
+  const standardsContent = await fetchStandards(filtered as StandardEntry[]);
+  const allRules = extractAuditRules(standardsContent, filtered as StandardEntry[]);
+  const rulesByStandard = new Map<string, AuditRule[]>();
+  for (const r of allRules) {
+    const arr = rulesByStandard.get(r.standardId) ?? [];
+    arr.push(r);
+    rulesByStandard.set(r.standardId, arr);
+  }
 
   // Partition
   const { groups, unmapped } = partitionByDomain(filtered);
@@ -687,11 +758,10 @@ async function runFullMode(opts: {
     const ruleLines: string[] = [];
     let ruleCount = 0;
     for (const std of group.standards) {
-      const scoped = ruleSummaries[std.id];
-      if (!scoped) continue;
-      for (const rule of scoped.rules) {
-        const severity = (rule.severity ?? scoped.severity ?? "medium").toLowerCase();
-        ruleLines.push(`${std.id} rule ${rule.number} (${severity}) — ${rule.summary}`);
+      const rules = rulesByStandard.get(std.id) ?? [];
+      for (const rule of rules) {
+        const severity = rule.severity.toLowerCase();
+        ruleLines.push(`${std.id} rule ${rule.ruleNumber} (${severity}) — ${rule.summary}`);
         ruleCount++;
         totalRules++;
       }

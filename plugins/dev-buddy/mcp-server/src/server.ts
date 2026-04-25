@@ -18,7 +18,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { join, dirname, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -30,15 +30,10 @@ import { advance } from "./engine/state-machine.ts";
 import { loadStageDefinition } from "@vcp-lib/prompt-assets";
 import { readPresets, maskPresetKeys } from "@vcp-lib/llm-runner/presets";
 
-// ─── stdio discipline ──────────────────────────────────────────────────
-// Re-route any stray console writes to stderr; only MCP framing should
-// land on stdout. Done before any other module evaluates.
-console.log = (...args: unknown[]) =>
-  process.stderr.write(args.map(String).join(" ") + "\n");
-console.info = (...args: unknown[]) =>
-  process.stderr.write(args.map(String).join(" ") + "\n");
-console.warn = (...args: unknown[]) =>
-  process.stderr.write(args.map(String).join(" ") + "\n");
+// stdout discipline lives in bootstrap.ts — that file's `console.log = ...`
+// statements run before this module's static imports do, so noise from any
+// transitively-imported module is captured. This file should not write to
+// stdout outside the MCP framing layer regardless.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(HERE, "..", "..");
@@ -47,6 +42,58 @@ const SERVER_STARTED_AT = new Date().toISOString();
 
 // ─── input guards ──────────────────────────────────────────────────────
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Validate run_id is a UUID. Tools take run_id from MCP callers, then
+ * join it into filesystem paths under .vcp/ralph/<run_id>/. Without
+ * this check, a caller could pass `run_id="../../etc"` and escape the
+ * run directory. randomUUID() always produces valid UUIDs, so legitimate
+ * runs created via ralph_start are unaffected.
+ */
+export function assertValidRunId(id: string): void {
+  if (!UUID_RE.test(id)) {
+    throw new Error(`run_id must be a UUID; got '${id}'`);
+  }
+}
+
+/**
+ * Canonicalize a project_path argument: must be absolute, must exist,
+ * must be a directory. Returns the canonical (realpath-resolved) path.
+ *
+ * This blocks two abuse patterns: (1) relative paths the server would
+ * resolve against its own cwd; (2) symlink-to-symlink chains where the
+ * caller-visible path differs from where the server actually writes.
+ *
+ * Callers must use the returned canonical path for state operations.
+ */
+export function assertProjectPath(p: string, field: string): string {
+  if (!isAbsolute(p)) {
+    throw new Error(`${field} must be an absolute path; got '${p}'`);
+  }
+  let real: string;
+  try {
+    real = realpathSync(p);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`${field} does not exist: '${p}'`);
+    }
+    throw err;
+  }
+  let s;
+  try {
+    s = statSync(real);
+  } catch (err) {
+    throw new Error(`${field} cannot be stat'd: '${p}' (${(err as Error).message})`);
+  }
+  if (!s.isDirectory()) {
+    throw new Error(`${field} is not a directory: '${p}'`);
+  }
+  return real;
+}
+
+/** @deprecated Kept for source compatibility; new code uses assertProjectPath. */
 function assertAbsolutePath(p: string, field: string): void {
   if (!isAbsolute(p)) {
     throw new Error(`${field} must be an absolute path; got '${p}'`);
@@ -88,24 +135,24 @@ export async function main(): Promise<void> {
       },
     },
     async ({ project_path, goal }) => {
-      assertAbsolutePath(project_path, "project_path");
+      const projectRoot = assertProjectPath(project_path, "project_path");
       if (!goal.trim()) throw new Error("goal must be non-empty");
 
       const runId = randomUUID();
-      initRunDir(project_path, runId);
+      initRunDir(projectRoot, runId);
       const now = new Date().toISOString();
       const initial: RunState = {
         schema_version: STATE_SCHEMA_VERSION,
         run_id: runId,
         goal,
-        project_path,
+        project_path: projectRoot,
         status: "pending",
         step: "discover",
         created_at: now,
         updated_at: now,
         subprocess_pids: [],
       };
-      writeState(project_path, initial);
+      writeState(projectRoot, initial);
 
       return {
         content: [{ type: "text", text: `Ralph run created: ${runId}` }],
@@ -113,7 +160,7 @@ export async function main(): Promise<void> {
           run_id: runId,
           status: initial.status,
           step: initial.step,
-          state_path: join(project_path, ".vcp", "ralph", runId, "state.json"),
+          state_path: join(projectRoot, ".vcp", "ralph", runId, "state.json"),
         },
       };
     },
@@ -129,14 +176,17 @@ export async function main(): Promise<void> {
       },
     },
     async ({ project_path, run_id }) => {
-      assertAbsolutePath(project_path, "project_path");
-      const result = await advance(project_path, run_id);
+      const projectRoot = assertProjectPath(project_path, "project_path");
+      assertValidRunId(run_id);
+      const result = await advance(projectRoot, run_id);
       const text = result.ok
         ? `step '${result.step_run ?? "(none)"}' done; status=${result.status}; next=${result.next_step ?? "complete"}`
         : `step '${result.step_run ?? "(none)"}' failed: ${result.reason ?? "unknown"}`;
       return {
         content: [{ type: "text", text }],
-        structuredContent: result,
+        // structuredContent has nullable fields (next_step, step_run);
+        // SDK's CallToolResult.structuredContent is unknown so widen.
+        structuredContent: result as unknown as Record<string, unknown>,
       };
     },
   );
@@ -150,8 +200,8 @@ export async function main(): Promise<void> {
       },
     },
     async ({ project_path }) => {
-      assertAbsolutePath(project_path, "project_path");
-      const runs = listRuns(project_path);
+      const projectRoot = assertProjectPath(project_path, "project_path");
+      const runs = listRuns(projectRoot);
       const summary = runs.length === 0
         ? "No Ralph runs found."
         : runs.map((r) => `${r.run_id}  ${r.status}  step=${r.step}  goal="${r.goal}"`).join("\n");
@@ -185,10 +235,10 @@ export async function main(): Promise<void> {
         };
       }
 
-      assertAbsolutePath(project_path, "project_path");
-      const runs = listRuns(project_path);
+      const projectRoot = assertProjectPath(project_path, "project_path");
+      const runs = listRuns(projectRoot);
       const runDetails = runs.map((r) => {
-        const lease = readLease(project_path, r.run_id);
+        const lease = readLease(projectRoot, r.run_id);
         return {
           ...r,
           lease: lease
@@ -203,9 +253,9 @@ export async function main(): Promise<void> {
       return {
         content: [{
           type: "text",
-          text: `dev-buddy MCP server up; uptime ${uptime_ms} ms; ${runs.length} runs (${active.length} active) in ${project_path}`,
+          text: `dev-buddy MCP server up; uptime ${uptime_ms} ms; ${runs.length} runs (${active.length} active) in ${projectRoot}`,
         }],
-        structuredContent: { ...base, project_path, runs: runDetails, active_count: active.length },
+        structuredContent: { ...base, project_path: projectRoot, runs: runDetails, active_count: active.length },
       };
     },
   );
@@ -226,18 +276,19 @@ export async function main(): Promise<void> {
       },
     },
     async ({ project_path, run_id }) => {
-      assertAbsolutePath(project_path, "project_path");
-      const state = readState(project_path, run_id);
+      const projectRoot = assertProjectPath(project_path, "project_path");
+      assertValidRunId(run_id);
+      const state = readState(projectRoot, run_id);
       if (!state) {
         return {
-          content: [{ type: "text", text: `run ${run_id} not found in ${project_path}` }],
-          structuredContent: { found: false, run_id, project_path },
+          content: [{ type: "text", text: `run ${run_id} not found in ${projectRoot}` }],
+          structuredContent: { found: false, run_id, project_path: projectRoot },
           isError: true,
         };
       }
       return {
         content: [{ type: "text", text: JSON.stringify(state, null, 2) }],
-        structuredContent: state,
+        structuredContent: state as unknown as Record<string, unknown>,
       };
     },
   );
@@ -261,7 +312,7 @@ export async function main(): Promise<void> {
       }
       return {
         content: [{ type: "text", text: stageDef.content }],
-        structuredContent: stageDef,
+        structuredContent: stageDef as unknown as Record<string, unknown>,
       };
     },
   );
@@ -301,7 +352,15 @@ export async function main(): Promise<void> {
           contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "missing project_path query param" }) }],
         };
       }
-      const runs = listRuns(project_path);
+      let projectRoot: string;
+      try {
+        projectRoot = assertProjectPath(project_path, "project_path");
+      } catch (err) {
+        return {
+          contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: (err as Error).message }) }],
+        };
+      }
+      const runs = listRuns(projectRoot);
       return {
         contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(runs, null, 2) }],
       };

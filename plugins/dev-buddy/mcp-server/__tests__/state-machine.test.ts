@@ -15,6 +15,7 @@ import {
 } from '../src/engine/state-store.ts';
 import { nextStep, STEP_ORDER, FIRST_STEP } from '../src/engine/dispatcher.ts';
 import { advance } from '../src/engine/state-machine.ts';
+import { assertValidRunId, assertProjectPath } from '../src/server.ts';
 
 const tmpDirs: string[] = [];
 afterAll(() => { tmpDirs.forEach((d) => rmSync(d, { recursive: true, force: true })); });
@@ -135,5 +136,49 @@ describe('advance', () => {
     await advance(dir, runId);
     const leasePath = path.join(dir, '.vcp', 'ralph', runId, 'lease.json');
     expect(existsSync(leasePath)).toBe(false);
+  });
+});
+
+describe('assertValidRunId', () => {
+  test('accepts a real UUID v4', () => {
+    expect(() => assertValidRunId('123e4567-e89b-12d3-a456-426614174000')).not.toThrow();
+  });
+
+  test('rejects path-traversal attempts', () => {
+    expect(() => assertValidRunId('../../etc')).toThrow(/run_id must be a UUID/);
+    expect(() => assertValidRunId('foo/../bar')).toThrow(/run_id must be a UUID/);
+  });
+
+  test('rejects empty / non-UUID strings', () => {
+    expect(() => assertValidRunId('')).toThrow(/run_id must be a UUID/);
+    expect(() => assertValidRunId('not-a-uuid')).toThrow(/run_id must be a UUID/);
+    expect(() => assertValidRunId('12345678-1234-1234-1234-12345678901')).toThrow(/run_id must be a UUID/);
+  });
+});
+
+describe('assertProjectPath', () => {
+  test('accepts an existing absolute directory and returns the canonical path', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'aspath-'));
+    tmpDirs.push(dir);
+    expect(assertProjectPath(dir, 'project_path')).toBe(dir);
+  });
+
+  test('rejects a relative path', () => {
+    expect(() => assertProjectPath('./relative', 'project_path'))
+      .toThrow(/must be an absolute path/);
+  });
+
+  test('rejects a non-existent absolute path', () => {
+    expect(() => assertProjectPath('/this/path/should/not/exist/anywhere', 'project_path'))
+      .toThrow(/does not exist/);
+  });
+
+  test('rejects an absolute path that points to a file', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'aspath-'));
+    tmpDirs.push(dir);
+    const file = path.join(dir, 'a-file.txt');
+    require('node:fs').writeFileSync(file, 'x');
+    expect(() => assertProjectPath(file, 'project_path'))
+      .toThrow(/is not a directory/);
   });
 });

@@ -91,11 +91,18 @@ export function resolveAllowedTools(allowedTools?: string[]): Set<string> {
 /**
  * Build the tool set for generateText from agentool factories.
  * Filters based on --allowed-tools PascalCase names.
+ *
+ * The return type is intentionally Record<string, unknown>: agentool's
+ * tools have heterogeneous input schemas (createRead vs. createBash
+ * vs. createEdit), so the SDK's Tool<TInput, TOutput> generic widens
+ * past any single concrete type. The Vercel AI SDK accepts the loose
+ * shape via its tools() helper at runtime; type-narrowing the union
+ * here would just spread `as unknown as ...` casts at every call site.
  */
-export function buildToolSet(allowedTools?: string[]): Record<string, ReturnType<typeof createBash>> {
+export function buildToolSet(allowedTools?: string[]): Record<string, unknown> {
   const allowed = resolveAllowedTools(allowedTools);
 
-  const all: Record<string, ReturnType<typeof createBash>> = {
+  const all: Record<string, unknown> = {
     read: createRead(),
     write: createWrite(),
     edit: createEdit(),
@@ -104,7 +111,7 @@ export function buildToolSet(allowedTools?: string[]): Record<string, ReturnType
     grep: createGrep(),
   };
 
-  const filtered: Record<string, ReturnType<typeof createBash>> = {};
+  const filtered: Record<string, unknown> = {};
   for (const [key, tool] of Object.entries(all)) {
     if (allowed.has(key)) filtered[key] = tool;
   }
@@ -278,7 +285,10 @@ export class UnifiedRunner implements AgentRunner {
 
           const stream = this.streamTextFn({
             model,
-            tools,
+            // buildToolSet returns Record<string, unknown> because agentool's
+            // factories produce heterogeneous tool types; the SDK accepts the
+            // shape at runtime.
+            tools: tools as unknown as Parameters<typeof streamText>[0]["tools"],
             stopWhen: stepCountIs(1),
             system: options.systemPromptContent,
             messages,
@@ -397,7 +407,12 @@ export class UnifiedRunner implements AgentRunner {
     return createAnthropic({
       apiKey: this.preset.api_key,
       baseURL,
-      fetch: gatewayCompatFetch,
+      // Bun's `typeof fetch` includes a `preconnect` field that our
+      // wrapper does not implement; gatewayCompatFetch covers the
+      // request/response shape the AI SDK actually calls. Cast through
+      // unknown to satisfy the SDK's loose fetch type without inheriting
+      // Bun-specific surface.
+      fetch: gatewayCompatFetch as unknown as typeof fetch,
     })(modelId);
   }
 
