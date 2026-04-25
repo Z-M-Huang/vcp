@@ -19,5 +19,11 @@
     "uat",
     "backpressure"
   ],
-  "skills": "./skills/"
+  "skills": "./skills/",
+  "mcpServers": {
+    "dev-buddy": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/src/server.ts"]
+    }
+  }
 }
