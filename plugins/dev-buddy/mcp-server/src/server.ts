@@ -27,6 +27,8 @@ import {
   STATE_SCHEMA_VERSION, type RunState,
 } from "./engine/state-store.ts";
 import { advance } from "./engine/state-machine.ts";
+import { loadStageDefinition } from "@vcp-lib/prompt-assets";
+import { readPresets, maskPresetKeys } from "@vcp-lib/llm-runner/presets";
 
 // ─── stdio discipline ──────────────────────────────────────────────────
 // Re-route any stray console writes to stderr; only MCP framing should
@@ -40,6 +42,7 @@ console.warn = (...args: unknown[]) =>
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(HERE, "..", "..");
+const STAGES_DIR = resolve(PLUGIN_ROOT, "stages");
 const SERVER_STARTED_AT = new Date().toISOString();
 
 // ─── input guards ──────────────────────────────────────────────────────
@@ -203,6 +206,119 @@ export async function main(): Promise<void> {
           text: `dev-buddy MCP server up; uptime ${uptime_ms} ms; ${runs.length} runs (${active.length} active) in ${project_path}`,
         }],
         structuredContent: { ...base, project_path, runs: runDetails, active_count: active.length },
+      };
+    },
+  );
+
+  // ─── Resource/tool duality ────────────────────────────────────────
+  // Phase 0 probe 12 confirmed Codex does NOT auto-inject MCP
+  // resources into the LLM context. Every resource exposed below ALSO
+  // has a paired get_*/list_* tool so Codex callers can reach the
+  // same data via tool calls.
+
+  server.registerTool(
+    "get_run_state",
+    {
+      description: "Read a Ralph run's state.json. Same content as the dev-buddy://runs/<id>/state resource.",
+      inputSchema: {
+        project_path: z.string().describe("Absolute path to the user's project."),
+        run_id: z.string().describe("The run id."),
+      },
+    },
+    async ({ project_path, run_id }) => {
+      assertAbsolutePath(project_path, "project_path");
+      const state = readState(project_path, run_id);
+      if (!state) {
+        return {
+          content: [{ type: "text", text: `run ${run_id} not found in ${project_path}` }],
+          structuredContent: { found: false, run_id, project_path },
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify(state, null, 2) }],
+        structuredContent: state,
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_stage_definition",
+    {
+      description: "Read a Ralph stage definition (frontmatter + body) from plugins/dev-buddy/stages/. Same content as the dev-buddy://stages/<name> resource.",
+      inputSchema: {
+        stage: z.string().describe("Stage name: discovery, ralph-requirements, decomposition, ralph-build, ralph-code-review, ralph-uat, unit-review."),
+      },
+    },
+    async ({ stage }) => {
+      const stageDef = loadStageDefinition(stage, STAGES_DIR);
+      if (!stageDef) {
+        return {
+          content: [{ type: "text", text: `stage definition '${stage}' not found at ${STAGES_DIR}` }],
+          structuredContent: { found: false, stage },
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text", text: stageDef.content }],
+        structuredContent: stageDef,
+      };
+    },
+  );
+
+  server.registerTool(
+    "list_presets",
+    {
+      description: "List configured AI presets from ~/.vcp/ai-presets.json. API keys are masked. Same content as the dev-buddy://presets resource.",
+      inputSchema: {},
+    },
+    async () => {
+      const config = readPresets();
+      const masked = Object.fromEntries(
+        Object.entries(config.presets).map(([name, preset]) => [name, maskPresetKeys(preset)]),
+      );
+      const summary = Object.entries(config.presets)
+        .map(([name, p]) => `${name} (${p.type})`)
+        .join("\n");
+      return {
+        content: [{ type: "text", text: summary }],
+        structuredContent: { version: config.version, presets: masked },
+      };
+    },
+  );
+
+  // ─── Resources (Claude auto-injects; Codex must use the get_*/list_* tools above) ──
+
+  server.registerResource(
+    "runs",
+    "dev-buddy://runs",
+    { description: "All Ralph runs in a project, newest first.", mimeType: "application/json" },
+    async (uri) => {
+      const url = new URL(uri.href);
+      const project_path = url.searchParams.get("project_path");
+      if (!project_path) {
+        return {
+          contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ error: "missing project_path query param" }) }],
+        };
+      }
+      const runs = listRuns(project_path);
+      return {
+        contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(runs, null, 2) }],
+      };
+    },
+  );
+
+  server.registerResource(
+    "presets",
+    "dev-buddy://presets",
+    { description: "Configured AI presets (API keys masked).", mimeType: "application/json" },
+    async (uri) => {
+      const config = readPresets();
+      const masked = Object.fromEntries(
+        Object.entries(config.presets).map(([name, p]) => [name, maskPresetKeys(p)]),
+      );
+      return {
+        contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify({ version: config.version, presets: masked }, null, 2) }],
       };
     },
   );
