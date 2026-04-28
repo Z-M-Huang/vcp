@@ -1,6 +1,6 @@
 {
   "dev-buddy": {
-    "command": "bun",
-    "args": ["./mcp-server/src/bootstrap.ts", "--server=dev-buddy"]
+    "command": "./mcp-server/bin/dev-buddy-mcp",
+    "args": []
   }
 }

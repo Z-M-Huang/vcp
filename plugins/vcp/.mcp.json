@@ -1,6 +1,6 @@
 {
   "vcp": {
-    "command": "bun",
-    "args": ["./mcp-server/src/bootstrap.ts", "--server=vcp"]
+    "command": "./mcp-server/bin/vcp-mcp",
+    "args": []
   }
 }
