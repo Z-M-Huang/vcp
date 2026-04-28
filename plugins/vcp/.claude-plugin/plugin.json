@@ -9,5 +9,10 @@
   "license": "MIT",
   "keywords": ["security", "quality", "enforcement", "vcp", "standards", "configuration", "init"],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  "mcpServers": {
+    "vcp": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/src/bootstrap.ts"]
+    }
+  }
 }

@@ -18,5 +18,10 @@
     "index"
   ],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  "mcpServers": {
+    "mcp-doc": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/src/bootstrap.ts"]
+    }
+  }
 }

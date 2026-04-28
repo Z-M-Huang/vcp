@@ -20,5 +20,10 @@
     "backpressure"
   ],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  "mcpServers": {
+    "dev-buddy": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/src/bootstrap.ts"]
+    }
+  }
 }
