@@ -1,0 +1,6 @@
+{
+  "mcp-doc": {
+    "command": "bun",
+    "args": ["./mcp-server/src/bootstrap.ts"]
+  }
+}

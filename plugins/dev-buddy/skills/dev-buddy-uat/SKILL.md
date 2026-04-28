@@ -7,24 +7,11 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, Tas
 
 # UAT Stage (Outer Ralph Loop)
 
-Validate the feature works from a user's perspective. Pessimistic — assume everything is broken.
+This skill is a slash-command launcher. The authoritative workflow lives in the Dev Buddy MCP prompt `dev_buddy_uat` and resource `dev-buddy://prompts/dev-buddy-uat`.
 
-**Standalone:** `/dev-buddy-uat` — reads the most recent `ralph-*.md` plan file and runs UAT.
+1. Fetch the MCP prompt `dev_buddy_uat` with the caller-supplied host, current project path, and raw command arguments.
+2. If MCP prompts are not directly available, call Dev Buddy MCP tool `get_prompt({ command: "dev-buddy-uat", host, project_path, arguments })` and follow the returned prompt text.
+3. The returned prompt may instruct you to call Dev Buddy MCP tools such as `ralph_start`, `ralph_next`, `get_run_state`, `get_stage_definition`, `list_presets`. Use those tools for deterministic work.
+4. If the Dev Buddy MCP server is unavailable, stop and tell the user to enable the Dev Buddy MCP server for this plugin.
 
-**Orchestrated:** Called by `/dev-buddy-ralph` via the state machine after code review passes.
-
----
-
-## Execution
-
-This stage is orchestrated by `ralph-state-machine.ts`. When invoked:
-
-1. **Run backpressure** — execute all mechanical checks (test, typecheck, lint, build) from the plan's Backpressure Commands section
-2. **Run UAT tests** — execute Playwright tests or fall back to integration tests if Playwright is unavailable
-3. **Evaluate** — all pass advances status to `done`; any failure resets affected units and loops back to build
-4. **Write results** — record UAT results in the plan file
-
-The state machine tracks outer iteration count and UAT pass/fail state. Each step above maps to a state machine action returned by:
-```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" --plan {plan} --action next
-```
+Do not reimplement the workflow in this file; update the MCP prompt instead.

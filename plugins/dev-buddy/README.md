@@ -304,6 +304,26 @@ Each layer catches what the layers above missed. With weaker models, more layers
 
 ---
 
+## MCP Workflow Prompts
+
+Dev Buddy slash-command skills are launchers. The authoritative workflow instructions are exposed by the Dev Buddy MCP server:
+
+- Workflow prompts: `dev_buddy_ralph`, `dev_buddy_once`, `dev_buddy_chatroom`, and one per stage skill
+- Workflow resources: `dev-buddy://prompts/<command>`, such as `dev-buddy://prompts/dev-buddy-ralph`
+- Fallback tool: `get_prompt({ command, host, arguments, project_path })`
+
+The prompt text may instruct the caller to use Dev Buddy MCP tools such as `ralph_start`, `ralph_next`, `get_run_state`, `get_stage_definition`, and `list_presets`.
+
+### Host Guidance
+
+The Dev Buddy MCP server also exposes caller-specific instructions through:
+
+- Prompt: `host_instructions`
+- Tool: `get_host_instructions({ host: "claude" | "codex", command?: "overview" | "ralph" | "config" | "once" | "chatroom" | "legacy-stages" })`
+- Resources: `dev-buddy://host-instructions/claude`, `dev-buddy://host-instructions/codex`
+
+Use the tool path when MCP resources are not guaranteed to be auto-injected into model context.
+
 ## Skills Reference
 
 | Skill | Command | Description |

@@ -32,7 +32,7 @@ VCP enforces 41 standards across 12 scopes — injecting rules into the AI's con
 | vcp-coverage-gaps | `/vcp-coverage-gaps [path]` | Map source files to test files, identify untested functions and edge case gaps |
 | vcp-test-plan | `/vcp-test-plan <path>` | Generate a test plan with unit tests, integration tests, edge cases, and mock guidance |
 
-Scanning skills call `resolve-config.ts` via Bash to resolve project config, and fetch standards via WebFetch at runtime. No local standards copy is needed.
+Slash-command skills are launchers. The authoritative workflow instructions are exposed by the VCP MCP server as prompts/resources plus deterministic tools such as `get_prompt`, `detect_installation`, `validate_plugin_root`, and `resolve_config`. No local standards copy is needed.
 
 ### Agents
 
@@ -62,9 +62,19 @@ VCP uses a global config at `~/.vcp/config.json` to store machine-level settings
 
 Created by `/vcp-init` on first run. Subsequent project initializations reuse the existing global config. If the global config is missing when a skill runs (e.g., an existing user who hasn't run `/vcp-init` since the global config was introduced), it is auto-created from the project config and defaults. Hooks only read the global config — they never auto-create it (hooks run in untrusted repo context and must stay fast).
 
+### MCP Workflow Prompts
+
+VCP exposes one MCP prompt/resource per command:
+
+- Prompt names use underscores, such as `vcp_init`, `vcp_audit`, and `vcp_pre_commit_review`
+- Resources use `vcp://prompts/<command>`, such as `vcp://prompts/vcp-init`
+- `get_prompt({ command, host, arguments, project_path })` returns the same prompt text for callers that cannot access MCP prompts directly
+
+The `SKILL.md` files intentionally stay thin so the same workflow can be reused from any MCP-capable caller.
+
 ### Standards Discovery
 
-Skills call `resolve-config.ts` (via Bash) to resolve project config and applicable standards. The script resolves the standards URL from global config (or per-project override), fetches the manifest, and resolves full URLs for each standard. Skills always apply the latest published rules.
+Workflow prompts call the VCP MCP `resolve_config` tool to resolve project config and applicable standards. The tool resolves the standards URL from global config (or per-project override), fetches the manifest, and resolves full URLs for each standard. VCP checks always apply the latest published rules.
 
 URL resolution order:
 1. `standards_url` in `.vcp/config.json` (rare per-project override)
@@ -72,7 +82,7 @@ URL resolution order:
 
 ### Project Configuration
 
-Skills require `.vcp/config.json` (project) with a `pluginRoot` field (set by `/vcp-init`). Global config (`~/.vcp/config.json`) is auto-created if missing (from project config + defaults), so users don't need to run `/vcp-init` again after upgrading. The project config determines:
+VCP uses `.vcp/config.json` for project settings. `/vcp-init` still writes `pluginRoot` for compatibility with older launcher paths, but MCP workflows resolve the active runtime through the VCP MCP server. Global config (`~/.vcp/config.json`) is auto-created if missing (from project config + defaults), so users don't need to run `/vcp-init` again after upgrading. The project config determines:
 - Which scopes apply (web-frontend, web-backend, database, mobile, desktop, cli, devops, agentic-ai)
 - Which compliance frameworks are active (GDPR, PCI DSS, HIPAA)
 - What paths to exclude from scanning
@@ -81,7 +91,7 @@ Skills require `.vcp/config.json` (project) with a `pluginRoot` field (set by `/
 
 At runtime, `severity` falls back to the global default when the project omits it, and `ignore` arrays are merged (union of global + project). `scopes` and `compliance` are required project fields — global defaults for these are only used as starting points during `/vcp-init`, not at runtime.
 
-If `.vcp/config.json` is not found, skills stop and tell the user to run `/vcp-init`.
+If `.vcp/config.json` is not found, workflows stop and tell the user to run `/vcp-init`.
 
 ### Security Gate Hook
 

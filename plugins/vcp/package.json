@@ -4,10 +4,12 @@
   "version": "0.5.10",
   "type": "module",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@vcp-lib/config": "workspace:*",
     "@vcp-lib/context-core": "workspace:*",
     "@vcp-lib/logging": "workspace:*",
     "@vcp-lib/llm-runner": "workspace:*",
-    "@vcp-lib/runtime-adapter": "workspace:*"
+    "@vcp-lib/runtime-adapter": "workspace:*",
+    "zod": "^3.23.0"
   }
 }

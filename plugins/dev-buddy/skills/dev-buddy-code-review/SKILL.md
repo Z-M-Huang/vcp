@@ -7,24 +7,11 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, Tas
 
 # Code Review Stage
 
-Catch semantic drift, integration gaps, and missed intent that mechanical backpressure cannot detect.
+This skill is a slash-command launcher. The authoritative workflow lives in the Dev Buddy MCP prompt `dev_buddy_code_review` and resource `dev-buddy://prompts/dev-buddy-code-review`.
 
-**Standalone:** `/dev-buddy-code-review` — reads the most recent `ralph-*.md` plan file and reviews all implemented units.
+1. Fetch the MCP prompt `dev_buddy_code_review` with the caller-supplied host, current project path, and raw command arguments.
+2. If MCP prompts are not directly available, call Dev Buddy MCP tool `get_prompt({ command: "dev-buddy-code-review", host, project_path, arguments })` and follow the returned prompt text.
+3. The returned prompt may instruct you to call Dev Buddy MCP tools such as `ralph_start`, `ralph_next`, `get_run_state`, `get_stage_definition`, `list_presets`. Use those tools for deterministic work.
+4. If the Dev Buddy MCP server is unavailable, stop and tell the user to enable the Dev Buddy MCP server for this plugin.
 
-**Orchestrated:** Called by `/dev-buddy-ralph` via the state machine after all units are built.
-
----
-
-## Execution
-
-This stage is orchestrated by `ralph-state-machine.ts`. When invoked:
-
-1. **Dispatch reviewers** — load config, resolve stage+role prompts, dispatch multi-AI executors with review package (plan, unit files, git diff, review guidelines). Each reviewer gets a focused lens (security, compliance, correctness, etc.)
-2. **Synthesize verdict** — collect responses, produce one of: `approved`, `needs_changes`, `rejected`
-3. **Write verdict** — write `## Code Review` section with verdict to plan file
-4. **Route** — `approved` advances to UAT; `needs_changes` resets affected units and loops back to build; `rejected` escalates to user
-
-The state machine tracks review iteration count and verdict persistence. Each step above maps to a state machine action returned by:
-```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/ralph-state-machine.ts" --plan {plan} --action next
-```
+Do not reimplement the workflow in this file; update the MCP prompt instead.

@@ -27,6 +27,14 @@ import {
   STATE_SCHEMA_VERSION, type RunState,
 } from "./engine/state-store.ts";
 import { advance } from "./engine/state-machine.ts";
+import { devBuddyHostInstructions, DEV_BUDDY_HOSTS, DEV_BUDDY_COMMANDS } from "./host-instructions.ts";
+import {
+  DEV_BUDDY_PROMPT_HOSTS,
+  DEV_BUDDY_WORKFLOW_COMMANDS,
+  listPromptMetadata,
+  promptName,
+  renderWorkflowPrompt,
+} from "./prompt-registry.ts";
 import { loadStageDefinition } from "@vcp-lib/prompt-assets";
 import { readPresets, maskPresetKeys } from "@vcp-lib/llm-runner/presets";
 
@@ -105,8 +113,16 @@ function assertAbsolutePath(p: string, field: string): void {
 export async function main(): Promise<void> {
   const server = new McpServer(
     { name: "dev-buddy", version: "0.6.0" },
-    { capabilities: { tools: {} } },
+    {
+      capabilities: { tools: {}, prompts: {}, resources: {} },
+      instructions: "Fetch Dev Buddy workflow prompts from this MCP server; SKILL.md files are slash-command launchers.",
+    },
   );
+
+  const hostSchema = z.enum(DEV_BUDDY_HOSTS);
+  const promptHostSchema = z.enum(DEV_BUDDY_PROMPT_HOSTS);
+  const commandSchema = z.enum(DEV_BUDDY_COMMANDS);
+  const workflowCommandSchema = z.enum(DEV_BUDDY_WORKFLOW_COMMANDS);
 
   server.registerTool(
     "ping",
@@ -124,6 +140,138 @@ export async function main(): Promise<void> {
       };
     },
   );
+
+  server.registerTool(
+    "list_prompts",
+    {
+      description: "List Dev Buddy workflow prompts exposed by this MCP server.",
+      inputSchema: {},
+    },
+    async () => {
+      const prompts = listPromptMetadata();
+      return {
+        content: [{ type: "text", text: prompts.map((p) => `${p.prompt} (${p.command})`).join("\n") }],
+        structuredContent: { prompts },
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_prompt",
+    {
+      description: "Return a Dev Buddy workflow prompt. Use this when MCP prompts are not directly exposed by the caller.",
+      inputSchema: {
+        command: workflowCommandSchema.describe("The Dev Buddy command/workflow prompt to fetch."),
+        host: promptHostSchema.optional().describe("Caller-supplied host. Use 'auto' if unknown."),
+        arguments: z.string().optional().describe("Raw slash-command arguments, if any."),
+        project_path: z.string().optional().describe("Absolute project path, if known."),
+      },
+    },
+    async ({ command, host, arguments: args, project_path }) => {
+      const text = renderWorkflowPrompt({ command, host, arguments: args, projectPath: project_path });
+      return {
+        content: [{ type: "text", text }],
+        structuredContent: { command, prompt: promptName(command), host: host ?? "auto", project_path, instructions: text },
+      };
+    },
+  );
+
+  server.registerTool(
+    "get_host_instructions",
+    {
+      description: "Return Dev Buddy instructions tailored to the caller host. The caller must pass host='claude' or host='codex'.",
+      inputSchema: {
+        host: hostSchema.describe("The assistant host requesting instructions."),
+        command: commandSchema.optional().describe("Optional command focus for the returned instructions."),
+      },
+    },
+    async ({ host, command }) => {
+      const text = devBuddyHostInstructions({ host, command, pluginRoot: PLUGIN_ROOT });
+      return {
+        content: [{ type: "text", text }],
+        structuredContent: { host, command: command ?? "overview", pluginRoot: PLUGIN_ROOT, instructions: text },
+      };
+    },
+  );
+
+  server.registerPrompt(
+    "host_instructions",
+    {
+      title: "Host-specific Dev Buddy instructions",
+      description: "Prompt text for using Dev Buddy from Claude Code or Codex CLI.",
+      argsSchema: {
+        host: hostSchema.describe("The assistant host requesting instructions."),
+        command: commandSchema.optional().describe("Optional command focus for the returned instructions."),
+      },
+    },
+    async ({ host, command }) => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: devBuddyHostInstructions({ host, command, pluginRoot: PLUGIN_ROOT }),
+        },
+      }],
+    }),
+  );
+
+  for (const host of DEV_BUDDY_HOSTS) {
+    server.registerResource(
+      `host_instructions_${host}`,
+      `dev-buddy://host-instructions/${host}`,
+      {
+        description: `Dev Buddy host instructions for ${host}.`,
+        mimeType: "text/markdown",
+      },
+      async (uri) => ({
+        contents: [{
+          uri: uri.href,
+          mimeType: "text/markdown",
+          text: devBuddyHostInstructions({ host, pluginRoot: PLUGIN_ROOT }),
+        }],
+      }),
+    );
+  }
+
+  for (const command of DEV_BUDDY_WORKFLOW_COMMANDS) {
+    server.registerPrompt(
+      promptName(command),
+      {
+        title: `Dev Buddy ${command}`,
+        description: `Workflow prompt for ${command}.`,
+        argsSchema: {
+          host: promptHostSchema.optional().describe("Caller-supplied host. Use 'auto' if unknown."),
+          arguments: z.string().optional().describe("Raw slash-command arguments, if any."),
+          project_path: z.string().optional().describe("Absolute project path, if known."),
+        },
+      },
+      async ({ host, arguments: args, project_path }) => ({
+        messages: [{
+          role: "user",
+          content: {
+            type: "text",
+            text: renderWorkflowPrompt({ command, host, arguments: args, projectPath: project_path }),
+          },
+        }],
+      }),
+    );
+
+    server.registerResource(
+      promptName(command),
+      `dev-buddy://prompts/${command}`,
+      {
+        description: `Dev Buddy workflow prompt for ${command}.`,
+        mimeType: "text/markdown",
+      },
+      async (uri) => ({
+        contents: [{
+          uri: uri.href,
+          mimeType: "text/markdown",
+          text: renderWorkflowPrompt({ command }),
+        }],
+      }),
+    );
+  }
 
   server.registerTool(
     "ralph_start",
