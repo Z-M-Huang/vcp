@@ -1,6 +1,8 @@
 {
   "vcp": {
     "command": "./mcp-server/bin/vcp-mcp",
-    "args": []
+    "args": [],
+    "cwd": ".",
+    "startup_timeout_sec": 60
   }
 }

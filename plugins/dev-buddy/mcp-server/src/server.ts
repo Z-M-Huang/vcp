@@ -35,8 +35,8 @@ import {
   promptName,
   renderWorkflowPrompt,
 } from "./prompt-registry.ts";
-import { loadStageDefinition } from "@vcp-lib/prompt-assets";
-import { readPresets, maskPresetKeys } from "@vcp-lib/llm-runner/presets";
+import { loadStageDefinition } from "./local/prompt-assets.ts";
+import { readPresets, maskPresetKeys } from "./local/presets.ts";
 
 // stdout discipline lives in bootstrap.ts — that file's `console.log = ...`
 // statements run before this module's static imports do, so noise from any
