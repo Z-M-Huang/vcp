@@ -1,90 +1,102 @@
 # Installing VCP on OpenAI Codex CLI
 
-VCP v0.6.0+ supports both Claude Code and OpenAI Codex CLI v0.124.0+. Both hosts read the same plugin manifests; this doc walks through the Codex-side install.
+VCP v0.6.0 supports OpenAI Codex CLI v0.124.0+ alongside Claude Code. Each plugin has a `.codex-plugin/plugin.json` manifest and a plugin-local `.mcp.json` so Codex can discover skills and start the MCP servers.
 
 ## Prerequisites
 
-- **Codex CLI v0.124.0 or newer.** The plugin/MCP support in earlier versions is incomplete.
-- **Bun runtime.** Every script and the dev-buddy MCP server runs on Bun. Install via `curl -fsSL https://bun.sh/install | bash` or your platform's package manager.
-- **An API preset** in `~/.vcp/ai-presets.json` if you want to use vcp-audit or any LLM-driven flow. Subscription/CLI presets work for Claude UX but can't drive scripts from Codex.
+- **Codex CLI v0.124.0 or newer.** Earlier plugin/MCP support is incomplete.
+- **Bun runtime.** VCP hooks, workflow scripts, and plugin MCP servers run through Bun.
+- **API presets** in `~/.vcp/ai-presets.json` for script-driven LLM flows such as `vcp-audit` and Dev Buddy API executors.
 
 ## Install
 
 ```bash
-# 1. Clone or pull VCP
+# Clone into Codex's plugin directory
 git clone https://github.com/Z-M-Huang/vcp ~/.codex/plugins/vcp
 cd ~/.codex/plugins/vcp
 bun install
 
-# 2. Codex picks up plugins from $CODEX_HOME/plugins (default: ~/.codex/plugins).
-#    Each plugin's .codex-plugin/plugin.json is auto-discovered.
+# Start Codex from the project you want to work on
+cd /path/to/your/project
 codex
-
-# 3. Inside Codex: confirm the skills are loaded
-$skills          # shows vcp-audit, dev-buddy-ralph, mcp-doc-init, …
-/mcp             # shows the dev-buddy MCP server as connected
 ```
 
-If the dev-buddy MCP server doesn't auto-register (Phase 0.5 vertical slice proved auto-registration works, but environments vary), paste the manual config:
+Codex discovers plugins from `$CODEX_HOME/plugins` (`~/.codex/plugins` by default). The repo layout is:
 
-```bash
-# Print a ready-to-use snippet
-bun ~/.codex/plugins/vcp/plugins/dev-buddy/scripts/print-codex-config.ts >> ~/.codex/config.toml
+```text
+~/.codex/plugins/vcp/
+├── plugins/vcp/.codex-plugin/plugin.json
+├── plugins/vcp/.mcp.json
+├── plugins/dev-buddy/.codex-plugin/plugin.json
+├── plugins/dev-buddy/.mcp.json
+├── plugins/mcp-doc/.codex-plugin/plugin.json
+└── plugins/mcp-doc/.mcp.json
 ```
 
-(That script doesn't ship in v0.6.0 yet — see "Deferred items" below. Until it lands, copy the `mcpServers.dev-buddy` block from `plugins/dev-buddy/.codex-plugin/plugin.json` and convert to the TOML form Codex expects:
-
-```toml
-[mcp_servers.dev-buddy]
-command = "bun"
-args = ["/absolute/path/to/plugins/dev-buddy/mcp-server/src/server.ts"]
-```
-
-Replace the absolute path with your actual install dir.)
+The `.codex-plugin/plugin.json` files point `mcpServers` at `.mcp.json`. Those files start plugin-local binaries such as `./mcp-server/bin/vcp-mcp`, `./mcp-server/bin/dev-buddy-mcp`, and `./mcp-server/bin/mcp-doc-mcp`.
 
 ## Verify
 
+Inside Codex:
+
+```text
+$skills
+/mcp
+$vcp-init
 ```
-$ralph-list      # invokes the dev-buddy-ralph skill which calls ralph_list
+
+If the MCP servers do not appear in `/mcp`, add the server entries manually to `~/.codex/config.toml` using absolute paths:
+
+```toml
+[mcp_servers.vcp]
+command = "/home/you/.codex/plugins/vcp/plugins/vcp/mcp-server/bin/vcp-mcp"
+args = []
+
+[mcp_servers.dev-buddy]
+command = "/home/you/.codex/plugins/vcp/plugins/dev-buddy/mcp-server/bin/dev-buddy-mcp"
+args = []
+
+[mcp_servers.mcp-doc]
+command = "/home/you/.codex/plugins/vcp/plugins/mcp-doc/mcp-server/bin/mcp-doc-mcp"
+args = []
 ```
 
-If you see "No Ralph runs found", the MCP server is up and the skill is reaching it. Run `$ralph-health` for diagnostics.
+Restart Codex after editing the config.
 
-## Differences from Claude Code
-
-Per Phase 0 probe outcomes documented in `docs/phase-0-report.md`:
-
-| Surface | Claude Code | Codex CLI |
-|---|---|---|
-| Plugin manifest | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` (also reads `.claude-plugin/`) |
-| SKILL.md frontmatter | `name`, `description`, `user-invocable`, `allowed-tools`, `argument-hint` all honored | `name`, `description`, `metadata.short-description` honored; the others silently ignored |
-| Hooks | PreToolUse / PostToolUse / Stop / SessionStart all fire; matcher syntax: omitted/`*`/empty=all, plain names=exact, otherwise regex | Same as Claude (probe-confirmed) |
-| `exit 2` blocking | Both PreToolUse and PostToolUse | PreToolUse blocks with stderr reason; PostToolUse does NOT (advisory only) |
-| `AskUserQuestion` | Available | Does not exist; skills with interactive prompts fall back to CLI flags or print-and-stop patterns |
-| Task / TaskCreate / Team* | Available | Do not exist; Ralph orchestration runs via the dev-buddy MCP server instead |
-| MCP tools | Auto-injected into LLM context | Auto-injected as well |
-| MCP resources | Auto-injected into LLM context | NOT auto-injected; reach via the paired `get_*`/`list_*` tools |
-| MCP prompts (slash commands) | Available via `/prompts` | Not surfaced; tool handlers inline prompt content where needed |
-| MCP elicitations | Not a concept | Available with `mcp_elicitations: true` in `~/.codex/config.toml` |
-
-## Skill invocation syntax
+## Command Syntax
 
 | Action | Claude Code | Codex CLI |
 |---|---|---|
-| Run a skill | `/vcp-audit quick` | `$vcp-audit quick` |
-| Restart MCP server | `/mcp restart dev-buddy` | `Restart codex` (no per-server restart command in v0.124.0) |
-| List skills | (UI) | `$skills` |
-| List MCP tools | `/mcp` | `/mcp` |
+| Run a VCP skill | `/vcp-audit quick` | `$vcp-audit quick` |
+| Run Dev Buddy | `/dev-buddy-ralph Add auth` | `$dev-buddy-ralph Add auth` |
+| Run MCP Doc | `/mcp-doc-init` | `$mcp-doc-init` |
+| List skills | Host UI | `$skills` |
+| Inspect MCP servers | `/mcp` | `/mcp` |
 
-## Deferred items in v0.6.0
+## Host Differences
 
-These are real gaps you may run into; tracked in `docs/migration-0.5-to-0.6.md`:
+| Surface | Claude Code | Codex CLI |
+|---|---|---|
+| Plugin manifest | `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` |
+| MCP registration | Manifest `mcpServers` block | `.codex-plugin/plugin.json` -> `.mcp.json` |
+| SKILL frontmatter | Honors `user-invocable`, `allowed-tools`, `argument-hint` | Uses name/description; Claude-specific UI metadata is ignored |
+| Hooks | PreToolUse, PostToolUse, SessionStart, Stop | Same hook files are shipped, but host behavior can differ; treat PostToolUse as advisory |
+| Blocking | `security-gate.ts` exits 2 on PreToolUse findings | Same PreToolUse block path |
+| Interactive prompts | Claude-native `AskUserQuestion` | Skills use flags, printed next steps, or MCP tools instead |
+| Task/team tools | Claude-specific | Not available; use MCP tools and persisted state |
+| MCP resources | Often surfaced to the model | Not guaranteed; use paired tools such as `get_prompt`, `get_run_state`, `get_stage_definition`, and `list_presets` |
+| MCP prompts | Surfaced by capable hosts | If not surfaced, call `get_prompt` |
 
-- **`print-codex-config.ts`** — the manual-install convenience script is not yet shipped. Use the manual TOML snippet above.
-- **`migration-planner.toml`** — Codex sub-agent for the migration planner is not shipped. Use Claude's `migration-planner.md` for now.
-- **dev-buddy MCP step handlers are skeletons** — `ralph_next` advances state correctly but doesn't call an LLM yet. Real Ralph work via MCP awaits the step LLM ports. Use the per-stage skills on Claude (`/dev-buddy-discover`, …) for production Ralph today.
-- **mcp-doc `generate-runner.ts` and `sync-runner.ts`** are not implemented. Those skills still work via prose-driven flows.
+## Current Limitations
 
-## Reporting issues
+- Dev Buddy's cross-host MCP Ralph path is a state-machine skeleton in v0.6.0. `ralph_start`, `ralph_next`, `ralph_list`, and `ralph_health` work and persist state under `<project>/.vcp/ralph/<run-id>/`, but the six step handlers do not yet run LLM work. Use the legacy Claude stage-skill Ralph path for production feature builds until the MCP step ports land.
+- `migration-planner.toml` is not shipped. The migration planner remains available through the Claude Code agent file.
+- `vcp-audit` script execution requires API presets; subscription-only presets cannot be invoked from a TypeScript subprocess.
+- MCP resources may not be injected automatically in Codex. Use the paired tools exposed by each plugin MCP server.
 
-If something works on Claude but not Codex (or vice versa), file an issue with: Codex CLI version (`codex --version`), Bun version (`bun --version`), the failing skill name, and the exact command you ran. Include `~/.codex/logs/` if available.
+## Troubleshooting
+
+- `No skill found`: confirm the repo is under `~/.codex/plugins/vcp`, then restart Codex.
+- MCP server missing: run `/mcp`, then add the manual `~/.codex/config.toml` entries above if needed.
+- Bun errors: run `bun install` at `~/.codex/plugins/vcp`.
+- Project config missing: run `$vcp-init` from the target project root.

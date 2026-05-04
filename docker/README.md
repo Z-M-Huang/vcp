@@ -9,7 +9,7 @@ A containerized AI development environment with **Claude Code**, **OpenAI Codex 
 | **[Claude Code](https://claude.ai)** | Anthropic's CLI for Claude (official binary) |
 | **[OpenAI Codex CLI](https://github.com/openai/codex)** | OpenAI's terminal coding assistant |
 | **[Google Gemini CLI](https://github.com/google-gemini/gemini-cli)** | Google's CLI for Gemini |
-| **[Bun](https://bun.sh/)** | Fast JavaScript runtime (required for VCP hooks) |
+| **[Bun](https://bun.sh/)** | Fast JavaScript runtime (required for VCP hooks, skills, and MCP servers) |
 | **TypeScript** | `typescript` + `ts-node` globally installed |
 | **Git** | Version control with SSH support |
 | **GitHub CLI** | `gh` — PRs, issues, actions from the terminal |
@@ -81,12 +81,26 @@ Inside the container:
 /vcp-init
 ```
 
+## Using OpenAI Codex CLI
+
+Codex CLI is installed globally. VCP plugins for Codex are discovered from `~/.codex/plugins`, so install the repo there inside the container:
+
+```bash
+git clone https://github.com/Z-M-Huang/vcp ~/.codex/plugins/vcp
+cd ~/.codex/plugins/vcp
+bun install
+
+cd /app/your-project
+codex
+```
+
+Inside Codex, use dollar-prefixed skills such as `$vcp-init`, `$vcp-audit`, and `$dev-buddy-ralph`. Codex MCP servers are registered through each plugin's `.codex-plugin/plugin.json` and `.mcp.json`.
+
+The default compose file persists Claude Code data through `HOST_CLAUDE_DATA_DIR`. If you also want Codex plugin/config data to survive container deletion, add a host mount for `/home/devuser/.codex` in `docker-compose.yml`.
+
 ## Using Other Tools
 
 ```bash
-# OpenAI Codex CLI (requires OPENAI_API_KEY)
-codex "fix the bug in auth.ts"
-
 # Google Gemini CLI (requires GEMINI_API_KEY)
 gemini
 ```
@@ -100,7 +114,7 @@ gemini
 | `HOST_CLAUDE_DATA_DIR` | `/home/devuser/.claude` | Claude Code settings, plugins, conversation history |
 | `HOST_TMP_DIR` | `/home/devuser/tmp` | Temporary files |
 
-**Important:** The Claude data directory (`HOST_CLAUDE_DATA_DIR`) persists your installed plugins, settings, and CLAUDE.md project memories across container restarts.
+**Important:** The Claude data directory (`HOST_CLAUDE_DATA_DIR`) persists your installed plugins, settings, and CLAUDE.md project memories across container restarts. Codex uses `/home/devuser/.codex`; mount that path separately if you need Codex plugin state to persist after deleting the container.
 
 ## Environment Variables
 

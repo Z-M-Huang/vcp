@@ -4,9 +4,10 @@
 
 **Break the AI echo chamber. Ship correct features.**
 
-![Skills-10](https://img.shields.io/badge/Skills-10-blue?style=flat-square)
-![Stages-6](https://img.shields.io/badge/Stages-6-green?style=flat-square)
-![Role Prompts-6](https://img.shields.io/badge/Role%20Prompts-6-purple?style=flat-square)
+![Skills-11](https://img.shields.io/badge/Skills-11-blue?style=flat-square)
+![Stage Definitions-8](https://img.shields.io/badge/Stage%20Definitions-8-green?style=flat-square)
+![Role Prompts-7](https://img.shields.io/badge/Role%20Prompts-7-purple?style=flat-square)
+![Hooks-0](https://img.shields.io/badge/Hooks-0-orange?style=flat-square)
 
 <img src="../../assets/hero.png" alt="Dev Buddy — Multi-AI Pipeline Orchestration" width="700">
 
@@ -141,6 +142,19 @@ sequenceDiagram
     end
 
     rect rgb(255, 235, 220)
+        Note over CC,FS: PLAN-LINT — validates decomposition before build attempts
+        CC->>SM: Bash: --action next
+        SM-->>CC: JSON: {invoke_skill(plan-lint)}
+        CC->>CC: Bash: plan-lint.ts --plan X --cwd Y
+        alt plan-lint pass
+            CC->>SM: Bash: --action next
+        else plan-lint rejects
+            CC->>FS: Write feedback + Status: decompose
+            Note over CC: Re-enters decompose before BUILD
+        end
+    end
+
+    rect rgb(255, 235, 220)
         Note over CC,FS: BUILD — per-unit dispatch, retries internal to runner
         loop For each unit (CC drives via state machine)
             CC->>SM: Bash: --action next
@@ -161,21 +175,21 @@ sequenceDiagram
                         EX-->>SR: Review verdict
                         SR-->>BLR: JSON: {synthesis: PASS|NEEDS_CHANGES}
                         Note over BLR: Fail-closed parsing: malformed output → NEEDS_CHANGES
-                        BLR->>BLR: recordReviewResultAction(unitId, lease, passed, feedback)<br/>[PASS → unit_done; NEEDS_CHANGES+budget → retry_unit; exhausted → unit_failed]
+                        BLR->>BLR: recordReviewResultAction handles pass, retry, or failure
                     end
                     alt no unit-review configured
-                        BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_pass)<br/>[→ unit_done]
+                        BLR->>BLR: recordAttemptResultAction marks unit done
                     end
                 else fail + attempts remain
                     Note over BLR: mechanicalContext classified and passed to build-actions
-                    BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_fail)<br/>[→ retry_unit; lease auto-closed]
+                    BLR->>BLR: recordAttemptResultAction schedules retry
                 else fail + exhausted
-                    BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_fail)<br/>[→ unit_failed (budget exhausted)]
+                    BLR->>BLR: recordAttemptResultAction marks unit failed
                 end
             end
-            Note over BLR,FS: All state writes to unit-N.json go through build-actions.ts;<br/>BLR never writes state directly.
+            Note over BLR,FS: All state writes go through build-actions.ts<br/>BLR never writes state directly.
             BLR-->>CC: JSON: {event: complete, status: done|failed|stuck, reason, orchestratorHints?}
-            CC->>CC: TaskUpdate(unit N → completed; note carries outcome text)
+            CC->>CC: TaskUpdate unit N with outcome note
         end
     end
 
@@ -251,7 +265,7 @@ Unit plan files (`unit-N.md`) are immutable after decompose — all dynamic stat
 
 ---
 
-## The 7 Stages
+## Ralph Pipeline Stages
 
 | Stage | What Happens | Multi-AI |
 |-------|-------------|----------|
@@ -263,20 +277,23 @@ Unit plan files (`unit-N.md`) are immutable after decompose — all dynamic stat
 | **Code Review** | Flow tracing (point + path + intent). Stub/orphan detection. Cross-unit integration. | Yes |
 | **UAT** | Execute Playwright tests + all mechanical backpressure against running app. | Single |
 
+Dev Buddy has 8 stage definition files: the 6 pipeline stages above, `plan-lint`, and optional `unit-review`. `unit-review` is disabled by default and runs only when its stage has executors configured.
+
 ---
 
-## The 9-Layer Enforcement Stack
+## The 10-Layer Enforcement Stack
 
 ```
 Layer 1: Unit plan + contracts     <- intent, data flow traces, authoritative sources
-Layer 2: Mechanical backpressure   <- compilation, types, lint errors
-Layer 3: Per-unit semantic review  <- AC tracing, contract verification (optional, multi-AI)
-Layer 4: Orchestrator verify       <- subagent lies, missing sections, source violations
-Layer 5: Code review (multi-AI)    <- flow tracing, stub detection, drift probe
-Layer 6: UAT (Playwright)          <- real user scenario failures
-Layer 7: User checkpoint           <- everything above missed
-Layer 8: TaskManagement            <- process compliance (no skipping)
-Layer 9: Plan files on disk        <- state survival after compaction
+Layer 2: Plan-lint                 <- already-satisfied tests, uncompilable tests, bad unit shape
+Layer 3: Mechanical backpressure   <- compilation, types, lint errors
+Layer 4: Per-unit semantic review  <- AC tracing, contract verification (optional, multi-AI)
+Layer 5: Orchestrator verify       <- subagent lies, missing sections, source violations
+Layer 6: Code review (multi-AI)    <- flow tracing, stub detection, drift probe
+Layer 7: UAT (Playwright)          <- real user scenario failures
+Layer 8: User checkpoint           <- everything above missed
+Layer 9: TaskManagement            <- process compliance (no skipping)
+Layer 10: Disk-backed JSON state   <- state survival after compaction and process restart
 ```
 
 Each layer catches what the layers above missed. With weaker models, more layers fire. With stronger models, most pass through cleanly.
@@ -335,6 +352,7 @@ Use the tool path when MCP resources are not guaranteed to be auto-injected into
 | Build | `/dev-buddy-build` | Build stage — per-unit implementation with backpressure |
 | Code Review | `/dev-buddy-code-review` | Code review — multi-AI semantic drift detection |
 | UAT | `/dev-buddy-uat` | UAT stage — execute tests against the running app |
+| Plan Lint | `/dev-buddy-plan-lint` | Validate decomposition output before build attempts are consumed |
 | Chatroom | `/dev-buddy-chatroom <topic>` | Multi-AI competitive debate with iterative consensus |
 | Once | `/dev-buddy-once` | Run a single task using a specific AI provider and model |
 | Config | `/dev-buddy-config` | Web portal for managing stages, presets, system prompts, and settings |
@@ -359,7 +377,7 @@ Each stage skill works standalone (reads existing plan files) or as part of the 
 
 The config (`~/.vcp/dev-buddy.json`, version `5.0`) stores:
 - **Stages:** Per-stage executor assignments (system prompt + preset + model)
-- **Pipeline:** Ralph pipeline (6 stages in fixed order)
+- **Pipeline:** Ralph pipeline (6 stages in fixed order); `plan-lint` and `unit-review` are stage definitions outside the linear pipeline
 - **Settings:** config_port, max_iterations, max_build_attempts, max_outer_iterations, max_discovery_iterations, max_requirements_iterations, max_decomposition_iterations, theme
 
 Use the web portal (`/dev-buddy-config`) or edit JSON directly.
@@ -425,8 +443,8 @@ Presets and models are preserved. Old pipelines are replaced with the `ralph` pi
 
 ## Prerequisites
 
-- **[Bun](https://bun.sh/)** - Required for hook execution
-- **[Claude Code](https://code.claude.com/)** - The AI coding assistant
+- **[Bun](https://bun.sh/)** - Required for Dev Buddy scripts and the MCP server
+- **[Claude Code](https://code.claude.com/)** or **[OpenAI Codex CLI v0.124.0+](https://github.com/openai/codex)** - Claude stage skills are the production Ralph path in v0.6.0; Codex can invoke skills and MCP skeleton tools
 
 ---
 

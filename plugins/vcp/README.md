@@ -14,7 +14,7 @@ VCP enforces 41 standards across 12 scopes — injecting rules into the AI's con
 
 ## Prerequisites
 
-- **[Bun](https://bun.sh/)** — required for cross-platform hook execution. Hooks are TypeScript files run directly via `bun`.
+- **[Bun](https://bun.sh/)** — required for cross-platform hook execution, skill helper scripts, and the VCP MCP server.
 
 ## Components
 
@@ -23,6 +23,7 @@ VCP enforces 41 standards across 12 scopes — injecting rules into the AI's con
 | Skill | Command | Description |
 |-------|---------|-------------|
 | vcp-init | `/vcp-init` | Initialize VCP configuration — creates `~/.vcp/config.json` (global) and `.vcp/config.json` (project), detects frameworks, scopes, discovers plugin path |
+| vcp-config | `/vcp-config` | View and update VCP configuration — scopes, compliance, severity, ignore rules, standards URL |
 | vcp-context | `/vcp-context` | Inject VCP rule summaries into context — run after context compaction or at any time to refresh rules |
 | vcp-dependency-check | `/vcp-dependency-check` | Verify lockfile hygiene, version ranges, package existence, typosquatting |
 | vcp-pre-commit-review | `/vcp-pre-commit-review` | Review all staged/changed files against applicable standards. Produces PASS/BLOCK verdict |
@@ -107,7 +108,7 @@ The `security-gate.ts` hook runs on every `Write`, `Edit`, or `Bash` tool call. 
 - **CWE-1336** — Server-side template injection (SSTI): Jinja2 `Template()`/`.from_string()`, Handlebars `.compile()` with variable input
 - **CWE-116** — Encoded data (base64/xxd) piped to shell execution or combined with `sh -c` (Bash only)
 
-If any pattern matches, the hook exits with code 2 (block) and prints the finding to stderr (fed to Claude as error message). If patterns are suppressed via CWE ignore, the hook exits 0 and outputs a JSON warning to stdout (shown to user via `systemMessage`). Otherwise it exits 0 (allow).
+If any pattern matches, the hook exits with code 2 (block) and prints the finding to stderr for the host to surface as a tool error. If patterns are suppressed via CWE ignore, the hook exits 0 and outputs a JSON warning to stdout (shown to the user via `systemMessage` where supported). Otherwise it exits 0 (allow).
 
 ### Diagnostic Log
 
@@ -115,7 +116,7 @@ All hooks write diagnostic entries to `.vcp/vcp.log` in the project root via the
 
 ## Known Limitations
 
-- **Standards fetched from mutable `main` branch:** Skills fetch standards from `https://raw.githubusercontent.com/.../main/...`, which is mutable. A force-push or repository compromise could change what all users receive. When VCP reaches v1.0, standards will be pinned to tagged releases. For v0.3.1, the always-latest behavior is intentional while standards are still being written.
+- **Standards fetched from mutable `main` branch:** Skills fetch standards from `https://raw.githubusercontent.com/.../main/...`, which is mutable. A force-push or repository compromise could change what all users receive. When VCP reaches v1.0, standards will be pinned to tagged releases. For v0.6.0, the always-latest behavior is intentional while standards are still being written.
 
 - **Regex-based security gate cannot do taint tracking:** The security-gate hook uses regex pattern matching, which cannot follow data flow (e.g., a SQL query built in a variable then passed to `.query()`). Use the `/vcp-audit` or `/vcp-pre-commit-review` skills for AI-driven analysis that can trace data flow across variables.
 
@@ -136,4 +137,4 @@ Full documentation is on the **[VCP Wiki](https://github.com/Z-M-Huang/vcp/wiki)
 
 ## Installation
 
-This plugin is part of the [VCP](https://github.com/Z-M-Huang/vcp) repository. Install it via the Claude Code marketplace or by adding the plugin source to your Claude Code configuration.
+This plugin is part of the [VCP](https://github.com/Z-M-Huang/vcp) repository. Install it via the Claude Code marketplace (`/plugin install vcp@vcp`) or clone the repo under `~/.codex/plugins/vcp` for Codex CLI. Codex reads `.codex-plugin/plugin.json` and `.mcp.json`; Claude reads `.claude-plugin/plugin.json`.

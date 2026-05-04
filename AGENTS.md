@@ -3,7 +3,7 @@
 ### What This Repo Is
 
 Standards, skills, and enforcement tools for AI coding assistants.
-Target: Claude Code marketplace first, other tools later.
+Primary hosts: Claude Code marketplace and OpenAI Codex CLI plugins.
 
 ### Enforcement Model
 
@@ -16,9 +16,10 @@ VCP enforces standards through three layers:
 ### Plugin Structure
 
 - `plugins/vcp/` — VCP plugin with 10 skills, 1 agent, and 4 hooks
-- `plugins/dev-buddy/` — Dev Buddy plugin with 4 skills, 6 stage definitions, and 6 role prompts. Uses Ralph loop architecture: Discovery → Requirements+UAT → Decomposition → Build (inner loop) → Code Review → UAT (outer loop). `/dev-buddy-ralph` runs the full workflow. Multi-AI diversity at each stage via executor-based dispatch. Build uses per-unit plan files with fresh context per iteration and mechanical backpressure. Config format v5 (`~/.vcp/dev-buddy.json`) with auto-migration from v2/v3/v4. Skills: `dev-buddy-ralph` (main workflow), `dev-buddy-chatroom` (multi-AI debate), `dev-buddy-once` (single task), `dev-buddy-config` (web portal).
+- `plugins/dev-buddy/` — Dev Buddy plugin with 11 skills, 8 stage definitions (6 Ralph pipeline stages plus `plan-lint` and optional `unit-review`), 7 role prompts, and 0 hooks. Uses Ralph loop architecture: Discovery → Requirements+UAT → Decomposition → Plan-lint → Build (inner loop with optional unit review) → Code Review → UAT (outer loop). `/dev-buddy-ralph` runs the legacy Claude stage-skill workflow; the MCP server exposes the cross-host skeleton Ralph path (`ralph_start`, `ralph_next`, `ralph_list`, `ralph_health`). Multi-AI diversity at each stage via executor-based dispatch. Build uses immutable per-unit plan files plus persisted per-unit JSON state with fresh context per iteration and mechanical backpressure. Config format v5 (`~/.vcp/dev-buddy.json`) with auto-migration from v2/v3/v4.
 - `plugins/mcp-doc/` — MCP Doc plugin with 5 skills. Documentation manifest generator for git-doc-mcp — indexes project docs as MCP resources with embedded search, path-lookup, and tree-view tools
 - Skills fetch standards from `standards/manifest.json` at runtime via WebFetch (always latest from main)
+- Each plugin has `.claude-plugin/plugin.json` for Claude Code and `.codex-plugin/plugin.json` plus `.mcp.json` for Codex plugin/MCP registration
 - `.vcp/config.json` in project root configures scopes, compliance frameworks, severity threshold, and CWE ignore list
 - `security-gate.ts` exits 2 (block) on pattern match, 0 (allow) otherwise
 - `stop-reminder.ts` reminds user to run VCP checks before committing
@@ -28,8 +29,8 @@ VCP enforces standards through three layers:
 - `standards/` — AI-optimized markdown standards (41 files across 12 scopes, flat layout with `{scope}-{topic}.md` naming)
 - `standards/manifest.json` — Root manifest indexing per-scope manifests in `standards/scopes/`
 - `standards/scopes/` — Per-scope manifest files (core, web-frontend, web-backend, database, mobile, desktop, cli, devops, agentic-ai, compliance-*)
-- `plugins/` — Claude Code plugins (vcp, dev-buddy, mcp-doc)
-- `.claude-plugin/` — Marketplace manifest
+- `plugins/` — Host-aware plugins (vcp, dev-buddy, mcp-doc) for Claude Code and Codex CLI
+- `.claude-plugin/` — Claude Code marketplace manifest
 
 ### Conventions
 

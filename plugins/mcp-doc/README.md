@@ -68,6 +68,12 @@ your-project/
 
 The plugin only creates/manages the `.mcp/` folder. It indexes existing docs wherever they are — inside or outside the project.
 
+## Host Support
+
+Claude Code installs MCP Doc from the VCP marketplace with `/plugin install vcp@mcp-doc`. Codex CLI installs by cloning VCP under `~/.codex/plugins/vcp`; Codex reads `plugins/mcp-doc/.codex-plugin/plugin.json` and starts the guidance MCP server from `plugins/mcp-doc/.mcp.json`.
+
+Claude uses slash commands such as `/mcp-doc-init`; Codex uses dollar commands such as `$mcp-doc-init`. The generated git-doc-mcp server that serves a target project's `.mcp/manifest.yml` is separate from the MCP Doc guidance server shipped with this plugin.
+
 ## Large Project Support
 
 For projects with 50+ documentation files (e.g., monorepos with multiple teams), the init skill detects the scale and offers scoping strategies:

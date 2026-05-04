@@ -4,9 +4,10 @@
 
 **打破 AI 回音壁。交付正确的功能。**
 
-![Skills-10](https://img.shields.io/badge/Skills-10-blue?style=flat-square)
-![Stages-6](https://img.shields.io/badge/Stages-6-green?style=flat-square)
-![Role Prompts-6](https://img.shields.io/badge/Role%20Prompts-6-purple?style=flat-square)
+![Skills-11](https://img.shields.io/badge/Skills-11-blue?style=flat-square)
+![Stage Definitions-8](https://img.shields.io/badge/Stage%20Definitions-8-green?style=flat-square)
+![Role Prompts-7](https://img.shields.io/badge/Role%20Prompts-7-purple?style=flat-square)
+![Hooks-0](https://img.shields.io/badge/Hooks-0-orange?style=flat-square)
 
 <img src="../../assets/hero.png" alt="Dev Buddy — 多 AI Pipeline 编排" width="700">
 
@@ -59,6 +60,11 @@ flowchart TD
     DC_VAL -->|通过 / 耗尽| DC_UC{"用户<br/>检查点"}
     DC_UC -->|批准| Q1
     DC_UC -->|拒绝 / 补充上下文| DC
+
+    Q1 -->|"invoke_skill: plan-lint"| PL
+    PL["PLAN-LINT — 沙箱测试验证<br/>🔧 CC → Bash: plan-lint.ts"]
+    PL -->|通过| Q1
+    PL -->|"拒绝（功能已存在<br/>或测试无法编译）"| DC
 
     Q1 -->|"invoke_skill: ralph-build<br/>(per unit)"| BUILD_ENTRY
 
@@ -136,6 +142,19 @@ sequenceDiagram
     end
 
     rect rgb(255, 235, 220)
+        Note over CC,FS: PLAN-LINT — 在消耗构建尝试前验证分解结果
+        CC->>SM: Bash: --action next
+        SM-->>CC: JSON: {invoke_skill(plan-lint)}
+        CC->>CC: Bash: plan-lint.ts --plan X --cwd Y
+        alt plan-lint 通过
+            CC->>SM: Bash: --action next
+        else plan-lint 拒绝
+            CC->>FS: 写入反馈 + Status: decompose
+            Note over CC: BUILD 前重新进入 decompose
+        end
+    end
+
+    rect rgb(255, 235, 220)
         Note over CC,FS: BUILD — 逐单元分发，重试在 runner 内部完成
         loop 遍历每个单元（CC 通过状态机驱动）
             CC->>SM: Bash: --action next
@@ -156,21 +175,21 @@ sequenceDiagram
                         EX-->>SR: 审查判定
                         SR-->>BLR: JSON: {synthesis: PASS|NEEDS_CHANGES}
                         Note over BLR: 失败封闭解析：格式错误 → NEEDS_CHANGES
-                        BLR->>BLR: recordReviewResultAction(unitId, lease, passed, feedback)<br/>[PASS → unit_done；NEEDS_CHANGES + 预算 → retry_unit；耗尽 → unit_failed]
+                        BLR->>BLR: recordReviewResultAction 处理 pass、retry 或 failure
                     end
                     alt 未配置 unit-review
-                        BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_pass)<br/>[→ unit_done]
+                        BLR->>BLR: recordAttemptResultAction 标记单元完成
                     end
                 else 失败 + 剩余尝试
                     Note over BLR: mechanicalContext 分类后传入 build-actions
-                    BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_fail)<br/>[→ retry_unit；lease 自动关闭]
+                    BLR->>BLR: recordAttemptResultAction 安排重试
                 else 失败 + 尝试耗尽
-                    BLR->>BLR: recordAttemptResultAction(unitId, lease, mechanical_fail)<br/>[→ unit_failed（预算耗尽）]
+                    BLR->>BLR: recordAttemptResultAction 标记单元失败
                 end
             end
-            Note over BLR,FS: 所有对 unit-N.json 的状态写入均通过 build-actions.ts；<br/>BLR 从不直接写入状态。
+            Note over BLR,FS: 所有状态写入均通过 build-actions.ts<br/>BLR 从不直接写入状态。
             BLR-->>CC: JSON: {event: complete, status: done|failed|stuck, reason, orchestratorHints?}
-            CC->>CC: TaskUpdate(unit N → completed；note 携带结果文本)
+            CC->>CC: TaskUpdate unit N 并记录结果 note
         end
     end
 
@@ -232,31 +251,35 @@ sequenceDiagram
 
 ---
 
-## 6 个阶段
+## Ralph Pipeline 阶段
 
 | 阶段 | 执行内容 | 多 AI |
 |------|----------|-------|
 | **Discovery** | 探索代码库 + 运行中的应用。映射代码路径、模式、影响点。截图当前状态。 | 是 |
 | **Requirements + UAT** | 定义 AC（Given/When/Then + 误解释）。设计 Playwright UAT 场景。风险注册表。 | 是 |
 | **Decomposition** | 分解为约 50 行代码的单元。每个单元有独立的计划文件和精确指令。 | 是 |
+| **Plan-lint** | 在消耗构建尝试前验证单元测试桩和反压命令。 | 否 |
 | **Build** | 逐单元实现，全新上下文。Runner 运行反压 + 可选语义审查。 | 可配置 |
 | **Code Review** | 流追踪（定点 + 路径 + 意图）。桩/孤立代码检测。跨单元集成。 | 是 |
 | **UAT** | 对运行中的应用执行 Playwright 测试 + 全部机械反压。 | 单一 |
 
+Dev Buddy 有 8 个 stage definition 文件：以上 6 个 pipeline 阶段、`plan-lint`，以及可选 `unit-review`。`unit-review` 默认禁用；只有配置了执行器才会运行。
+
 ---
 
-## 9 层执行栈
+## 10 层执行栈
 
 ```
 第 1 层：单元计划 + 合约        <- 意图、数据流追踪、权威来源
-第 2 层：机械反压               <- 编译、类型、lint 错误
-第 3 层：逐单元语义审查         <- AC 追踪、合约验证（可选，多 AI）
-第 4 层：编排器验证             <- 谎报测试、缺失节、来源违反
-第 5 层：代码评审（多 AI）      <- 流追踪、桩检测、漂移探测
-第 6 层：UAT（Playwright）      <- 真实用户场景失败
-第 7 层：用户检查点             <- 以上全部遗漏的
-第 8 层：TaskManagement         <- 流程合规（不跳步）
-第 9 层：磁盘上的计划文件       <- 上下文压缩后状态存活
+第 2 层：Plan-lint              <- 已满足测试、无法编译测试、单元形状错误
+第 3 层：机械反压               <- 编译、类型、lint 错误
+第 4 层：逐单元语义审查         <- AC 追踪、合约验证（可选，多 AI）
+第 5 层：编排器验证             <- 谎报测试、缺失节、来源违反
+第 6 层：代码评审（多 AI）      <- 流追踪、桩检测、漂移探测
+第 7 层：UAT（Playwright）      <- 真实用户场景失败
+第 8 层：用户检查点             <- 以上全部遗漏的
+第 9 层：TaskManagement         <- 流程合规（不跳步）
+第 10 层：磁盘 JSON 状态        <- 上下文压缩和进程重启后状态存活
 ```
 
 每一层捕获上层遗漏的问题。模型越弱，触发的层越多。模型越强，大多数层直接通过。
@@ -295,6 +318,7 @@ sequenceDiagram
 | Build | `/dev-buddy-build` | Build 阶段——逐单元实现，带反压 |
 | Code Review | `/dev-buddy-code-review` | 代码评审——多 AI 语义漂移检测 |
 | UAT | `/dev-buddy-uat` | UAT 阶段——对运行中的应用执行测试 |
+| Plan Lint | `/dev-buddy-plan-lint` | 在消耗构建尝试前验证分解输出 |
 | Chatroom | `/dev-buddy-chatroom <主题>` | 多 AI 竞争辩论，迭代达成共识 |
 | Once | `/dev-buddy-once` | 使用指定 AI provider 和模型运行单个任务 |
 | Config | `/dev-buddy-config` | 管理阶段、preset、系统提示词和设置的 Web 门户 |
@@ -319,7 +343,7 @@ sequenceDiagram
 
 配置文件（`~/.vcp/dev-buddy.json`，版本 `5.0`）存储：
 - **Stages：** 每阶段执行器分配（系统提示词 + preset + 模型）
-- **Pipeline：** Ralph pipeline（6 个阶段，固定顺序）
+- **Pipeline：** Ralph pipeline（6 个阶段，固定顺序）；`plan-lint` 和 `unit-review` 是线性 pipeline 外的 stage definition
 - **Settings：** config_port, max_iterations, max_build_attempts, max_outer_iterations, max_discovery_iterations, max_requirements_iterations, max_decomposition_iterations, theme
 
 使用 Web 门户（`/dev-buddy-config`）或直接编辑 JSON。
@@ -385,8 +409,8 @@ Preset 和模型保留不变。旧 pipeline 替换为 `ralph` pipeline。
 
 ## 前置条件
 
-- **[Bun](https://bun.sh/)** — Hook 执行所需
-- **[Claude Code](https://code.claude.com/)** — AI 编码助手
+- **[Bun](https://bun.sh/)** — Dev Buddy 脚本和 MCP server 所需
+- **[Claude Code](https://code.claude.com/)** 或 **[OpenAI Codex CLI v0.124.0+](https://github.com/openai/codex)** — v0.6.0 中 Claude stage skills 是生产 Ralph 路径；Codex 可调用 skills 和 MCP 骨架工具
 
 ---
 
