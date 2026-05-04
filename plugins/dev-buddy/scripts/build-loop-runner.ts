@@ -29,7 +29,8 @@ import * as path from 'path';
 import { runBackpressure } from './ralph-state-machine.ts';
 import { verifyContract, formatFailureMessage } from './contract-verifier.ts';
 import type { ContractVerifyResult } from './contract-verifier.ts';
-import { vcpLog, isDebugEnabled, capLogPayload } from './vcp-logger.ts';
+import { createLogger, isDebugEnabled, capLogPayload } from '@vcp-lib/logging';
+const vcpLog = createLogger('dev-buddy.log');
 import type {
   BackpressureResult, UnitBuildDispatchResult,
   MechanicalContext,

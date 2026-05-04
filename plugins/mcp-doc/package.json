@@ -1,0 +1,11 @@
+{
+  "name": "@vcp-plugin/mcp-doc",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.23.0",
+    "yaml": "^2.6.1"
+  }
+}

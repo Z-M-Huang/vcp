@@ -21,9 +21,10 @@
 ![41 Standards](https://img.shields.io/badge/Standards-41-blue?style=flat-square)
 ![12 Scopes](https://img.shields.io/badge/Scopes-12-green?style=flat-square)
 ![OWASP Top 10](https://img.shields.io/badge/OWASP_Top_10-Covered-critical?style=flat-square)
-![21 Skills](https://img.shields.io/badge/Skills-21-blue?style=flat-square)
-![9 Agents](https://img.shields.io/badge/Agents-9-green?style=flat-square)
-![6 Hooks](https://img.shields.io/badge/Hooks-6-orange?style=flat-square)
+![26 Skills](https://img.shields.io/badge/Skills-26-blue?style=flat-square)
+![1 Agent](https://img.shields.io/badge/Agents-1-green?style=flat-square)
+![4 Hooks](https://img.shields.io/badge/Hooks-4-orange?style=flat-square)
+![7 Role Prompts](https://img.shields.io/badge/Role%20Prompts-7-purple?style=flat-square)
 
 </div>
 
@@ -62,7 +63,9 @@ One AI writing and reviewing its own code is like grading your own homework. VCP
 
 ## Quick Start
 
-**Prerequisites:** [Claude Code](https://code.claude.com/) and [Bun](https://bun.sh/). See the [Getting Started guide](https://github.com/Z-M-Huang/vcp/wiki/Getting-Started) for full setup.
+**Prerequisites:** [Bun](https://bun.sh/), plus either [Claude Code](https://code.claude.com/) or [OpenAI Codex CLI v0.124.0+](https://github.com/openai/codex). VCP v0.6.0 supports both hosts. See the [Getting Started guide](https://github.com/Z-M-Huang/vcp/wiki/Getting-Started) for full setup.
+
+### Claude Code
 
 ```bash
 # Add the VCP marketplace
@@ -75,7 +78,23 @@ One AI writing and reviewing its own code is like grading your own homework. VCP
 /vcp-init
 ```
 
-That's it. Standards are injected at session start, dangerous patterns are blocked on every write, and 10 scanning skills are available on demand.
+### OpenAI Codex CLI
+
+```bash
+# Clone into Codex's plugin dir
+git clone https://github.com/Z-M-Huang/vcp ~/.codex/plugins/vcp
+(cd ~/.codex/plugins/vcp && bun install)
+
+# Start Codex; skills auto-load from .codex-plugin/plugin.json
+codex
+
+# Initialize your project
+$vcp-init
+```
+
+See [`docs/codex-install.md`](docs/codex-install.md) for the full Codex walkthrough including MCP server registration, host capability differences, and known gaps.
+
+That's it. Standards are injected at session start, dangerous patterns are blocked on every write, and 10 VCP skills are available on demand on either host. Claude Code invokes skills with slash commands (`/vcp-audit`); Codex CLI invokes them with dollar commands (`$vcp-audit`).
 
 ### Docker
 
@@ -99,9 +118,9 @@ VCP ships three complementary plugins:
 
 | Plugin | What It Does | Install |
 |--------|-------------|---------|
-| **VCP** | Standards enforcement — 41 standards, real-time blocking, 10 skills | `/plugin install vcp@vcp` |
-| **Dev Buddy** | Multi-AI pipeline — configurable stages with role-based prompts, cross-model review gates, specialist analysis team | `/plugin install vcp@dev-buddy` |
-| **mcp-doc** | Documentation manifest generator — indexes project docs as MCP resources with search, path-lookup, and tree-view tools | `/install vcp@mcp-doc` |
+| **VCP** | Standards enforcement — 41 standards, 10 skills, 1 agent, 4 hooks | `/plugin install vcp@vcp` |
+| **Dev Buddy** | Multi-AI Ralph pipeline — 11 skills, 6 pipeline stages plus plan-lint and optional unit-review, 7 role prompts, 0 hooks | `/plugin install vcp@dev-buddy` |
+| **mcp-doc** | Documentation manifest generator — 5 skills, indexes project docs as MCP resources with search, path-lookup, and tree-view tools | `/plugin install vcp@mcp-doc` |
 
 Use VCP alone for standards enforcement. Add Dev Buddy when you want structured multi-AI workflows with cross-model review.
 
@@ -145,35 +164,40 @@ When a single AI family writes and reviews code, it shares the same training bia
 <img src="assets/dev-buddy-pipeline.png" alt="Multi-AI Pipeline Orchestration" width="800">
 </div>
 
-One AI writing and reviewing its own code is like grading your own homework. Dev Buddy implements a **Ralph loop** workflow — fresh context per iteration, specs on disk, iterate until correct. It orchestrates **multiple AI models** through 6 stages with task-based dependencies that literally prevent skipping stages.
+One AI writing and reviewing its own code is like grading your own homework. Dev Buddy implements a **Ralph loop** workflow — fresh context per iteration, specs on disk, iterate until correct. It orchestrates **multiple AI models** through a 6-stage pipeline with plan-lint validation, optional per-unit review, and task-based dependencies that prevent skipping stages.
 
-### The 6 Stages
+### The Ralph Pipeline
 
 | Stage | What Happens | Multi-AI |
 |-------|-------------|----------|
 | **Discovery** | Explore codebase + running app. Map code paths, patterns, impact points. Source of truth audit. | Yes |
 | **Requirements + UAT** | Define ACs (Given/When/Then + misinterpretation + partial implementation trap). Design Playwright UAT scenarios. | Yes |
 | **Decomposition** | Break into ~50 LOC units. Each unit gets its own plan file with interface contracts, test stubs, and data flow traces. | Yes |
-| **Build** | Per-unit implementation with fresh context. Orchestrator independently runs backpressure. | Single |
+| **Plan-lint** | Validate decomposed unit test stubs and backpressure commands before build attempts are consumed. | No |
+| **Build** | Per-unit implementation with fresh context. `build-loop-runner.ts` dispatches, runs backpressure and contract verification, and records state through `ralph/build-actions.ts`. | Configurable |
 | **Code Review** | Flow tracing (point + path + intent). Stub/orphan detection. Cross-unit integration. | Yes |
 | **UAT** | Execute Playwright tests + all mechanical backpressure against running app. | Single |
 
+`unit-review` is an optional stage after a unit passes mechanical backpressure. When configured, it runs semantic AC verification before the unit is marked done.
+
 **Two nested loops + review gate:**
-- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — fresh context from disk, implement, mechanical backpressure (test/typecheck/lint), retry up to `max_build_attempts`. Code review can send units back for rework.
+- **Inner (BUILD -> CODE REVIEW):** per-unit Ralph loop — immutable `unit-N.md` specs plus persisted `.vcp/plan/.state/ralph-{slug}/units/unit-N.json` state, fresh context from disk, implementation, mechanical backpressure (test/typecheck/lint), contract verification, optional unit review, retry up to `max_build_attempts`. Code review can send units back for rework.
 - **Outer (UAT):** integration Ralph loop — real Playwright UAT against running app. Failures identify affected units and loop back through BUILD and CODE REVIEW.
 - **User checkpoints** after Discovery, Requirements, and Decompose — approve, reject, or provide additional context.
 
 ### Enforcement Stack
 
 ```
-Layer 1: Unit plan + contracts   <- intent, data flow traces, authoritative sources
-Layer 2: Mechanical backpressure <- compilation, types, lint errors
-Layer 3: Orchestrator verify     <- subagent lies, missing sections, source violations
-Layer 4: Code review (multi-AI)  <- flow tracing, stub detection, drift probe
-Layer 5: UAT (Playwright)        <- real user scenario failures
-Layer 6: User checkpoint         <- everything above missed
-Layer 7: TaskManagement          <- process compliance (no skipping)
-Layer 8: Plan files on disk      <- state survival after compaction
+Layer 1: Unit plan + contracts       <- intent, data flow traces, authoritative sources
+Layer 2: Plan-lint                   <- detects already-satisfied or uncompilable unit tests before build
+Layer 3: Mechanical backpressure     <- compilation, types, lint errors
+Layer 4: Per-unit semantic review    <- optional AC verification after mechanical pass
+Layer 5: Orchestrator verify         <- subagent lies, missing sections, source violations
+Layer 6: Code review (multi-AI)      <- flow tracing, stub detection, drift probe
+Layer 7: UAT (Playwright)            <- real user scenario failures
+Layer 8: User checkpoint             <- everything above missed
+Layer 9: TaskManagement              <- process compliance (no skipping)
+Layer 10: Disk-backed JSON state     <- state survival after compaction and process restart
 ```
 
 ### Quick Start
@@ -188,6 +212,8 @@ Layer 8: Plan files on disk      <- state survival after compaction
 # Configure pipeline stages and providers via web portal
 /dev-buddy-config
 ```
+
+On Codex CLI, use `$dev-buddy-ralph`, `$dev-buddy-config`, and the Dev Buddy MCP tools. The v0.6.0 MCP Ralph path (`ralph_start`/`ralph_next`) is wired for cross-host state transitions but its step handlers are skeletons; the legacy Claude stage-skill path remains the production Ralph workflow until those LLM step ports land.
 
 <div align="center">
 <img src="assets/real-screenshot.png" alt="Real pipeline in action — 5 concurrent reviews across MiniMax, Qwen, Kimi, GLM, Codex" width="800">
@@ -445,11 +471,11 @@ vcp/
 │   ├── agentic-ai-*.md  # Agent security, tool security, permissions, supply chain, communication
 │   └── compliance-*.md  # GDPR, PCI DSS, HIPAA, Accessibility
 ├── schemas/             # JSON schemas for config and manifest validation
-├── plugins/vcp/         # VCP plugin — standards enforcement (skills, hooks, agents)
-├── plugins/dev-buddy/   # Dev Buddy plugin — multi-AI pipeline orchestration
-├── plugins/mcp-doc/     # mcp-doc plugin — documentation manifest generator
+├── plugins/vcp/         # VCP plugin — 10 skills, 1 agent, 4 hooks, MCP prompts/resources/tools
+├── plugins/dev-buddy/   # Dev Buddy plugin — 11 skills, 8 stage defs, 7 role prompts, MCP Ralph skeleton
+├── plugins/mcp-doc/     # mcp-doc plugin — 5 skills, MCP Doc guidance server
 ├── docker/              # Docker image — Claude Code, Codex CLI, Gemini CLI
-└── .claude-plugin/      # Marketplace manifest
+└── .claude-plugin/      # Claude Code marketplace manifest
 ```
 
 </details>

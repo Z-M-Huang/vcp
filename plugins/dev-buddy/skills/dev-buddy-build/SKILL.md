@@ -7,44 +7,11 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, Tas
 
 # Build Stage (Inner Ralph Loop)
 
-Implement each unit of work with fresh context per iteration. Orchestrator independently runs backpressure.
+This skill is a slash-command launcher. The authoritative workflow lives in the Dev Buddy MCP prompt `dev_buddy_build` and resource `dev-buddy://prompts/dev-buddy-build`.
 
-**Standalone:** `/dev-buddy-build` — reads the most recent `ralph-*.md` plan file and builds all pending units.
+1. Fetch the MCP prompt `dev_buddy_build` with the caller-supplied host, current project path, and raw command arguments.
+2. If MCP prompts are not directly available, call Dev Buddy MCP tool `get_prompt({ command: "dev-buddy-build", host, project_path, arguments })` and follow the returned prompt text.
+3. The returned prompt may instruct you to call Dev Buddy MCP tools such as `ralph_start`, `ralph_next`, `get_run_state`, `get_stage_definition`, `list_presets`. Use those tools for deterministic work.
+4. If the Dev Buddy MCP server is unavailable, stop and tell the user to enable the Dev Buddy MCP server for this plugin.
 
-**Orchestrated:** Dispatched by `build-loop-runner.ts` during the Ralph pipeline (not called directly by `/dev-buddy-ralph`).
-
----
-
-## Execution Modes
-
-### Standalone Mode
-
-When invoked directly via `/dev-buddy-build`, this skill reads the most recent `ralph-*.md` plan file and builds all pending units. It queries the state machine, dispatches implementation, runs backpressure, and evaluates results.
-
-### Orchestrated Mode (via build-loop-runner.ts)
-
-When dispatched by the mechanical build loop runner, the executor receives a single unit plan via stdin. The executor's job is **implementation only**:
-
-1. **Read the unit plan** — it contains everything needed (interface contract, data flow trace, authoritative sources, files to touch, backpressure commands)
-2. **Implement** — touch ONLY the files listed in the unit plan
-3. **Report results** — describe what was implemented
-
-**The executor does NOT:**
-- Write `**Status:**` or `**Attempts:**` to the unit file — the build-loop-runner owns these fields mechanically
-- Decide pass/fail — the runner runs backpressure independently and determines the outcome
-- Query the state machine — the runner already determined which unit to build
-- Edit the unit plan file itself — only project source files
-
-The build-loop-runner handles single-unit execution with internal retries: executor dispatch (via `stage-runner.ts` to the configured preset), mechanical backpressure, status writes, and retry logic.
-
-### How It Works (Both Modes)
-
-For each pending unit in dependency order:
-
-1. **Verify contract** — check interface contract and test stubs are complete; if incomplete, return to decompose for contract strengthening. Unit plans also contain **Data Flow Trace** (hop-by-hop wiring instructions) and **Authoritative Sources** (binding constraints from ADRs/wiki).
-2. **Dispatch implementer** — fresh-context executor receives only the unit plan file content
-3. **Verify files touched** — mechanically check every file in "Files to Touch" was created/modified
-4. **Run backpressure** — runner independently runs unit test, typecheck, and lint commands
-5. **Evaluate** — on pass, mark unit `done`; on fail, retry up to `max_build_attempts`
-
-The state machine tracks per-unit attempts, status, and contract gap detection.
+Do not reimplement the workflow in this file; update the MCP prompt instead.

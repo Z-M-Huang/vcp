@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { vcpLog, isDebugEnabled } from './vcp-logger.ts';
+import { createLogger, isDebugEnabled } from '@vcp-lib/logging';
+const vcpLog = createLogger('dev-buddy.log');
 import { loadDevBuddyConfig } from './pipeline-config.ts';
 
 // Re-export submodules so existing callers (tests, skills, CLI) keep working
@@ -224,7 +225,12 @@ export function main(planPath: string, action: string): StateMachineOutput {
     try {
       const plan = readPlanState(projectDir, slug);
       if (plan && !plan.completedAt) {
-        markPlanComplete(projectDir, slug, updatedState.status);
+        markPlanComplete(
+          projectDir,
+          slug,
+          updatedState.status,
+          `pipeline ${updatedState.status}`,
+        );
       }
     } catch {
       // best-effort — retention is not load-bearing for correctness

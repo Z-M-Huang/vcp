@@ -1,18 +1,10 @@
 /**
- * VCP Context Generation — CLI entrypoint for /vcp-context skill.
+ * VCP Context Generation CLI shim - delegates to @vcp-lib/context-core/generate.
  *
- * Runs the full context pipeline: config → manifest → resolve → fetch →
- * extract rules → format. Outputs the formatted context string.
- *
- * Usage: bun generate-context.ts [project-root]
- *
- * Always exits 0. On failure, outputs a fallback message.
- *
- * Requires: bun (cross-platform TypeScript runtime)
+ * The plugin keeps this file at its historical path because the
+ * /vcp-context skill invokes it as `bun "<pluginRoot>/lib/generate-context.ts"`.
+ * The bare side-effect import runs the workspace package's CLI module
+ * with the same process.argv this shim received.
  */
 
-import { generateContext } from "./vcp-context-core";
-
-const projectRoot = process.argv[2] || process.cwd();
-const output = await generateContext(projectRoot);
-console.log(output);
+import "@vcp-lib/context-core/generate";

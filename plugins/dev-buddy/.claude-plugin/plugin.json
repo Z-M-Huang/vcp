@@ -1,6 +1,6 @@
 {
   "name": "dev-buddy",
-  "version": "0.5.10",
+  "version": "0.6.0",
   "description": "Ralph loop architecture — multi-AI feature development with discovery, requirements, decomposition, build, code review, and UAT stages",
   "author": {
     "name": "Z-M-Huang"
@@ -19,5 +19,11 @@
     "uat",
     "backpressure"
   ],
-  "skills": "./skills/"
+  "skills": "./skills/",
+  "mcpServers": {
+    "dev-buddy": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/src/bootstrap.ts"]
+    }
+  }
 }

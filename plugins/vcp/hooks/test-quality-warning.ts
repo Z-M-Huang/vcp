@@ -12,7 +12,8 @@
  */
 
 import { loadGlobalConfig } from "../lib/global-config";
-import { vcpLog } from "../lib/vcp-logger";
+import { vcpLog } from "@vcp-lib/logging";
+import { projectDir } from "@vcp-lib/runtime-adapter";
 
 const [input, globalConfig] = await Promise.all([
   Bun.stdin.text(),
@@ -173,7 +174,7 @@ if (hasTautology) {
   );
 }
 
-const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const projectRoot = projectDir();
 
 if (warnings.length > 0) {
   const header = `VCP Test Quality Warning — ${warnings.length} issue(s) in ${filePath}:`;

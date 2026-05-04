@@ -1,0 +1,24 @@
+{
+  "name": "dev-buddy",
+  "version": "0.6.0",
+  "description": "Ralph loop architecture — multi-AI feature development with discovery, requirements, decomposition, build, code review, and UAT stages",
+  "author": {
+    "name": "Z-M-Huang"
+  },
+  "repository": "https://github.com/Z-M-Huang/vcp",
+  "license": "MIT",
+  "keywords": [
+    "dev buddy",
+    "dev-buddy",
+    "ralph",
+    "orchestration",
+    "multi-ai",
+    "executor",
+    "system-prompts",
+    "discovery",
+    "uat",
+    "backpressure"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

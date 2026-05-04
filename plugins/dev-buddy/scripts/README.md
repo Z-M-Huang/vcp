@@ -1,6 +1,6 @@
 # Dev Buddy Scripts
 
-Runtime scripts that power the `/dev-buddy-*` skills. All orchestration is Bash-invoked by Claude Code; no long-lived processes.
+Runtime scripts that power the legacy `/dev-buddy-*` stage-skill path. Claude Code invokes these from skills today; Codex reaches the same plugin through skills and the Dev Buddy MCP skeleton. Each script is a short-lived process.
 
 ## Top-level scripts
 
@@ -12,13 +12,13 @@ Runtime scripts that power the `/dev-buddy-*` skills. All orchestration is Bash-
 | `contract-verifier.ts` | Verifies the implementation honors the `Interface Contract` section of the unit plan (Class-A bug gate — e.g., missing `export`, wrong signature). Used by BLR between backpressure and state commit. |
 | `api-task-runner.ts` | One-shot Vercel AI SDK session for API-type presets. Spawned by `stage-runner.ts` (and `one-shot-runner.ts`) per task. |
 | `one-shot-runner.ts` | Entry point for `/dev-buddy-once` — routes to API or CLI runner based on preset type. |
-| `plan-lint.ts` | Sandbox validation for decomposition output (compiles units, checks entropy caps). |
+| `plan-lint.ts` | Sandbox validation for decomposition output before build attempts are consumed. Rejects already-satisfied tests, uncompilable tests, and invalid unit shape. |
 | `chatroom-config.ts` | CLI helpers for `/dev-buddy-chatroom`. |
 | `config-server.ts` | Serves the `/dev-buddy-config` web portal. |
 | `pipeline-config.ts` | Loads and validates `~/.vcp/dev-buddy.json` (config v5 with auto-migration from v2/v3/v4). |
 | `preset-utils.ts` | Reads/writes `~/.vcp/ai-presets.json`. |
 | `system-prompts.ts` | Resolves `<stage>.md + <role>.md` combinations into assembled system prompts. |
-| `vcp-logger.ts` | Structured logger (`DEV_BUDDY_DEBUG`/`vcpLog`). |
+| `@vcp-lib/logging` | Structured logger used by Dev Buddy scripts (`createLogger('dev-buddy.log')`). |
 
 ## `ralph/` — build-stage state and transitions
 
@@ -43,4 +43,4 @@ Runtime scripts that power the `/dev-buddy-*` skills. All orchestration is Bash-
 
 - **BLR drives, build-actions.ts decides.** BLR owns I/O (subprocess spawn, backpressure, contract-verify, event streaming). All state-transition decisions (attempt reserved, retry vs done vs failed, stuck detection, hash-guarded review feedback) live in `build-actions.ts`. A lint rule (`no-restricted-imports` targeting `./ralph/unit-state.ts` from `build-loop-runner.ts`) prevents regression to the pre-v0.5.6 dual-write-path bug.
 - **Unit plan files (`unit-N.md`) are immutable after decompose.** Dynamic state is in `.vcp/plan/.state/ralph-{slug}/units/unit-N.json`.
-- **`ralph-state-machine.ts` is the external consumer API.** Non-CC orchestrators that need attempt-level granularity call the three SM CLI actions (`compose_build_dispatch`, `record_attempt_result`, `record_review_result`) directly. BLR is the internal in-process consumer of the same functions.
+- **`ralph-state-machine.ts` is the legacy stage-skill consumer API.** Non-Claude orchestrators that need attempt-level granularity can call the three SM CLI actions (`compose_build_dispatch`, `record_attempt_result`, `record_review_result`) directly. BLR is the internal in-process consumer of the same functions. The cross-host MCP skeleton has its own state under `.vcp/ralph/<run-id>/`.

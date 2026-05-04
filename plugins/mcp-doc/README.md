@@ -25,6 +25,26 @@ MCP Doc scans your project for existing documentation files (READMEs, architectu
 | `/mcp-doc-sync` | Sync manifest with current project state — adds new docs, removes stale entries, regenerates tools |
 | `/mcp-doc-add-tool` | Create a custom MCP tool with guided workflow — filter by tags, scope, or custom logic |
 
+## MCP Workflow Prompts
+
+MCP Doc slash-command skills are launchers. The authoritative workflow instructions are exposed by the MCP Doc MCP server:
+
+- Workflow prompts: `mcp_doc_init`, `mcp_doc_scan`, `mcp_doc_generate`, `mcp_doc_sync`, `mcp_doc_add_tool`
+- Workflow resources: `mcp-doc://prompts/<command>`, such as `mcp-doc://prompts/mcp-doc-init`
+- Fallback tool: `get_prompt({ command, host, arguments, project_path })`
+
+The prompt text may instruct the caller to use MCP Doc MCP tools, host-native file/shell tools, or the generated git-doc-mcp server for target-project documentation resources.
+
+### Host Guidance
+
+The MCP Doc plugin also exposes caller-specific instructions through its own MCP server:
+
+- Prompt: `host_instructions`
+- Tool: `get_host_instructions({ host: "claude" | "codex", command?: "overview" | "init" | "scan" | "generate" | "sync" | "add-tool" })`
+- Resources: `mcp-doc://host-instructions/claude`, `mcp-doc://host-instructions/codex`
+
+This guidance server is separate from the generated git-doc-mcp server that serves a target project's `.mcp/manifest.yml`.
+
 ## How It Works
 
 1. **Discovery** — Scans for `**/*.md`, `**/*.rst`, prioritized files (README, CONTRIBUTING, ARCHITECTURE, ADRs), with smart exclusion of build artifacts and dependencies
@@ -48,6 +68,12 @@ your-project/
 
 The plugin only creates/manages the `.mcp/` folder. It indexes existing docs wherever they are — inside or outside the project.
 
+## Host Support
+
+Claude Code installs MCP Doc from the VCP marketplace with `/plugin install vcp@mcp-doc`. Codex CLI installs by cloning VCP under `~/.codex/plugins/vcp`; Codex reads `plugins/mcp-doc/.codex-plugin/plugin.json` and starts the guidance MCP server from `plugins/mcp-doc/.mcp.json`.
+
+Claude uses slash commands such as `/mcp-doc-init`; Codex uses dollar commands such as `$mcp-doc-init`. The generated git-doc-mcp server that serves a target project's `.mcp/manifest.yml` is separate from the MCP Doc guidance server shipped with this plugin.
+
 ## Large Project Support
 
 For projects with 50+ documentation files (e.g., monorepos with multiple teams), the init skill detects the scale and offers scoping strategies:
@@ -57,7 +83,7 @@ For projects with 50+ documentation files (e.g., monorepos with multiple teams),
 
 ## Prerequisites
 
-- **[git-doc-mcp](https://github.com/Z-M-Huang/git-doc-mcp)** v0.2.2+ — the MCP server that serves the manifest. Installed automatically via `npx` when the MCP server starts. Requires Node.js >= 20.11.0.
+- **[git-doc-mcp](https://github.com/Z-M-Huang/git-doc-mcp)** v0.2.3+ — the MCP server that serves the manifest. Installed automatically via `npx` when the MCP server starts. Requires Node.js >= 20.11.0.
 
 ## Documentation
 

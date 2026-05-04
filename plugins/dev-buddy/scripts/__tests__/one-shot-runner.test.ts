@@ -660,6 +660,11 @@ const baseCliArgs = {
   task: 'do something',
   taskFromStdin: false,
   outputId: null as string | null,
+  // Forwarding fields required by ParsedArgs even though the CLI path
+  // does not use them.
+  stageType: null as string | null,
+  systemPrompt: null as string | null,
+  allowedTools: null as string | null,
 };
 
 function makeCliPreset(overrides: Partial<CliPreset> = {}): CliPreset {

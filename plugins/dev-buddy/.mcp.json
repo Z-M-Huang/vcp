@@ -1,0 +1,8 @@
+{
+  "dev-buddy": {
+    "command": "./mcp-server/bin/dev-buddy-mcp",
+    "args": [],
+    "cwd": ".",
+    "startup_timeout_sec": 60
+  }
+}

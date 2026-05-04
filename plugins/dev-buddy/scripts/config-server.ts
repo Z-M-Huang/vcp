@@ -571,7 +571,7 @@ async function startConfigServer(cwd: string, idleTimeoutMinutes: number): Promi
 
       // Route API requests
       if (pathname.startsWith('/api/')) {
-        return handleApiRequest(req, url, pathname, cwd, corsHeaders, server.port);
+        return handleApiRequest(req, url, pathname, cwd, corsHeaders, server.port ?? 0);
       }
 
       // Serve static files
@@ -781,7 +781,7 @@ async function handleApiRequest(
               return jsonResponse({ error: { code: 'INVALID_FIELD', message: `executors[${i}]: unknown field '${key}'` } }, 400, corsHeaders);
             }
           }
-          if (!exec.system_prompt || !exec.preset || !exec.model) {
+          if (!(exec as { system_prompt?: unknown }).system_prompt || !(exec as { preset?: unknown }).preset || !(exec as { model?: unknown }).model) {
             return jsonResponse({ error: { code: 'VALIDATION_ERROR', message: `executors[${i}]: system_prompt, preset, and model are required` } }, 400, corsHeaders);
           }
           if (typeof exec.model === 'string' && !MODEL_NAME_REGEX.test(exec.model)) {

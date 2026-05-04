@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "dev-buddy MCP requires bun on PATH" >&2
+  exit 127
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SERVER_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+
+cd "$SERVER_ROOT"
+
+if [ ! -d "node_modules/@modelcontextprotocol/sdk" ] || [ ! -d "node_modules/zod" ]; then
+  bun install --production --silent 1>&2
+fi
+
+exec bun src/bootstrap.ts

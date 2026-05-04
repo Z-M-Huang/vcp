@@ -1,0 +1,9 @@
+{
+  "name": "mcp-doc-mcp-server",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.23.0"
+  }
+}

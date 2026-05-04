@@ -42,7 +42,7 @@ describe('DEFAULT_CONFIG', () => {
   });
 
   test('has no top-level executors key', () => {
-    expect((DEFAULT_CONFIG as Record<string, unknown>).executors).toBeUndefined();
+    expect((DEFAULT_CONFIG as unknown as Record<string, unknown>).executors).toBeUndefined();
   });
 
   test('has max_build_attempts', () => {

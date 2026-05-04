@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": [
+    "hooks/**/*.ts",
+    "lib/**/*.ts",
+    "mcp-server/**/*.ts",
+    "agents/**/*.ts",
+    "skills/**/*.ts",
+    "scripts/**/*.ts",
+    "__tests__/**/*.ts"
+  ]
+}

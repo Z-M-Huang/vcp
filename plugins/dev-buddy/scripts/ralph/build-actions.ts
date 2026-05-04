@@ -14,7 +14,8 @@ import {
 import { splitUnitFile } from './unit-file.ts';
 import { composeBuildDispatchPrompt } from './prompt-assembly.ts';
 import { loadDevBuddyConfig } from '../pipeline-config.ts';
-import { vcpLog, capLogPayload } from '../vcp-logger.ts';
+import { createLogger, capLogPayload } from '@vcp-lib/logging';
+const vcpLog = createLogger('dev-buddy.log');
 
 /**
  * True when the unit-review stage has at least one executor configured.

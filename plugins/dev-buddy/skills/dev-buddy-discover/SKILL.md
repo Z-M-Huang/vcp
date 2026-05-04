@@ -7,27 +7,11 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent, Task, TaskOutput, Tas
 
 # Discovery Stage
 
-Explore the codebase and running application to understand what exists before making changes.
+This skill is a slash-command launcher. The authoritative workflow lives in the Dev Buddy MCP prompt `dev_buddy_discover` and resource `dev-buddy://prompts/dev-buddy-discover`.
 
-**Standalone:** `/dev-buddy-discover` — finds the most recent `ralph-*.md` plan file and appends findings.
+1. Fetch the MCP prompt `dev_buddy_discover` with the caller-supplied host, current project path, and raw command arguments.
+2. If MCP prompts are not directly available, call Dev Buddy MCP tool `get_prompt({ command: "dev-buddy-discover", host, project_path, arguments })` and follow the returned prompt text.
+3. The returned prompt may instruct you to call Dev Buddy MCP tools such as `ralph_start`, `ralph_next`, `get_run_state`, `get_stage_definition`, `list_presets`. Use those tools for deterministic work.
+4. If the Dev Buddy MCP server is unavailable, stop and tell the user to enable the Dev Buddy MCP server for this plugin.
 
-**Orchestrated:** Called by `/dev-buddy-ralph` via the state machine.
-
----
-
-## Execution
-
-1. **Run stage-runner script** — dispatches ALL configured executors (subscription, API, CLI) and synthesizes:
-   ```bash
-   bun "${CLAUDE_PLUGIN_ROOT}/scripts/stage-runner.ts" \
-     --stage-type discovery --plan {plan} --cwd "${CLAUDE_PROJECT_DIR}" --task "{feature}"
-   ```
-   Run in background (Bash `run_in_background: true`). Poll with TaskOutput (timeout: max executor timeout + 120s).
-   The script handles everything: config loading, prompt composition, parallel dispatch, output collection, synthesis.
-
-2. **Validate** — check synthesis output against the stage's validation gates (area coverage, cross-executor agreement, contradictions, counterexample) in the main context.
-
-3. **Write and hand off** — after validation passes:
-   1. Print all synthesis results to the user.
-   2. Write the `## Discovery` section to the plan file. On re-run: **replace** any existing `## Discovery` section and clear any `## Feedback` section.
-   3. Set `**Status:** discover-review` and stop. Do not advance the pipeline from this skill — the orchestrator (`/dev-buddy-ralph`) handles the approval gate on the next tick, and standalone users should decide explicitly. Print a one-line next-step hint: `Next: review ## Discovery in the plan file. Run /dev-buddy-ralph to resume orchestrated execution (with the approval gate), /dev-buddy-requirements to proceed standalone, or edit ## Feedback and re-run /dev-buddy-discover to iterate.`
+Do not reimplement the workflow in this file; update the MCP prompt instead.

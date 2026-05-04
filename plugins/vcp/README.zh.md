@@ -14,7 +14,7 @@ VCP 跨 12 个作用域执行 41 项标准——在会话启动时将规则注�
 
 ## 前置条件
 
-- **[Bun](https://bun.sh/)** —— 跨平台 hook 执行所需。Hook 是 TypeScript 文件，通过 `bun` 直接运行。
+- **[Bun](https://bun.sh/)** —— 跨平台 hook、skill helper 脚本和 VCP MCP server 所需。
 
 ## 组件
 
@@ -23,6 +23,7 @@ VCP 跨 12 个作用域执行 41 项标准——在会话启动时将规则注�
 | Skill | 命令 | 描述 |
 |-------|------|------|
 | vcp-init | `/vcp-init` | 初始化 VCP 配置——创建 `~/.vcp/config.json`（全局）和 `.vcp/config.json`（项目），检测框架、作用域，发现插件路径 |
+| vcp-config | `/vcp-config` | 查看和更新 VCP 配置——作用域、合规、严重性、忽略规则、标准 URL |
 | vcp-context | `/vcp-context` | 向上下文注入 VCP 规则摘要——在上下文压缩后或任何时候运行以刷新规则 |
 | vcp-dependency-check | `/vcp-dependency-check` | 验证 lockfile 规范性、版本范围、包存在性、仿冒包检测 |
 | vcp-pre-commit-review | `/vcp-pre-commit-review` | 对所有暂存/已修改文件进行标准审查。输出 PASS/BLOCK 结论 |
@@ -97,7 +98,7 @@ Skill 需要 `.vcp/config.json`（项目）中包含 `pluginRoot` 字段（由 `
 - **CWE-1336** —— 服务端模板注入（SSTI）：Jinja2 的 `Template()`/`.from_string()`、Handlebars 的 `.compile()` 带变量输入
 - **CWE-116** —— 编码数据（base64/xxd）管道传输到 shell 执行或与 `sh -c` 组合（仅 Bash）
 
-如果任何模式匹配，hook 退出码 2（拦截）并将发现打印到 stderr（作为错误信息传递给 Claude）。如果模式通过 CWE 忽略被抑制，hook 退出 0 并输出 JSON 警告到 stdout（通过 `systemMessage` 展示给用户）。否则退出 0（允许）。
+如果任何模式匹配，hook 退出码 2（拦截）并将发现打印到 stderr，由宿主作为工具错误展示。如果模式通过 CWE 忽略被抑制，hook 退出 0 并输出 JSON 警告到 stdout（在支持的宿主中通过 `systemMessage` 展示给用户）。否则退出 0（允许）。
 
 ### 诊断日志
 
@@ -105,7 +106,7 @@ Skill 需要 `.vcp/config.json`（项目）中包含 `pluginRoot` 字段（由 `
 
 ## 已知限制
 
-- **标准从可变的 `main` 分支获取：** Skill 从 `https://raw.githubusercontent.com/.../main/...` 获取标准，这是可变的。强制推送或仓库被入侵可能改变所有用户收到的内容。当 VCP 达到 v1.0 时，标准将锚定到标记版本。对于 v0.3.1，在标准仍在编写期间，始终获取最新版本是有意的行为。
+- **标准从可变的 `main` 分支获取：** Skill 从 `https://raw.githubusercontent.com/.../main/...` 获取标准，这是可变的。强制推送或仓库被入侵可能改变所有用户收到的内容。当 VCP 达到 v1.0 时，标准将锚定到标记版本。对于 v0.6.0，在标准仍在编写期间，始终获取最新版本是有意的行为。
 
 - **基于正则的安全门控无法进行污点追踪：** 安全门控 hook 使用正则模式匹配，无法跟踪数据流（例如在变量中构建的 SQL 查询然后传递给 `.query()`）。使用 `/vcp-audit` 或 `/vcp-pre-commit-review` skill 进行可以跨变量追踪数据流的 AI 驱动分析。
 
@@ -126,4 +127,4 @@ Skill 需要 `.vcp/config.json`（项目）中包含 `pluginRoot` 字段（由 `
 
 ## 安装
 
-此插件是 [VCP](https://github.com/Z-M-Huang/vcp) 仓库的一部分。通过 Claude Code marketplace 安装或将插件源添加到你的 Claude Code 配置中。
+此插件是 [VCP](https://github.com/Z-M-Huang/vcp) 仓库的一部分。Claude Code 可通过 marketplace 安装（`/plugin install vcp@vcp`）；Codex CLI 可将仓库克隆到 `~/.codex/plugins/vcp`。Codex 读取 `.codex-plugin/plugin.json` 和 `.mcp.json`，Claude 读取 `.claude-plugin/plugin.json`。
