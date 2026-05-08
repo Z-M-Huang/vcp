@@ -2,6 +2,10 @@
   "name": "vcp-monorepo",
   "private": true,
   "packageManager": "bun@1.3.10",
+  "scripts": {
+    "vendor:vcp-lib": "bun scripts/sync-vcp-lib-vendor.ts",
+    "vendor:vcp-lib:check": "bun scripts/sync-vcp-lib-vendor.ts --check"
+  },
   "workspaces": [
     "lib/*",
     "plugins/*"

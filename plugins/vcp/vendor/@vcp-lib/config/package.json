@@ -1,0 +1,15 @@
+{
+  "name": "@vcp-lib/config",
+  "private": true,
+  "version": "0.6.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./global": "./src/global.ts",
+    "./project": "./src/project.ts"
+  },
+  "dependencies": {
+    "@vcp-lib/context-core": "workspace:*"
+  }
+}

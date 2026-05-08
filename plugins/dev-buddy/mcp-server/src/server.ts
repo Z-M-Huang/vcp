@@ -112,7 +112,7 @@ function assertAbsolutePath(p: string, field: string): void {
 
 export async function main(): Promise<void> {
   const server = new McpServer(
-    { name: "dev-buddy", version: "0.6.0" },
+    { name: "dev-buddy", version: "0.6.1" },
     {
       capabilities: { tools: {}, prompts: {}, resources: {} },
       instructions: "Fetch Dev Buddy workflow prompts from this MCP server; SKILL.md files are slash-command launchers.",
@@ -371,7 +371,7 @@ export async function main(): Promise<void> {
     async ({ project_path }) => {
       const uptime_ms = Date.now() - new Date(SERVER_STARTED_AT).getTime();
       const base = {
-        version: "0.6.0",
+        version: "0.6.1",
         started_at: SERVER_STARTED_AT,
         uptime_ms,
       };

@@ -1,0 +1,12 @@
+{
+  "name": "@vcp-lib/prompt-assets",
+  "private": true,
+  "version": "0.6.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./stage-definitions": "./src/stage-definitions.ts",
+    "./cli": "./src/cli.ts"
+  }
+}

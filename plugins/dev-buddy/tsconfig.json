@@ -1,5 +1,34 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@vcp-lib/llm-runner": [
+        "../../lib/llm-runner/src/runner.ts",
+        "vendor/@vcp-lib/llm-runner/src/runner.ts"
+      ],
+      "@vcp-lib/llm-runner/*": [
+        "../../lib/llm-runner/src/*.ts",
+        "vendor/@vcp-lib/llm-runner/src/*.ts"
+      ],
+      "@vcp-lib/logging": [
+        "../../lib/logging/src/index.ts",
+        "vendor/@vcp-lib/logging/src/index.ts"
+      ],
+      "@vcp-lib/logging/*": [
+        "../../lib/logging/src/*.ts",
+        "vendor/@vcp-lib/logging/src/*.ts"
+      ],
+      "@vcp-lib/prompt-assets": [
+        "../../lib/prompt-assets/src/index.ts",
+        "vendor/@vcp-lib/prompt-assets/src/index.ts"
+      ],
+      "@vcp-lib/prompt-assets/*": [
+        "../../lib/prompt-assets/src/*.ts",
+        "vendor/@vcp-lib/prompt-assets/src/*.ts"
+      ]
+    }
+  },
   "include": [
     "hooks/**/*.ts",
     "scripts/**/*.ts",

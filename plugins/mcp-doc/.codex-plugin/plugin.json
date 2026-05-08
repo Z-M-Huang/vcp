@@ -1,6 +1,6 @@
 {
   "name": "mcp-doc",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Documentation manifest generator for git-doc-mcp — indexes project docs as MCP resources with search, path-lookup, and tree-view tools for AI assistants",
   "author": {
     "name": "Z-M-Huang"

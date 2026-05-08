@@ -1,0 +1,7 @@
+{
+  "name": "@vcp-lib/runtime-adapter",
+  "private": true,
+  "version": "0.6.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" }
+}

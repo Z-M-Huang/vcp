@@ -84,7 +84,7 @@ function validatePluginRoot(pluginRoot: string): {
 
 export async function main(): Promise<void> {
   const server = new McpServer(
-    { name: "vcp", version: "0.6.0" },
+    { name: "vcp", version: "0.6.1" },
     {
       capabilities: { tools: {}, prompts: {}, resources: {} },
       instructions: "Fetch VCP workflow prompts from this MCP server; SKILL.md files are only slash-command launchers.",

@@ -27,7 +27,7 @@ const SERVER_STARTED_AT = new Date().toISOString();
 
 export async function main(): Promise<void> {
   const server = new McpServer(
-    { name: "mcp-doc", version: "0.6.0" },
+    { name: "mcp-doc", version: "0.6.1" },
     {
       capabilities: { tools: {}, prompts: {}, resources: {} },
       instructions: "Fetch MCP Doc workflow prompts from this MCP server; SKILL.md files are slash-command launchers.",
